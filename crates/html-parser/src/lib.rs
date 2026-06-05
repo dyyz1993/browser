@@ -1,18 +1,17 @@
-//! `browser-html-parser` — wraps `html5ever` to produce `browser-dom::Tree`.
+//! `browser-html-parser` — wraps `html5ever` to produce `browser_dom::Tree`.
 //!
-//! M0 placeholder. See `PLAN.md` step M1.3 for the upcoming API:
-//! `pub fn parse(html: &str) -> dom::Tree`.
+//! Single entry point: [`parse`].
 
 #![forbid(unsafe_code)]
 
-pub const CRATE_NAME: &str = "browser-html-parser";
+pub mod parser;
+
+pub use parser::parse;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn ping() {
-        assert_eq!(CRATE_NAME, "browser-html-parser");
+        assert_eq!(env!("CARGO_PKG_NAME"), "browser-html-parser");
     }
 }

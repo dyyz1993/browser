@@ -7,5 +7,8 @@ license.workspace = true
 description = "html5ever wrapper producing browser-dom trees"
 
 [dependencies]
+browser-dom = { path = "../dom" }
+html5ever = "0.27"
+markup5ever = "0.12"
 
 [dev-dependencies]
