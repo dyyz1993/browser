@@ -1,0 +1,11 @@
+[package]
+name = "browser-css-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CSS parser + selector engine + style computation"
+
+[dependencies]
+
+[dev-dependencies]

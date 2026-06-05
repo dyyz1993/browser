@@ -1,0 +1,11 @@
+[package]
+name = "browser-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HTTP / HTTPS / WebSocket client for the browser project"
+
+[dependencies]
+
+[dev-dependencies]

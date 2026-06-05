@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/net",
+    "crates/dom",
+    "crates/html-parser",
+    "crates/css-engine",
+    "crates/layout",
+    "crates/render",
+    "crates/js-runtime",
+    "crates/page",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Browser Authors"]
+license = "MIT"
+repository = ""
+description = "A cross-platform, low-memory browser for SPA rendering and scraping"
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 错误处理
+thiserror = "1"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# 测试工具（dev-dependency）
+wiremock = "0.6"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true

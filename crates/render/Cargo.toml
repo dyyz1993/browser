@@ -1,0 +1,11 @@
+[package]
+name = "browser-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rasterization via tiny-skia"
+
+[dependencies]
+
+[dev-dependencies]
