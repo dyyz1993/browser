@@ -1,18 +1,26 @@
 //! `browser-dom` — arena-backed DOM data structures.
 //!
-//! M0 placeholder. See `PLAN.md` step M1.2 for the upcoming API:
-//! `NodeData`, `Node`, `Tree` (arena of `Vec<Node>` + `NodeId`).
+//! See `docs/decisions/0001-arena-vs-refcell.md` for the design rationale.
+//!
+//! Quick tour:
+//! - [`NodeData`] — what kind of node (Element, Text, ...)
+//! - [`Tree`] — arena of nodes, indexed by [`NodeId`]
+//! - [`Document`] — wrapper that adds document metadata (URL, ...)
 
 #![forbid(unsafe_code)]
 
-pub const CRATE_NAME: &str = "browser-dom";
+pub mod document;
+pub mod node;
+pub mod tree;
+
+pub use document::Document;
+pub use node::NodeData;
+pub use tree::{Node, NodeId, Tree};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn ping() {
-        assert_eq!(CRATE_NAME, "browser-dom");
+        assert_eq!(env!("CARGO_PKG_NAME"), "browser-dom");
     }
 }

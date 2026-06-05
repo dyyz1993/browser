@@ -34,4 +34,4 @@
 
 | # | 标题 | 状态 |
 |---|------|------|
-| 0001 | DOM 存储：arena vs Rc<RefCell> | 待写（M1.2 触发） |
+| 0001 | DOM 存储：arena vs Rc<RefCell> | accepted (2026-06-06) |
