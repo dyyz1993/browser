@@ -11,5 +11,11 @@ name = "browser"
 path = "src/main.rs"
 
 [dependencies]
+browser-dom = { path = "../dom" }
+browser-html-parser = { path = "../html-parser" }
+browser-net = { path = "../net" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+clap = { version = "4.5", features = ["derive"] }
+anyhow = { workspace = true }
 
 [dev-dependencies]
