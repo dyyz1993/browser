@@ -7,5 +7,15 @@ license.workspace = true
 description = "HTTP / HTTPS / WebSocket client for the browser project"
 
 [dependencies]
+hyper = { version = "1.5", features = ["client", "http1", "http2"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "webpki-roots", "ring"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+http-body-util = "0.1"
+tokio = { workspace = true }
+url = "2"
+thiserror = { workspace = true }
+bytes = "1"
 
 [dev-dependencies]
+tokio = { workspace = true }
+wiremock = "0.6"
