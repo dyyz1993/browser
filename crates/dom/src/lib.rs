@@ -11,10 +11,12 @@
 
 pub mod document;
 pub mod node;
+pub mod print;
 pub mod tree;
 
 pub use document::Document;
 pub use node::NodeData;
+pub use print::pretty_print;
 pub use tree::{Node, NodeId, Tree};
 
 #[cfg(test)]
