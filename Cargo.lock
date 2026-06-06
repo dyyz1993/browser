@@ -185,6 +185,9 @@ version = "0.0.1"
 [[package]]
 name = "browser-render"
 version = "0.0.1"
+dependencies = [
+ "browser-layout",
+]
 
 [[package]]
 name = "bstr"

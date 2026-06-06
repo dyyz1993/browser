@@ -1,17 +1,9 @@
-//! `browser-render` — rasterizes the layout tree to pixels via `tiny-skia`.
+//! `browser-render` — rasterizes the layout tree to characters/pixels.
 //!
-//! M0 placeholder. Will be wired up in M5 (GUI window).
+//! M2.7 scope: terminal ASCII renderer.
 
 #![forbid(unsafe_code)]
 
-pub const CRATE_NAME: &str = "browser-render";
+pub mod ascii;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ping() {
-        assert_eq!(CRATE_NAME, "browser-render");
-    }
-}
+pub use ascii::render_ascii;

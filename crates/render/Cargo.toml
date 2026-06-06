@@ -7,5 +7,6 @@ license.workspace = true
 description = "Rasterization via tiny-skia"
 
 [dependencies]
+browser-layout = { path = "../layout" }
 
 [dev-dependencies]
