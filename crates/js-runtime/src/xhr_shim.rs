@@ -21,104 +21,43 @@
 //!
 //! 这是 MVP：非标准（真实 XHR 是异步 send + 状态机），但爬虫场景够用。
 
-use boa_engine::{object::ObjectInitializer, Context, JsResult, JsValue, NativeFunction};
+use boa_engine::{Context, JsResult};
 
 /// 在 `ctx` 上注册全局 `XMLHttpRequest` 构造器。
 ///
-/// 实现：用 `register_global_callable` 注册一个 0-arity 函数，
-/// 它返回一个带 open/send/responseText/onload 的对象（用 ObjectInitializer）。
-/// 真实构造器语义：`new XMLHttpRequest()` 返回该对象。
+/// 实现（纯 JS 原型，避开 native fn 的 this 绑定问题）：
+/// - `install` 时 eval 一段 JS，定义 XMLHttpRequest 为构造器函数，
+///   prototype 上挂 open/send/getResponseText。
+/// - send 内部调 `__xhrSend(id)` 同步 fetch，然后用 setTimeout(0)
+///   触发 onload（闭包捕获 self，this 绑定正确）。
+/// - 这样 `this` 在 JS 语义下正确传递，boa 不会丢失。
 pub fn install_xml_http_request(ctx: &mut Context) -> JsResult<()> {
-    ctx.register_global_callable(
-        boa_engine::JsString::from("XMLHttpRequest"),
-        0,
-        NativeFunction::from_fn_ptr(xhr_constructor),
-    )?;
+    let js = r#"
+function XMLHttpRequest() {
+    this.__xhrId = __xhrCreate();
+    this.onload = null;
+    this.responseText = '';
+}
+XMLHttpRequest.prototype.open = function(method, url) {
+    __xhrOpen(this.__xhrId, method, url);
+};
+XMLHttpRequest.prototype.send = function() {
+    __xhrSend(this.__xhrId);
+    this.responseText = __xhrGetResponseText(this.__xhrId);
+    var self = this;
+    setTimeout(function() {
+        if (typeof self.onload === 'function') {
+            self.responseText = __xhrGetResponseText(self.__xhrId);
+            self.onload.call(self);
+        }
+    }, 0);
+};
+XMLHttpRequest.prototype.getResponseText = function() {
+    return __xhrGetResponseText(this.__xhrId);
+};
+"#;
+    ctx.eval(boa_engine::Source::from_bytes(js))?;
     Ok(())
-}
-
-/// `new XMLHttpRequest()`：返回一个带方法的空对象，__xhrId 由 __xhrCreate 分配。
-fn xhr_constructor(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let id_val = ctx.eval(boa_engine::Source::from_bytes("__xhrCreate()"))?;
-    let obj = ObjectInitializer::new(ctx)
-        .function(
-            NativeFunction::from_fn_ptr(xhr_open),
-            boa_engine::JsString::from("open"),
-            3,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(xhr_send),
-            boa_engine::JsString::from("send"),
-            1,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(xhr_get_response_text),
-            boa_engine::JsString::from("getResponseText"),
-            0,
-        )
-        .build();
-    // 存 id 到对象（用 set_property）
-    obj.set(boa_engine::JsString::from("__xhrId"), id_val, false, ctx)?;
-    // onload 默认 undefined（JS 端赋值）
-    obj.set(
-        boa_engine::JsString::from("onload"),
-        JsValue::undefined(),
-        false,
-        ctx,
-    )?;
-    Ok(JsValue::from(obj))
-}
-
-/// `xhr.open(method, url)`：记录请求参数。
-fn xhr_open(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let id = read_xhr_id(this, ctx)?;
-    let method = args
-        .first()
-        .and_then(|v| if v.is_undefined() { None } else { Some(v) })
-        .and_then(|v| v.to_string(ctx).ok())
-        .map(|s| s.to_std_string_escaped())
-        .unwrap_or_else(|| "GET".to_string());
-    let url = args
-        .get(1)
-        .and_then(|v| if v.is_undefined() { None } else { Some(v) })
-        .and_then(|v| v.to_string(ctx).ok())
-        .map(|s| s.to_std_string_escaped())
-        .unwrap_or_default();
-    let code = format!("__xhrOpen({}, {:?}, {:?}); undefined;", id, method, url);
-    ctx.eval(boa_engine::Source::from_bytes(&code))
-}
-
-/// `xhr.send()`：同步 fetch + setTimeout(0) 触发 onload。
-fn xhr_send(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let id = read_xhr_id(this, ctx)?;
-    // 同步 fetch（__xhrSend 把 response_text 存到 Rust）
-    let fetch_code = format!("__xhrSend({}); undefined;", id);
-    ctx.eval(boa_engine::Source::from_bytes(&fetch_code))?;
-    // 用 setTimeout(0) 异步触发 onload（复用 M16 event loop）。
-    // this 是 xhr 对象，传给 setTimeout 回调。
-    let onload_code = "setTimeout(function(self) { if (typeof self.onload === 'function') { self.onload.call(self); } }, 0, this);";
-    let _ = ctx.eval(boa_engine::Source::from_bytes(onload_code));
-    Ok(JsValue::undefined())
-}
-
-/// `xhr.getResponseText()`：读取响应体（JS shim 用）。
-fn xhr_get_response_text(
-    this: &JsValue,
-    _args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    let id = read_xhr_id(this, ctx)?;
-    let code = format!("__xhrGetResponseText({});", id);
-    ctx.eval(boa_engine::Source::from_bytes(&code))
-}
-
-/// 从 xhr 对象读取 `__xhrId` 属性（存的是 f64），用 ctx 读避免新建 Context。
-fn read_xhr_id(this: &JsValue, ctx: &mut Context) -> JsResult<u64> {
-    let obj = this.as_object().ok_or_else(|| {
-        boa_engine::JsNativeError::typ().with_message("XHR method called on non-object")
-    })?;
-    let id_val = obj.get(boa_engine::JsString::from("__xhrId"), ctx)?;
-    Ok(id_val.as_number().map(|n| n as u64).unwrap_or(0))
 }
 
 #[cfg(test)]
