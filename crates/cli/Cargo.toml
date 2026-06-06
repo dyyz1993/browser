@@ -14,6 +14,9 @@ path = "src/main.rs"
 browser-dom = { path = "../dom" }
 browser-html-parser = { path = "../html-parser" }
 browser-net = { path = "../net" }
+browser-css-engine = { path = "../css-engine" }
+browser-layout = { path = "../layout" }
+browser-render = { path = "../render" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 clap = { version = "4.5", features = ["derive"] }
 anyhow = { workspace = true }
