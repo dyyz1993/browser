@@ -8,6 +8,7 @@ members = [
     "crates/layout",
     "crates/render",
     "crates/storage",
+    "crates/navigation",
     "crates/js-runtime",
     "crates/page",
     "crates/gui",
