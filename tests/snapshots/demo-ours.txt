@@ -1,3 +1,4 @@
+
 Browser Project Demo
 
 This page verifies the M0-M5 pipeline.
@@ -7,19 +8,12 @@ Static Content (no JS)
 Visible without executing JavaScript.
 
 • M0: project scaffold + CI
-
 • M1: HTTPS fetch + DOM tree
-
 • M2: hand-written CSS + layout + ASCII render
-
 • M3: boa_engine + JS-to-DOM bridge
-
 • M4: SPA rendering + sync fetch
-
 • M5: GUI window (winit + softbuffer)
-
 
 Dynamic Content (JS required)
 
 Loading...
-
