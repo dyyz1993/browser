@@ -5,6 +5,7 @@
 //! - `browser get  <url>`             fetch a URL via HTTPS, parse, print DOM tree
 //! - `browser render-file <file>`     parse + layout + render a local HTML file
 //! - `browser render-script <file>`   parse + execute scripts + layout + render
+//! - `browser render-url  <url>`      fetch + parse + execute scripts + render
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -45,6 +46,16 @@ enum Cmd {
         #[arg(long, default_value_t = 80)]
         width: usize,
     },
+    /// Fetch a URL, parse, execute <script> tags, then render.
+    /// End-to-end SPA rendering pipeline.
+    RenderUrl {
+        url: String,
+        #[arg(long, default_value_t = 80)]
+        width: usize,
+        /// Skip <script> execution (render only the static HTML).
+        #[arg(long)]
+        no_js: bool,
+    },
 }
 
 async fn run() -> Result<()> {
@@ -75,6 +86,15 @@ async fn run() -> Result<()> {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
             render_html_to_stdout(&html, width, true)?;
+            Ok(())
+        }
+        Cmd::RenderUrl { url, width, no_js } => {
+            let bytes = get(&url)
+                .await
+                .with_context(|| format!("failed to fetch {url}"))?;
+            let html = String::from_utf8(bytes)
+                .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
+            render_html_to_stdout(&html, width, !no_js)?;
             Ok(())
         }
     }

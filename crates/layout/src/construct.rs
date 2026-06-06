@@ -84,6 +84,11 @@ pub fn construct_layout_tree(
 fn build_box(tree: &Tree, id: NodeId, out: &mut Vec<LayoutBox>) {
     match tree.data(id) {
         NodeData::Element { tag, .. } => {
+            // Browsers never render <script> / <style> / <noscript>
+            // content. Skip the entire subtree.
+            if is_non_rendered_tag(tag) {
+                return;
+            }
             let bt = box_type_for_element(tag);
             let mut bx = LayoutBox::new(bt).with_element(id);
             bx.children = build_children(tree, id, bt);
@@ -100,6 +105,15 @@ fn build_box(tree: &Tree, id: NodeId, out: &mut Vec<LayoutBox>) {
             // Skip — comments / doctype don't render.
         }
     }
+}
+
+/// Tags whose subtrees produce no visual output. Browsers suppress
+/// these completely during layout.
+fn is_non_rendered_tag(tag: &str) -> bool {
+    matches!(
+        tag.to_ascii_lowercase().as_str(),
+        "script" | "style" | "noscript" | "template"
+    )
 }
 
 /// Build the children of an Element, inserting Anonymous block wrappers
@@ -282,6 +296,51 @@ mod tests {
         // Only <p> should appear at top level.
         assert_eq!(layout.root.children.len(), 1);
         assert_eq!(layout.root.children[0].element_id, Some(p));
+    }
+
+    #[test]
+    fn construct_skips_script_and_style_content() {
+        // body > [script("..."), p("visible"), style("...")]
+        // Only the <p> should produce a layout box.
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let body = t.insert(
+            Some(root),
+            NodeData::Element {
+                tag: "body".into(),
+                attrs: vec![],
+            },
+        );
+        let script = t.insert(
+            Some(body),
+            NodeData::Element {
+                tag: "script".into(),
+                attrs: vec![],
+            },
+        );
+        let _ = t.insert(Some(script), NodeData::Text("__setBody('x')".into()));
+        let p = t.insert(
+            Some(body),
+            NodeData::Element {
+                tag: "p".into(),
+                attrs: vec![],
+            },
+        );
+        let _ = t.insert(Some(p), NodeData::Text("visible".into()));
+        let style = t.insert(
+            Some(body),
+            NodeData::Element {
+                tag: "style".into(),
+                attrs: vec![],
+            },
+        );
+        let _ = t.insert(Some(style), NodeData::Text("body{color:red}".into()));
+
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        let body_box = &layout.root.children[0];
+        // Only <p> should survive — script and style subtrees dropped.
+        assert_eq!(body_box.children.len(), 1);
+        assert_eq!(body_box.children[0].element_id, Some(p));
     }
 
     #[test]
