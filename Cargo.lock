@@ -374,6 +374,7 @@ dependencies = [
  "png 0.17.16",
  "predicates",
  "tokio",
+ "url",
  "wiremock",
 ]
 

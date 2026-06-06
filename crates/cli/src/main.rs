@@ -17,9 +17,11 @@ use anyhow::{anyhow, Context, Result};
 use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
-use browser_js_runtime::{run_scripts, run_scripts_with_base};
+use browser_js_runtime::{
+    current_cookie_jar, ensure_cookie_jar, run_scripts, run_scripts_with_base,
+};
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
-use browser_net::get;
+use browser_net::HttpClient;
 use browser_render::render_ascii;
 use clap::{Parser, Subcommand};
 
@@ -122,9 +124,8 @@ async fn run() -> Result<()> {
             Ok(())
         }
         Cmd::Get { url } => {
-            let bytes = get(&url).await.context("fetch failed")?;
-            let html = String::from_utf8(bytes)
-                .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
+            ensure_cookie_jar();
+            let html = fetch_with_jar(&url).await?;
             let tree = parse_html(&html);
             println!("{}", pretty_print(&tree));
             Ok(())
@@ -166,11 +167,8 @@ async fn run() -> Result<()> {
             no_js,
             screenshot,
         } => {
-            let bytes = get(&url)
-                .await
-                .with_context(|| format!("failed to fetch {url}"))?;
-            let html = String::from_utf8(bytes)
-                .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
+            ensure_cookie_jar();
+            let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
             let text = render_html_to_string(&html, width, !no_js, base)?;
             print!("{text}");
@@ -190,11 +188,8 @@ async fn run() -> Result<()> {
             no_js,
             check,
         } => {
-            let bytes = get(&url)
-                .await
-                .with_context(|| format!("failed to fetch {url}"))?;
-            let html = String::from_utf8(bytes)
-                .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
+            ensure_cookie_jar();
+            let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
             let text = render_html_to_string(&html, width, !no_js, base)?;
             if check {
@@ -216,6 +211,37 @@ async fn run() -> Result<()> {
 }
 
 /// Shared render pipeline — prints ASCII to stdout.
+/// M15.4: Fetch HTML sharing the current cookie jar (if installed).
+/// 主请求带 Cookie 头 + 把响应 Set-Cookie 存入 jar，让后续 JS fetch
+/// 能继承会话（解决百度等登录态反爬）。
+async fn fetch_with_jar(url: &str) -> Result<String> {
+    let jar = current_cookie_jar();
+    let cookie_header = jar
+        .as_ref()
+        .and_then(|h| {
+            url::Url::parse(url)
+                .ok()
+                .map(|u| h.borrow().to_cookie_header(&u))
+        })
+        .filter(|h: &String| !h.is_empty());
+    let client = HttpClient::new();
+    let (bytes, headers) = client
+        .get_with_headers(url, cookie_header.as_deref())
+        .await
+        .with_context(|| format!("failed to fetch {url}"))?;
+    // 把 Set-Cookie 存入 jar（如果有 jar）。
+    if let Some(jar) = &jar {
+        if let Ok(req_url) = url::Url::parse(url) {
+            for value in headers.get_all("set-cookie").iter() {
+                if let Ok(sc) = value.to_str() {
+                    jar.borrow_mut().store_set_cookie(sc, &req_url);
+                }
+            }
+        }
+    }
+    String::from_utf8(bytes).map_err(|e| anyhow!("response is not valid UTF-8: {e}"))
+}
+
 /// Shared render pipeline — returns ASCII text. Used by `render-*` (prints)
 /// and `open` (passes to GUI window).
 fn render_html_to_string(

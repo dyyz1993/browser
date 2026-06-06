@@ -842,6 +842,23 @@ pub fn install_cookie(handle: CookieHandle) {
     });
 }
 
+/// Ensure a cookie jar exists on the current thread. If one is already
+/// installed (e.g. by cli before the main fetch), reuse it; otherwise
+/// install a fresh empty jar. (M15.4)
+pub fn ensure_cookie_jar() {
+    CURRENT_COOKIE.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(browser_cookie::new_cookie_jar());
+        }
+    });
+}
+
+/// Clone the current thread's cookie jar handle (None if not installed). (M15.4)
+/// Used by cli to share the same jar across main fetch + JS fetch.
+pub fn current_cookie_jar() -> Option<CookieHandle> {
+    CURRENT_COOKIE.with(|slot| slot.borrow().as_ref().map(Clone::clone))
+}
+
 fn history_push_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let state = arg_string(args, 0);
     let url = arg_string(args, 2).unwrap_or_default();
