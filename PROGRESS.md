@@ -1,7 +1,7 @@
 # 自研浏览器项目 — 全程进度大纲
 
 > 执行状态：**M0-M9 完成**，M10.1 进行中
-> 当前 HEAD: bd8ca4a (全程大纲文档)
+> 当前 HEAD: 518672e (全程大纲文档)
 > Workspace: 217 tests, 0 clippy warnings
 
 ---
@@ -25,7 +25,7 @@
 
 ---
 
-## 里程碑进度
+## 里程碑进度（实际 git 状态）
 
 | 里程碑 | 状态 | Commit | 测试 | 备注 |
 |--------|------|--------|------|------|
@@ -36,14 +36,14 @@
 | M4 | ✅ | 多个 | 160 | SPA 渲染（**项目目标达成**） |
 | M5 | ✅ | 4 commits | 179 | GUI 窗口（winit + softbuffer） |
 | M6 | ✅ | 3 commits | 211 | 渲染质量修复 + 黄金对比 + CI |
-| M7 | ✅ | 22 commits | 217 | 渲染质量 + 交互 |
+| M7 | ✅ | 23 commits | 217 | 渲染质量 + 交互 |
 | M8 | ✅ | 4 commits | 217 | 表单交互 |
 | M9 | ✅ | 3 commits | 217 | 图片占位符渲染 |
 | M10 | 🟡 | 进行中 | — | 性能优化（layout 缓存 + 增量渲染） |
 
 ---
 
-## M7 — 渲染质量 + 交互 ✅ (22 commits)
+## M7 — 渲染质量 + 交互 ✅ (23 commits)
 
 **M7.1** ✅ (8 commits): CSS margin/padding/collapsing/snapshots
 **M7.2** ✅ (3 commits): DOM API + selector（8 个桥 + * / .class / compound）
@@ -58,7 +58,7 @@
 **M8.1**: __getValue/__setValue 桥
 **M8.2**: textarea 支持（通过 __getValue）
 **M8.3**: __click 桥
-**M8.4**: __submit 桥
+**M8.4**: __submit 橋
 **M8.5**: e2e 测试（form-interaction.html）
 
 ---
