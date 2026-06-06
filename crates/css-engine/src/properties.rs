@@ -165,8 +165,30 @@ pub fn parse_length(s: &str) -> Option<Length> {
         } else {
             Length::Percent(value)
         }),
-        // Other units (rem, pt, vh, vw, cm, ...) — treat as px
-        // for ASCII-mode robustness.
+        // rem: relative to root font-size (default 16px in browsers).
+        // ASCII mode has no DOM root font-size, so use the standard
+        // 16px default. This makes `margin: 1rem` ≈ 16px instead of
+        // 1px, which is closer to real browser behavior.
+        "rem" => Some(if value == 0.0 {
+            Length::Zero
+        } else {
+            Length::Px(value * 16.0)
+        }),
+        // vh / vw: relative to viewport height/width. ASCII render
+        // mode has no viewport, so fall back to 0 instead of treating
+        // the number as px. This avoids `body{margin:15vh auto}` →
+        // 15 lines of leading whitespace on example.com.
+        "vh" | "vw" | "vmin" | "vmax" => Some(Length::Zero),
+        // pt: 1pt = 1.333px (72pt = 96px). Used in print CSS, rare in
+        // web pages but harmless to handle correctly.
+        "pt" => Some(if value == 0.0 {
+            Length::Zero
+        } else {
+            Length::Px(value * 4.0 / 3.0)
+        }),
+        // Other units (cm, mm, in, ex, ch, ...) — treat as px for
+        // ASCII-mode robustness. These are extremely rare in real
+        // web pages.
         _ => Some(if value == 0.0 {
             Length::Zero
         } else {
@@ -322,9 +344,17 @@ mod tests {
 
     #[test]
     fn parse_length_unknown_unit_falls_back_to_px() {
-        // Robustness: don't blow up on rem/pt/vh — treat as px.
-        assert_eq!(parse_length("2rem"), Some(Length::Px(2.0)));
-        assert_eq!(parse_length("10pt"), Some(Length::Px(10.0)));
+        // M11.1: rem scales to 16px (standard root font-size),
+        // pt scales to 4/3 px, vh/vw/vmin/vmax → Zero (no viewport).
+        assert_eq!(parse_length("2rem"), Some(Length::Px(32.0)));
+        assert_eq!(parse_length("10pt"), Some(Length::Px(13.333333333333334)));
+        // vh / vw / vmin / vmax — no viewport in ASCII mode → Zero.
+        assert_eq!(parse_length("15vh"), Some(Length::Zero));
+        assert_eq!(parse_length("50vw"), Some(Length::Zero));
+        assert_eq!(parse_length("5vmin"), Some(Length::Zero));
+        assert_eq!(parse_length("5vmax"), Some(Length::Zero));
+        // Unknown units (cm, mm, in, ex, ch) — still fall back to px.
+        assert_eq!(parse_length("2cm"), Some(Length::Px(2.0)));
     }
 
     #[test]
