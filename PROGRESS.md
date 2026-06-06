@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `d02c333`（M17.3 XHR e2e） |
-| 总 commits | 117 |
-| 测试 | 325 passed, 0 clippy warnings |
+| HEAD | `8b2b3a5`（M18.2 networkidle flag） |
+| 总 commits | 119 |
+| 测试 | 332 passed, 0 clippy warnings |
 | Crates | 14 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,16 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M18 — networkidle 算法（爬虫渲染完整性信号）✅
+- M18.1 ✅ pending_requests 计数器 + is_network_idle（5 e2e）
+- M18.2 ✅ cli --assert-network-idle flag（render-script / render-url，2 e2e）
+
+networkidle = pending_timers==0 && pending_requests==0。
+爬虫用此信号判断 SPA 是否渲染完（Playwright/Puppeteer 同款能力）。
+fetch_sync 用 RequestGuard（Drop）确保计数器即使失败也 -1。
+
+---
 
 ### M17 — XMLHttpRequest（老 SPA 依赖）✅
 - M17.1 ✅ XhrState + thread-local + 4 桥（__xhrCreate/Open/Send/GetResponseText）
