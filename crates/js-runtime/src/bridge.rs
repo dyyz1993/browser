@@ -48,6 +48,9 @@ thread_local! {
     static XHR_INSTANCES: RefCell<Option<std::collections::HashMap<u64, XhrState>>> =
         const { RefCell::new(None) };
     static XHR_NEXT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    // M18.1: in-flight 网络请求计数器（fetch_sync / xhr_send 进入+1，退出-1）。
+    // networkidle = pending_timers==0 && pending_requests==0。
+    static PENDING_REQUESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -84,6 +87,8 @@ impl Drop for TreeGuard {
             *slot.borrow_mut() = None;
         });
         XHR_NEXT_ID.with(|slot| slot.set(1));
+        // M18.1: 重置网络请求计数器。
+        PENDING_REQUESTS.with(|slot| slot.set(0));
     }
 }
 
@@ -329,6 +334,16 @@ fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
 /// Set-Cookie 存入 jar（同主请求共享会话）。jar 是 `Rc<RefCell<>>`
 /// 不跨线程，所以在主线程读出 header、写入 jar；新线程只拿 String。
 fn fetch_sync(url: &str) -> Result<String, String> {
+    // M18.1: 标记网络请求进行中（networkidle 信号源）。
+    inc_pending_requests();
+    // guard 模式：用结构体确保即使 fetch 失败也 -1。
+    struct RequestGuard;
+    impl Drop for RequestGuard {
+        fn drop(&mut self) {
+            dec_pending_requests();
+        }
+    }
+    let _guard = RequestGuard;
     let url = url.to_string();
     // 主线程读 cookie header（thread-local jar）。
     let cookie_header = CURRENT_COOKIE.with(|slot| {
@@ -997,6 +1012,29 @@ pub fn drain_due_timer_callbacks() -> Vec<JsObject> {
 /// Pending timer count（M18 networkidle 信号源）。0 = idle。
 pub fn pending_timers() -> usize {
     TIMER_WHEEL.with(|slot| slot.borrow().as_ref().map(|w| w.pending()).unwrap_or(0))
+}
+
+// ===== M18.1: networkidle 信号 =====
+
+/// 当前 in-flight 网络请求数（fetch_sync / xhr_send 进行中）。
+#[must_use]
+pub fn pending_requests() -> usize {
+    PENDING_REQUESTS.with(|slot| slot.get())
+}
+
+/// networkidle = 没有 pending timer 且没有 in-flight 请求。
+/// 爬虫用此信号判断 SPA 是否渲染完（Playwright/Puppeteer 同款能力）。
+#[must_use]
+pub fn is_network_idle() -> bool {
+    pending_timers() == 0 && pending_requests() == 0
+}
+
+fn inc_pending_requests() {
+    PENDING_REQUESTS.with(|slot| slot.set(slot.get().saturating_add(1)));
+}
+
+fn dec_pending_requests() {
+    PENDING_REQUESTS.with(|slot| slot.set(slot.get().saturating_sub(1)));
 }
 
 // ===== M17.1: XMLHttpRequest 后端 =====

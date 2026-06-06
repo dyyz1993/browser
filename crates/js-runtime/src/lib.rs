@@ -16,7 +16,8 @@ pub mod xhr_shim;
 pub use bridge::{
     current_base_url, current_cookie_jar, drain_due_timer_callbacks, ensure_cookie_jar,
     install as install_bridge, install_current, install_navigation, install_shared,
-    install_shared_with_base, install_storage, pending_timers, resolve_url, SharedTree, TreeGuard,
+    install_shared_with_base, install_storage, is_network_idle, pending_requests, pending_timers,
+    resolve_url, SharedTree, TreeGuard,
 };
 pub use navigation_shim::install_navigation_globals;
 pub use runtime::JsRuntime;
