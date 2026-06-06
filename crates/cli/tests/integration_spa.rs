@@ -135,9 +135,12 @@ async fn spa_shell_partial_api_failure_renders_whatever_succeeded() {
 }
 
 #[tokio::test]
-async fn spa_shell_then_set_title_via_script() {
+async fn spa_shell_then_set_title_does_not_leak_into_body() {
     // After fetching data, the script also updates the title — proves
-    // multiple bridge APIs compose cleanly.
+    // multiple bridge APIs compose cleanly. Crucially, with M6.0b's
+    // `<head>` skip, the title text should NOT appear in the body
+    // render output (it would go to the window titlebar in a real
+    // browser, not into the page text).
     let server = MockServer::start().await;
     let base = server.uri();
 
@@ -161,9 +164,14 @@ async fn spa_shell_then_set_title_via_script() {
         .args(["render-url", &format!("{base}/page"), "--width", "80"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Dynamic Title"))
+        // Body text set by __setBody should appear.
         .stdout(predicate::str::contains("rendered"))
-        .stdout(predicate::str::contains("Old").not());
+        // The original <title> from static HTML should NOT appear
+        // (head subtree is suppressed — M6.0b fix).
+        .stdout(predicate::str::contains("Old").not())
+        // The dynamically-set title should NOT appear in body either
+        // (titles belong to the window chrome, not the page text).
+        .stdout(predicate::str::contains("Dynamic Title").not());
 }
 
 #[tokio::test]

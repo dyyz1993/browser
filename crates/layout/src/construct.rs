@@ -109,10 +109,16 @@ fn build_box(tree: &Tree, id: NodeId, out: &mut Vec<LayoutBox>) {
 
 /// Tags whose subtrees produce no visual output. Browsers suppress
 /// these completely during layout.
+///
+/// - `head` and `meta`/`link`/`title`: contain document metadata,
+///   not rendered body content. Skipping the whole `<head>` subtree
+///   is the cleanest fix — `<title>` text won't leak into output.
+/// - `script` / `style` / `noscript` / `template`: already established
+///   in M4.1.
 fn is_non_rendered_tag(tag: &str) -> bool {
     matches!(
         tag.to_ascii_lowercase().as_str(),
-        "script" | "style" | "noscript" | "template"
+        "head" | "meta" | "link" | "title" | "script" | "style" | "noscript" | "template"
     )
 }
 
@@ -296,6 +302,71 @@ mod tests {
         // Only <p> should appear at top level.
         assert_eq!(layout.root.children.len(), 1);
         assert_eq!(layout.root.children[0].element_id, Some(p));
+    }
+
+    #[test]
+    fn construct_skips_head_subtree_including_title() {
+        // Document > html > [head > title("page title"), body > p("visible")]
+        // Only <p> should produce layout output; <title>'s text must
+        // NOT leak through.
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let html = t.insert(
+            Some(root),
+            NodeData::Element {
+                tag: "html".into(),
+                attrs: vec![],
+            },
+        );
+        let head = t.insert(
+            Some(html),
+            NodeData::Element {
+                tag: "head".into(),
+                attrs: vec![],
+            },
+        );
+        let title = t.insert(
+            Some(head),
+            NodeData::Element {
+                tag: "title".into(),
+                attrs: vec![],
+            },
+        );
+        let _ = t.insert(Some(title), NodeData::Text("page title".into()));
+        let body = t.insert(
+            Some(html),
+            NodeData::Element {
+                tag: "body".into(),
+                attrs: vec![],
+            },
+        );
+        let p = t.insert(
+            Some(body),
+            NodeData::Element {
+                tag: "p".into(),
+                attrs: vec![],
+            },
+        );
+        let _ = t.insert(Some(p), NodeData::Text("visible".into()));
+
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        let html_box = &layout.root.children[0];
+        // html's children should be only <body> now (head subtree dropped).
+        assert_eq!(html_box.children.len(), 1);
+        // Sanity: text "page title" must NOT appear anywhere in the tree.
+        let mut found_leak = false;
+        fn walk(b: &LayoutBox, found: &mut bool) {
+            if let Some(t) = &b.text {
+                if t.contains("page title") {
+                    *found = true;
+                }
+            }
+            for c in &b.children {
+                walk(c, found);
+            }
+        }
+        walk(&layout.root, &mut found_leak);
+        assert!(!found_leak, "<title> text leaked into layout tree");
     }
 
     #[test]
