@@ -13,11 +13,13 @@
 pub mod ast;
 pub mod computed;
 pub mod parser;
+pub mod properties;
 pub mod selector;
 
 pub use ast::{Declaration, Rule, Stylesheet};
 pub use computed::compute_styles;
 pub use parser::parse;
+pub use properties::{parse_box_lengths, parse_length, BoxEdges, Length};
 pub use selector::{CompoundSelector, Selector, SelectorChain};
 
 #[cfg(test)]
