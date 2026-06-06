@@ -108,6 +108,9 @@ pub fn run_scripts_with_base(
     let nav = browser_navigation::new_navigation(&initial_url);
     crate::bridge::install_navigation(nav);
     let _ = crate::navigation_shim::install_navigation_globals(&mut ctx);
+    // M15.3: 安装 cookie jar 后端（同主请求共享会话）
+    let jar = browser_cookie::new_cookie_jar();
+    crate::bridge::install_cookie(jar);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }

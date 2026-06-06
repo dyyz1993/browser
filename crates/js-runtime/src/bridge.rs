@@ -20,6 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use boa_engine::{Context, JsArgs, JsResult, JsValue, NativeFunction};
+use browser_cookie::CookieHandle;
 use browser_dom::{Node, NodeData, NodeId, Tree};
 use browser_navigation::NavigationHandle;
 use browser_storage::StorageHandle;
@@ -34,6 +35,8 @@ thread_local! {
     static CURRENT_STORAGE: RefCell<Option<StorageHandle>> = const { RefCell::new(None) };
     // M14.2: history / location backend.
     static CURRENT_NAV: RefCell<Option<NavigationHandle>> = const { RefCell::new(None) };
+    // M15.3: cookie jar backend.
+    static CURRENT_COOKIE: RefCell<Option<CookieHandle>> = const { RefCell::new(None) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -53,6 +56,9 @@ impl Drop for TreeGuard {
             *slot.borrow_mut() = None;
         });
         CURRENT_NAV.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        CURRENT_COOKIE.with(|slot| {
             *slot.borrow_mut() = None;
         });
     }
@@ -280,21 +286,59 @@ fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
 /// tokio runtime so we can be called from inside an outer runtime
 /// (boa eval runs on the main thread which is already inside a
 /// tokio current_thread runtime).
+///
+/// M15.3: 如果安装了 cookie jar，自动带 Cookie 请求头并把响应
+/// Set-Cookie 存入 jar（同主请求共享会话）。jar 是 `Rc<RefCell<>>`
+/// 不跨线程，所以在主线程读出 header、写入 jar；新线程只拿 String。
 fn fetch_sync(url: &str) -> Result<String, String> {
     let url = url.to_string();
+    // 主线程读 cookie header（thread-local jar）。
+    let cookie_header = CURRENT_COOKIE.with(|slot| {
+        slot.borrow().as_ref().and_then(|h| {
+            let parsed = url::Url::parse(&url).ok()?;
+            let header = h.borrow().to_cookie_header(&parsed);
+            if header.is_empty() {
+                None
+            } else {
+                Some(header)
+            }
+        })
+    });
+    let url_clone = url.clone();
     let handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        let bytes = rt
-            .block_on(browser_net::get(&url))
+        let client = browser_net::HttpClient::new();
+        let (bytes, headers) = rt
+            .block_on(client.get_with_headers(&url_clone, cookie_header.as_deref()))
             .map_err(|e| format!("{e:?}"))?;
-        String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
+        // 收集所有 Set-Cookie 行返回给主线程写 jar。
+        let set_cookies: Vec<String> = headers
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(String::from))
+            .collect();
+        let body = String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))?;
+        Ok::<_, String>((body, set_cookies))
     });
-    handle
+    let (body, set_cookies) = handle
         .join()
-        .map_err(|_| "fetch thread panicked".to_string())?
+        .map_err(|_| "fetch thread panicked".to_string())??;
+    // 主线程写回 jar。
+    if !set_cookies.is_empty() {
+        CURRENT_COOKIE.with(|slot| {
+            if let Some(h) = slot.borrow().as_ref() {
+                if let Ok(request_url) = url::Url::parse(&url) {
+                    for sc in &set_cookies {
+                        h.borrow_mut().store_set_cookie(sc, &request_url);
+                    }
+                }
+            }
+        });
+    }
+    Ok(body)
 }
 
 // ---------------------------------------------------------------------------
@@ -787,6 +831,13 @@ where
 /// Install `handle` as the current thread's navigation backend.
 pub fn install_navigation(handle: NavigationHandle) {
     CURRENT_NAV.with(|slot| {
+        *slot.borrow_mut() = Some(handle);
+    });
+}
+
+/// Install `handle` as the current thread's cookie jar backend. (M15.3)
+pub fn install_cookie(handle: CookieHandle) {
+    CURRENT_COOKIE.with(|slot| {
         *slot.borrow_mut() = Some(handle);
     });
 }

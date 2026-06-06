@@ -418,6 +418,7 @@ name = "browser-js-runtime"
 version = "0.0.1"
 dependencies = [
  "boa_engine",
+ "browser-cookie",
  "browser-dom",
  "browser-html-parser",
  "browser-navigation",
