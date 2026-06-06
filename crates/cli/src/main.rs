@@ -56,6 +56,22 @@ enum Cmd {
         #[arg(long)]
         no_js: bool,
     },
+    /// Fetch a URL, render it, and display the result in a GUI window.
+    /// End-to-end browser-like experience. Requires a display server
+    /// (won't work in headless CI / SSH sessions without X forwarding).
+    Open {
+        url: String,
+        #[arg(long, default_value_t = 80)]
+        width: usize,
+        #[arg(long, default_value_t = 3)]
+        scale: usize,
+        #[arg(long, default_value_t = 1024)]
+        win_width: u32,
+        #[arg(long, default_value_t = 768)]
+        win_height: u32,
+        #[arg(long)]
+        no_js: bool,
+    },
 }
 
 async fn run() -> Result<()> {
@@ -94,24 +110,59 @@ async fn run() -> Result<()> {
                 .with_context(|| format!("failed to fetch {url}"))?;
             let html = String::from_utf8(bytes)
                 .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
-            // Pass the page URL as base for relative-URL resolution in
-            // __fetchSetBody / __fetchAppendBody.
             let base = if no_js { None } else { Some(url.clone()) };
             render_html_to_stdout(&html, width, !no_js, base)?;
+            Ok(())
+        }
+        Cmd::Open {
+            url,
+            width,
+            scale,
+            win_width,
+            win_height,
+            no_js,
+        } => {
+            let bytes = get(&url)
+                .await
+                .with_context(|| format!("failed to fetch {url}"))?;
+            let html = String::from_utf8(bytes)
+                .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
+            let base = if no_js { None } else { Some(url.clone()) };
+            let text = render_html_to_string(&html, width, !no_js, base)?;
+            eprintln!("[browser] opening window {win_width}x{win_height}, scale={scale}");
+            let config = browser_gui::WindowConfig {
+                title: format!("browser — {url}"),
+                width: win_width,
+                height: win_height,
+                scale,
+                text,
+            };
+            browser_gui::run_window(config).map_err(|e| anyhow!("GUI error: {e}"))?;
             Ok(())
         }
     }
 }
 
-/// Shared render pipeline.
-/// `run_scripts`: if true, execute <script> tags via boa before layout.
-/// `base_url`: passed to JS bridge for relative-URL resolution in __fetch*.
+/// Shared render pipeline — prints ASCII to stdout.
 fn render_html_to_stdout(
     html: &str,
     width: usize,
     run_js: bool,
     base_url: Option<String>,
 ) -> Result<()> {
+    let out = render_html_to_string(html, width, run_js, base_url)?;
+    print!("{out}");
+    Ok(())
+}
+
+/// Shared render pipeline — returns ASCII text. Used by `render-*` (prints)
+/// and `open` (passes to GUI window).
+fn render_html_to_string(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    base_url: Option<String>,
+) -> Result<String> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let (shared, n) = if base_url.is_some() {
@@ -138,9 +189,7 @@ fn render_html_to_stdout(
             viewport_width: width as f32,
         },
     );
-    let out = render_ascii(&layout, width);
-    print!("{out}");
-    Ok(())
+    Ok(render_ascii(&layout, width))
 }
 
 fn main() -> ExitCode {

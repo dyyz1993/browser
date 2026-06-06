@@ -362,6 +362,7 @@ dependencies = [
  "assert_cmd",
  "browser-css-engine",
  "browser-dom",
+ "browser-gui",
  "browser-html-parser",
  "browser-js-runtime",
  "browser-layout",
