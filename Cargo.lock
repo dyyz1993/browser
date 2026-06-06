@@ -134,6 +134,9 @@ dependencies = [
 [[package]]
 name = "browser-css-engine"
 version = "0.0.1"
+dependencies = [
+ "browser-dom",
+]
 
 [[package]]
 name = "browser-dom"

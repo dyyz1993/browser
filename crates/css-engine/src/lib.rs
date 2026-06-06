@@ -1,16 +1,20 @@
 //! `browser-css-engine` — CSS parser + selector engine + computed styles.
 //!
 //! M2.1 scope: parsing.
+//! M2.2 scope: selectors.
 //! - [`parse`] — CSS text → [`Stylesheet`]
 //! - [`Stylesheet`] / [`Rule`] / [`Declaration`] — AST
+//! - [`Selector`] / [`CompoundSelector`] — selectors with matching
 
 #![forbid(unsafe_code)]
 
 pub mod ast;
 pub mod parser;
+pub mod selector;
 
 pub use ast::{Declaration, Rule, Stylesheet};
 pub use parser::parse;
+pub use selector::{CompoundSelector, Selector, SelectorChain};
 
 #[cfg(test)]
 mod tests {
