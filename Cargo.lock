@@ -276,6 +276,7 @@ dependencies = [
  "browser-css-engine",
  "browser-dom",
  "browser-html-parser",
+ "browser-js-runtime",
  "browser-layout",
  "browser-net",
  "browser-render",

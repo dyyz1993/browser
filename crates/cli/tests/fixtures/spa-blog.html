@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <title>Static Title</title>
+</head>
+<body>
+  <p>Static placeholder</p>
+  <script>
+    // Simulate a tiny SPA bootstrap: replace the placeholder with
+    // dynamically-rendered content.
+    __setBody("Welcome to my blog\nRecent posts:\n- Post A\n- Post B");
+  </script>
+  <script>
+    // Second script: append author info to demonstrate state sharing
+    // across multiple <script> tags.
+    __appendBody("\nAuthor: Jane Doe");
+  </script>
+  <script>
+    // Third script: update the title.
+    __setTitle("My Blog");
+  </script>
+</body>
+</html>
