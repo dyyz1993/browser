@@ -1,7 +1,7 @@
 # 自研浏览器项目 — 全程进度大纲
 
 > 执行状态：**M0-M9 完成**，M10.1 进行中
-> 当前 HEAD: 5992855 (同步实际 git 状态)
+> 当前 HEAD: 4ed636b (memory 同步)
 > Workspace: 217 tests, 0 clippy warnings
 
 ---
@@ -17,7 +17,7 @@
 - ✅ 文本渲染（ASCII + GUI + 真实字体）
 - ✅ CSS 选择器（tag/class/id/compound）
 - ✅ DOM API 桥（createEl/appendChild/setAttribute/innerHTML/getValue/setValue/click/submit）
-- ✅ 异步 fetch 桥（__fetchSetBody/__fetchAppendBody）
+- ✅ 异步 fetch 橋（__fetchSetBody/__fetchAppendBody）
 - ✅ 表单交互（input/textarea/button/form）
 - ✅ 图片占位符渲染（[IMG: src]）
 
@@ -46,9 +46,9 @@
 ## M7 — 渲染质量 + 交互 ✅ (23 commits)
 
 **M7.1** ✅ (8 commits): CSS margin/padding/collapsing/snapshots
-**M7.2** ✅ (3 commits): DOM API + selector（8 个桥 + * / .class / compound）
+**M7.2** ✅ (3 commits): DOM API + selector
 **M7.5** ✅ (6 commits): URL 栏 + 滚动
-**M7.4** ✅ (5 commits): 真实字体（FontCache + fontdue + DejaVuSans 757KB + 中文支持）
+**M7.4** ✅ (5 commits): 真实字体
 **M7.3** 🟡 defer: 异步 JS
 
 ---
@@ -58,7 +58,7 @@
 **M8.1**: __getValue/__setValue 桥
 **M8.2**: textarea 支持
 **M8.3**: __click 桥
-**M8.4**: __submit 桥
+**M8.4**: __submit 橋
 **M8.5**: e2e 测试
 
 ---
