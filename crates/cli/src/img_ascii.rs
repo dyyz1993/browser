@@ -26,16 +26,6 @@ pub fn image_to_ascii<P: AsRef<std::path::Path>>(
     Ok(image_to_ascii_from_img(&img, max_w, max_h))
 }
 
-/// 从内存图像字节转 ASCII（便于测试）。
-pub fn image_to_ascii_from_bytes(
-    bytes: &[u8],
-    max_w: u32,
-    max_h: u32,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let img = image::load_from_memory(bytes).map_err(|e| format!("image decode failed: {e}"))?;
-    Ok(image_to_ascii_from_img(&img, max_w, max_h))
-}
-
 fn image_to_ascii_from_img(img: &DynamicImage, max_w: u32, max_h: u32) -> String {
     let (w, h) = img.dimensions();
     // 缩放：等比缩放到 max_w × max_h 内。
