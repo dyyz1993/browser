@@ -313,6 +313,9 @@ dependencies = [
  "boa_engine",
  "browser-dom",
  "browser-html-parser",
+ "browser-net",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]

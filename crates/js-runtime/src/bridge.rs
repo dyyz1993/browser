@@ -88,6 +88,8 @@ pub fn install(ctx: &mut Context) {
     register_fn(ctx, "__appendBody", append_body as NativeFn);
     register_fn(ctx, "__setTitle", set_title as NativeFn);
     register_fn(ctx, "__log", log_fn as NativeFn);
+    register_fn(ctx, "__fetchSetBody", fetch_set_body as NativeFn);
+    register_fn(ctx, "__fetchAppendBody", fetch_append_body as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -119,6 +121,51 @@ fn log_fn(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsV
     let msg = args.get_or_undefined(0).display().to_string();
     eprintln!("[js] {msg}");
     Ok(JsValue::undefined())
+}
+
+fn fetch_set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let url = arg_string(args, 0).unwrap_or_default();
+    if url.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    match fetch_sync(&url) {
+        Ok(text) => with_tree(|t| set_body_inner_html(t, &text)),
+        Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+    }
+    Ok(JsValue::undefined())
+}
+
+fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let url = arg_string(args, 0).unwrap_or_default();
+    if url.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    match fetch_sync(&url) {
+        Ok(text) => with_tree(|t| append_body_text(t, &text)),
+        Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+    }
+    Ok(JsValue::undefined())
+}
+
+/// Synchronously fetch a URL. Spawns a detached thread with its own
+/// tokio runtime so we can be called from inside an outer runtime
+/// (boa eval runs on the main thread which is already inside a
+/// tokio current_thread runtime).
+fn fetch_sync(url: &str) -> Result<String, String> {
+    let url = url.to_string();
+    let handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio runtime build failed: {e}"))?;
+        let bytes = rt
+            .block_on(browser_net::get(&url))
+            .map_err(|e| format!("{e:?}"))?;
+        String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
+    });
+    handle
+        .join()
+        .map_err(|_| "fetch thread panicked".to_string())?
 }
 
 // ---------------------------------------------------------------------------
@@ -279,5 +326,119 @@ mod tests {
         let (_shared, _guard) = install_current(tree);
         let result = ctx.eval(Source::from_bytes("__nonexistent()"));
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use boa_engine::Source;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn tree_with_body(body_text: &str) -> Tree {
+        let html = format!("<html><head><title>x</title></head><body>{body_text}</body></html>");
+        browser_html_parser::parse(&html)
+    }
+
+    fn make_ctx() -> boa_engine::Context {
+        let mut ctx = boa_engine::Context::default();
+        install(&mut ctx);
+        ctx
+    }
+
+    #[tokio::test]
+    async fn js_fetch_set_body_replaces_body_with_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/data"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("fetched content"))
+            .mount(&server)
+            .await;
+        let url = format!("{}/data", server.uri());
+
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("placeholder");
+        let (shared, _guard) = install_current(tree);
+        let script = format!(r#"__fetchSetBody("{}")"#, url);
+        ctx.eval(Source::from_bytes(&script)).unwrap();
+        drop(_guard);
+        assert_eq!(body_text_content(&shared.borrow()), "fetched content");
+    }
+
+    #[tokio::test]
+    async fn js_fetch_append_body_adds_response_to_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/tail"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(" appended"))
+            .mount(&server)
+            .await;
+        let url = format!("{}/tail", server.uri());
+
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("head");
+        let (shared, _guard) = install_current(tree);
+        let script = format!(r#"__fetchAppendBody("{}")"#, url);
+        ctx.eval(Source::from_bytes(&script)).unwrap();
+        drop(_guard);
+        assert_eq!(body_text_content(&shared.borrow()), "head appended");
+    }
+
+    #[tokio::test]
+    async fn js_fetch_404_logs_error_and_leaves_body_unchanged() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let url = format!("{}/missing", server.uri());
+
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("original");
+        let (shared, _guard) = install_current(tree);
+        let script = format!(r#"__fetchSetBody("{}")"#, url);
+        // Script should not throw — error is logged to stderr.
+        ctx.eval(Source::from_bytes(&script)).unwrap();
+        drop(_guard);
+        // Body untouched.
+        assert_eq!(body_text_content(&shared.borrow()), "original");
+    }
+
+    #[test]
+    fn js_fetch_with_empty_url_is_noop() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("untouched");
+        let (shared, _guard) = install_current(tree);
+        // Empty string → no fetch attempt, no panic.
+        ctx.eval(Source::from_bytes(r#"__fetchSetBody("")"#))
+            .unwrap();
+        drop(_guard);
+        assert_eq!(body_text_content(&shared.borrow()), "untouched");
+    }
+
+    #[tokio::test]
+    async fn js_fetch_two_urls_chained_appends_both() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/a"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("A"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/b"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("B"))
+            .mount(&server)
+            .await;
+
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("");
+        let (shared, _guard) = install_current(tree);
+        let base = server.uri();
+        let script = format!(r#"__fetchAppendBody("{base}/a"); __fetchAppendBody("{base}/b");"#);
+        ctx.eval(Source::from_bytes(&script)).unwrap();
+        drop(_guard);
+        assert_eq!(body_text_content(&shared.borrow()), "AB");
     }
 }
