@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `3afbcbb`（M14.3 history/location JS shim） |
-| 总 commits | 97 |
-| 测试 | 260 passed, 0 clippy warnings |
+| HEAD | `097fd4a`（M14.4 navigation e2e） |
+| 总 commits | 102 |
+| 测试 | 265 passed, 0 clippy warnings |
 | Crates | 12 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -37,12 +37,12 @@
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
 
-### M14 — Navigation（history / location）🟡
+### M14 — Navigation（history / location）✅
 - M14.1 ✅ browser-navigation crate（HistoryStack + Location 解析，11 tests）
 - M14.2 ✅ `__history*` / `__location*` bridges + install_navigation
 - M14.3 ✅ history/location JS 对象 shim + 接入 run_scripts（8 tests）
-- M14.4 ⚪ e2e fixture（SPA 路由 + 百度 location.replace 跟随）
-- M14.5 ⚪ PROGRESS/memory 同步
+- M14.4 ✅ e2e fixture navigation-spa.html（5 tests）
+- M14.5 ✅ PROGRESS/memory 同步
 
 ### M13 — Web Storage（localStorage / sessionStorage）✅
 - M13.1 ✅ browser-storage crate（`Rc<RefCell<HashMap>>`，6 API，8 tests）
