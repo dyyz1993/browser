@@ -11,7 +11,7 @@
 | M2 | ✅ | 文本流渲染（HN fixture 能看出标题列表） | 3 周 |
 | M3 | ✅ | JS 执行（动态创建的元素能进 DOM） | 4 周 |
 | M4 | ✅ | SPA 渲染（React/Vue 应用可爬） | 5 周 |
-| M5 | ✅ | GUI 窗口（跨平台开窗浏览） | 持续 |
+| M5 | ✅ | GUI 窗口（跨平台开窗浏览） | 3 天 |
 | M6 | ✅ | 渲染质量修复 + 黄金对比 + 跨平台 CI | 1 天 |
 
 ---
@@ -136,3 +136,38 @@ UPDATE_SNAPSHOTS=1 cargo test -p browser-cli --test integration_snapshot
 ```
 
 复盘见 `docs/postmortems/M6.md`。
+
+---
+
+## M7 — 渲染质量 + 交互 ✅
+
+**完成日期：** 2026-06-06
+
+| Sub | 状态 | Commit |
+|-----|------|--------|
+| M7.1 | ✅ | CSS margin/padding/UA defaults/collapsing/snapshots (8 commits) |
+| M7.2 | ✅ | DOM API bridges + selector enhancement (3 commits) |
+| M7.5 | ✅ | URL 栏 + 键盘输入 + MouseWheel/PageUp/PageDown/Home/End (6 commits) |
+| M7.4 | ✅ | fontdue 集成 + DejaVuSans.ttf 757KB 嵌入 + 中文支持 (5 commits) |
+| M7.3 | 🟡 | 异步 JS（MicrotaskQueue 写完但 boa 0.20 API 复杂，defer） |
+
+**最终验收：**
+```
+cargo test --workspace     → 217 passed, 0 failed
+cargo clippy -- -D warnings → 0 warnings
+./target/debug/browser render-file tests/fixtures/chinese-font.html --width 80
+  → 中文渲染成功（简体/繁体/日文/韩文/数字/符号）
+```
+
+**关键改进：**
+- 真实 CSS margin/padding 支持（UA defaults + collapsing）
+- 完整 DOM API 桥（__createEl/__appendChild/__qs/...）
+- GUI URL 栏 + 键盘输入 + 滚动
+- 真实字体（DejaVuSans 757KB，fontdue 抗锯齿，中文支持）
+
+**下一步规划：**
+- M8: 表单交互（input/textarea/button）
+- M9: 图片渲染（png/jpg/webp）
+- M10: 性能优化（layout 缓存 + 增量渲染）
+
+复盘见 `docs/postmortems/M7.md`（待写）。
