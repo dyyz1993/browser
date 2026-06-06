@@ -7,3 +7,4 @@
 *.swo
 .env
 .env.local
+tests/snapshots/*.actual
