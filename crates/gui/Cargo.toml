@@ -7,6 +7,7 @@ license.workspace = true
 description = "Cross-platform GUI window for the browser (winit + softbuffer)"
 
 [dependencies]
+fontdue = "0.9"
 # GUI 窗口（跨平台，事件循环）
 winit = { version = "0.30", features = ["rwh_06"] }
 # 字体（系统默认 sans-serif）

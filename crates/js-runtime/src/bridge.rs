@@ -464,7 +464,8 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
 /// - "*" (universal)
 /// - "div", "p", "h1" (tags)
 /// - ".container", ".red" (class)
-/// — no support for combinators (space, >, +) yet (deferred to M7.2.5).
+///
+/// – no support for combinators (space, >, +) yet (deferred to M7.2.5).
 fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
     let mut tokens = Vec::new();
     let mut chars = sel.chars().peekable();
