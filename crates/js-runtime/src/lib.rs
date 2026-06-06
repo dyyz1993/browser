@@ -11,7 +11,10 @@ pub mod runtime;
 pub mod scripts;
 
 pub use bridge::{
-    install as install_bridge, install_current, install_shared, SharedTree, TreeGuard,
+    current_base_url, install as install_bridge, install_current, install_shared,
+    install_shared_with_base, resolve_url, SharedTree, TreeGuard,
 };
 pub use runtime::JsRuntime;
-pub use scripts::{execute_scripts, extract_scripts, run_scripts};
+pub use scripts::{
+    execute_scripts, execute_scripts_with_base, extract_scripts, run_scripts, run_scripts_with_base,
+};

@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
-use browser_js_runtime::run_scripts;
+use browser_js_runtime::{run_scripts, run_scripts_with_base};
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
 use browser_net::get;
 use browser_render::render_ascii;
@@ -79,13 +79,13 @@ async fn run() -> Result<()> {
         Cmd::RenderFile { file, width } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            render_html_to_stdout(&html, width, false)?;
+            render_html_to_stdout(&html, width, false, None)?;
             Ok(())
         }
         Cmd::RenderScript { file, width } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            render_html_to_stdout(&html, width, true)?;
+            render_html_to_stdout(&html, width, true, None)?;
             Ok(())
         }
         Cmd::RenderUrl { url, width, no_js } => {
@@ -94,7 +94,10 @@ async fn run() -> Result<()> {
                 .with_context(|| format!("failed to fetch {url}"))?;
             let html = String::from_utf8(bytes)
                 .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
-            render_html_to_stdout(&html, width, !no_js)?;
+            // Pass the page URL as base for relative-URL resolution in
+            // __fetchSetBody / __fetchAppendBody.
+            let base = if no_js { None } else { Some(url.clone()) };
+            render_html_to_stdout(&html, width, !no_js, base)?;
             Ok(())
         }
     }
@@ -102,10 +105,20 @@ async fn run() -> Result<()> {
 
 /// Shared render pipeline.
 /// `run_scripts`: if true, execute <script> tags via boa before layout.
-fn render_html_to_stdout(html: &str, width: usize, run_js: bool) -> Result<()> {
+/// `base_url`: passed to JS bridge for relative-URL resolution in __fetch*.
+fn render_html_to_stdout(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    base_url: Option<String>,
+) -> Result<()> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
-        let (shared, n) = run_scripts(tree);
+        let (shared, n) = if base_url.is_some() {
+            run_scripts_with_base(tree, base_url)
+        } else {
+            run_scripts(tree)
+        };
         (shared, n)
     } else {
         use std::cell::RefCell;

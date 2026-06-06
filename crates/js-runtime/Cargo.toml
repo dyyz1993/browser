@@ -11,6 +11,7 @@ browser-dom = { path = "../dom" }
 browser-net = { path = "../net" }
 boa_engine = "0.20"
 tokio = { workspace = true, features = ["rt", "net"] }
+url = "2"
 
 [dev-dependencies]
 browser-html-parser = { path = "../html-parser" }

@@ -8,7 +8,7 @@
 use boa_engine::{Context, Source};
 use browser_dom::{NodeData, NodeId, Tree};
 
-use crate::bridge::{install, install_shared};
+use crate::bridge::install;
 
 /// Collect the text content of every `<script>` element in `tree`,
 /// in document order. Empty scripts are filtered out.
@@ -50,13 +50,21 @@ pub fn extract_scripts(tree: &Tree) -> Vec<String> {
 /// Individual script errors are logged to stderr and don't abort the
 /// run; the count returned reflects only successful executions.
 pub fn execute_scripts(tree_shared: &crate::bridge::SharedTree, ctx: &mut Context) -> usize {
-    // Pull scripts out before installing the guard (borrow scope is small).
+    execute_scripts_with_base(tree_shared, ctx, None)
+}
+
+/// Same as [`execute_scripts`], but also installs a base URL used to
+/// resolve relative URLs in `__fetchSetBody` / `__fetchAppendBody`.
+pub fn execute_scripts_with_base(
+    tree_shared: &crate::bridge::SharedTree,
+    ctx: &mut Context,
+    base_url: Option<String>,
+) -> usize {
     let scripts: Vec<String> = {
         let borrowed = tree_shared.borrow();
         extract_scripts(&borrowed)
     };
-    // Install the tree as the current thread's bridge target.
-    let _guard = install_shared(tree_shared.clone());
+    let _guard = crate::bridge::install_shared_with_base(tree_shared.clone(), base_url);
     let mut executed = 0;
     for script in scripts {
         match ctx.eval(Source::from_bytes(&script)) {
@@ -74,12 +82,22 @@ pub fn execute_scripts(tree_shared: &crate::bridge::SharedTree, ctx: &mut Contex
 /// `Rc<RefCell<Tree>>` clones when done rendering.
 #[must_use]
 pub fn run_scripts(tree: Tree) -> (crate::bridge::SharedTree, usize) {
+    run_scripts_with_base(tree, None)
+}
+
+/// Same as [`run_scripts`], but installs a base URL for relative-URL
+/// resolution in `__fetch*` calls.
+#[must_use]
+pub fn run_scripts_with_base(
+    tree: Tree,
+    base_url: Option<String>,
+) -> (crate::bridge::SharedTree, usize) {
     use std::cell::RefCell;
     use std::rc::Rc;
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
     let mut ctx = Context::default();
     install(&mut ctx);
-    let count = execute_scripts(&shared, &mut ctx);
+    let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
 

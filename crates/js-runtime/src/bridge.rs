@@ -27,6 +27,7 @@ pub type SharedTree = Rc<RefCell<Tree>>;
 
 thread_local! {
     static CURRENT_TREE: RefCell<Option<SharedTree>> = const { RefCell::new(None) };
+    static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -37,6 +38,9 @@ pub struct TreeGuard {
 impl Drop for TreeGuard {
     fn drop(&mut self) {
         CURRENT_TREE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        BASE_URL.with(|slot| {
             *slot.borrow_mut() = None;
         });
     }
@@ -54,12 +58,55 @@ pub fn install_current(tree: Tree) -> (SharedTree, TreeGuard) {
 }
 
 /// Install an already-shared tree as the current thread's tree.
+/// No base URL is installed — relative URLs in __fetch* calls will
+/// fail to parse (which is logged, not panicked).
 #[must_use]
 pub fn install_shared(shared: SharedTree) -> TreeGuard {
     CURRENT_TREE.with(|slot| {
         *slot.borrow_mut() = Some(shared);
     });
     TreeGuard { _private: () }
+}
+
+/// Install an already-shared tree plus an optional base URL used to
+/// resolve relative URLs in `__fetchSetBody` / `__fetchAppendBody`.
+/// `base_url` should typically be the URL of the page being rendered.
+#[must_use]
+pub fn install_shared_with_base(shared: SharedTree, base_url: Option<String>) -> TreeGuard {
+    CURRENT_TREE.with(|slot| {
+        *slot.borrow_mut() = Some(shared);
+    });
+    BASE_URL.with(|slot| {
+        *slot.borrow_mut() = base_url;
+    });
+    TreeGuard { _private: () }
+}
+
+/// Read the currently-installed base URL (may be `None`).
+#[must_use]
+pub fn current_base_url() -> Option<String> {
+    BASE_URL.with(|slot| slot.borrow().clone())
+}
+
+/// Resolve a possibly-relative URL against the current base URL.
+/// - Absolute URLs (with scheme) returned unchanged.
+/// - Relative URLs resolved against the installed base.
+/// - Relative URL with no base installed → returns the original
+///   string (the eventual fetch will fail with InvalidUrl, which is
+///   logged but not panicked).
+pub fn resolve_url(url: &str) -> String {
+    // Absolute if it parses standalone with a scheme.
+    if url::Url::parse(url).is_ok() {
+        return url.to_string();
+    }
+    if let Some(base) = current_base_url() {
+        if let Ok(base_url) = url::Url::parse(&base) {
+            if let Ok(joined) = base_url.join(url) {
+                return joined.to_string();
+            }
+        }
+    }
+    url.to_string()
 }
 
 fn with_tree<F, R>(f: F) -> R
@@ -124,25 +171,27 @@ fn log_fn(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsV
 }
 
 fn fetch_set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
-    let url = arg_string(args, 0).unwrap_or_default();
-    if url.is_empty() {
+    let raw = arg_string(args, 0).unwrap_or_default();
+    if raw.is_empty() {
         return Ok(JsValue::undefined());
     }
+    let url = resolve_url(&raw);
     match fetch_sync(&url) {
         Ok(text) => with_tree(|t| set_body_inner_html(t, &text)),
-        Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+        Err(e) => eprintln!("[js-fetch] {raw} failed: {e}"),
     }
     Ok(JsValue::undefined())
 }
 
 fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
-    let url = arg_string(args, 0).unwrap_or_default();
-    if url.is_empty() {
+    let raw = arg_string(args, 0).unwrap_or_default();
+    if raw.is_empty() {
         return Ok(JsValue::undefined());
     }
+    let url = resolve_url(&raw);
     match fetch_sync(&url) {
         Ok(text) => with_tree(|t| append_body_text(t, &text)),
-        Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+        Err(e) => eprintln!("[js-fetch] {raw} failed: {e}"),
     }
     Ok(JsValue::undefined())
 }
@@ -416,6 +465,40 @@ mod fetch_tests {
             .unwrap();
         drop(_guard);
         assert_eq!(body_text_content(&shared.borrow()), "untouched");
+    }
+
+    #[test]
+    fn resolve_url_passthrough_for_absolute() {
+        assert_eq!(
+            resolve_url("https://example.com/x"),
+            "https://example.com/x"
+        );
+    }
+
+    #[test]
+    fn resolve_url_no_base_returns_input_unchanged() {
+        // No base installed → can't resolve, return as-is.
+        assert_eq!(resolve_url("/api/x"), "/api/x");
+    }
+
+    #[test]
+    fn resolve_url_with_base_joins_relative() {
+        // We need a Tree to install (the guard's contract). Just
+        // build an empty one.
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let empty_tree = Tree::with_root(browser_dom::NodeData::Document);
+        let shared = Rc::new(RefCell::new(empty_tree));
+        let _guard =
+            install_shared_with_base(shared, Some("https://example.com/page/index.html".into()));
+        assert_eq!(resolve_url("/api/x"), "https://example.com/api/x");
+        assert_eq!(resolve_url("api/y"), "https://example.com/page/api/y");
+        assert_eq!(resolve_url("../z"), "https://example.com/z");
+        // Absolute URLs are returned unchanged.
+        assert_eq!(
+            resolve_url("https://other.com/foo"),
+            "https://other.com/foo"
+        );
     }
 
     #[tokio::test]

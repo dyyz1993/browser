@@ -165,3 +165,87 @@ async fn spa_shell_then_set_title_via_script() {
         .stdout(predicate::str::contains("rendered"))
         .stdout(predicate::str::contains("Old").not());
 }
+
+#[tokio::test]
+async fn spa_shell_relative_urls_resolve_against_page_url() {
+    // M4.4 e2e: script uses relative URLs and the CLI must resolve
+    // them against the page URL passed to render-url.
+    let server = MockServer::start().await;
+    let base = server.uri();
+
+    let html = r#"<!doctype html>
+<html><body>
+  <p>Loading...</p>
+  <script>
+    __setBody("Posts:");
+    __fetchAppendBody("/api/posts");
+    __appendBody(" | ");
+    __fetchAppendBody("api/comments");
+  </script>
+</body></html>"#;
+
+    Mock::given(method("GET"))
+        .and(path("/spa"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(html))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/posts"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("Post A|Post B"))
+        .mount(&server)
+        .await;
+    // RFC 3986: base=/spa + rel="api/comments" → /api/comments
+    // (last segment replaced). This matches browser behavior.
+    Mock::given(method("GET"))
+        .and(path("/api/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("C1|C2"))
+        .mount(&server)
+        .await;
+
+    let bin_result = bin()
+        .args(["render-url", &format!("{base}/spa"), "--width", "200"])
+        .assert()
+        .success();
+    let output = bin_result.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(stdout.contains("Posts:"), "missing Posts: in {stdout}");
+    assert!(
+        stdout.contains("Post A|Post B"),
+        "missing Post A|Post B in {stdout}"
+    );
+    assert!(stdout.contains("C1|C2"), "missing C1|C2 in {stdout}");
+    assert!(
+        stderr.contains("1 script(s) executed"),
+        "missing script count in {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn spa_shell_relative_url_with_no_base_is_logged_error() {
+    // render-script has no source URL, so no base. A relative URL
+    // inside the script must be logged as a fetch failure but NOT
+    // crash the pipeline.
+    let html = r#"<!doctype html>
+<html><body>
+  <script>
+    __setBody("before");
+    __fetchAppendBody("/api/missing");
+  </script>
+</body></html>"#;
+
+    let dir = std::env::temp_dir();
+    let path = dir.join("browser_relative_no_base.html");
+    std::fs::write(&path, html).unwrap();
+
+    bin()
+        .args(["render-script", path.to_str().unwrap(), "--width", "80"])
+        .assert()
+        .success()
+        // Body before the failed fetch is still there.
+        .stdout(predicate::str::contains("before"))
+        .stderr(predicate::str::contains("[js-fetch]"));
+
+    let _ = std::fs::remove_file(&path);
+}

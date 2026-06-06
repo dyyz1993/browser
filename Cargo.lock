@@ -315,6 +315,7 @@ dependencies = [
  "browser-html-parser",
  "browser-net",
  "tokio",
+ "url",
  "wiremock",
 ]
 
