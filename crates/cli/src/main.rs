@@ -7,6 +7,8 @@
 //! - `browser render-script <file>`   parse + execute scripts + layout + render
 //! - `browser render-url  <url>`      fetch + parse + execute scripts + render
 
+mod screenshot;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -38,6 +40,9 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, default_value_t = 80)]
         width: usize,
+        /// M12.1: write rendered ASCII as a PNG screenshot to this path.
+        #[arg(long)]
+        screenshot: Option<PathBuf>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -45,6 +50,9 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, default_value_t = 80)]
         width: usize,
+        /// M12.1: write rendered ASCII as a PNG screenshot to this path.
+        #[arg(long)]
+        screenshot: Option<PathBuf>,
     },
     /// Fetch a URL, parse, execute <script> tags, then render.
     /// End-to-end SPA rendering pipeline.
@@ -97,16 +105,35 @@ async fn run() -> Result<()> {
             println!("{}", pretty_print(&tree));
             Ok(())
         }
-        Cmd::RenderFile { file, width } => {
+        Cmd::RenderFile {
+            file,
+            width,
+            screenshot,
+        } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            render_html_to_stdout(&html, width, false, None)?;
+            let text = render_html_to_string(&html, width, false, None)?;
+            print!("{text}");
+            if let Some(p) = screenshot {
+                screenshot::render_text_to_png(&text, &p)?;
+                eprintln!("[screenshot] wrote {}", p.display());
+            }
             Ok(())
         }
-        Cmd::RenderScript { file, width } => {
+        Cmd::RenderScript {
+            file,
+            width,
+            screenshot,
+        } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            render_html_to_stdout(&html, width, true, None)?;
+            let text = render_html_to_string(&html, width, true, None)?;
+            print!("{text}");
+            if let Some(p) = screenshot {
+                screenshot::render_text_to_png(&text, &p)
+                    .map_err(|e| anyhow!("screenshot failed: {e}"))?;
+                eprintln!("[screenshot] wrote {}", p.display());
+            }
             Ok(())
         }
         Cmd::RenderUrl { url, width, no_js } => {

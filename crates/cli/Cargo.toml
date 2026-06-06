@@ -17,6 +17,9 @@ browser-net = { path = "../net" }
 browser-css-engine = { path = "../css-engine" }
 browser-layout = { path = "../layout" }
 browser-render = { path = "../render" }
+# M12.1: PNG output for --screenshot flag (fontdue for glyphs, embedded DejaVuSans).
+fontdue = "0.9"
+png = "0.17"
 browser-js-runtime = { path = "../js-runtime" }
 browser-gui = { path = "../gui" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -347,7 +347,7 @@ mod tests {
         // M11.1: rem scales to 16px (standard root font-size),
         // pt scales to 4/3 px, vh/vw/vmin/vmax → Zero (no viewport).
         assert_eq!(parse_length("2rem"), Some(Length::Px(32.0)));
-        assert_eq!(parse_length("10pt"), Some(Length::Px(13.333333333333334)));
+        assert_eq!(parse_length("10pt"), Some(Length::Px(13.333_333)));
         // vh / vw / vmin / vmax — no viewport in ASCII mode → Zero.
         assert_eq!(parse_length("15vh"), Some(Length::Zero));
         assert_eq!(parse_length("50vw"), Some(Length::Zero));
