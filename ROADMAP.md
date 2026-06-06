@@ -9,7 +9,7 @@
 | M0 | ✅ | 项目骨架 + CI | 1~2 天 |
 | M1 | ✅ | 能看到 HTML（curl + parse + 打印 DOM） | 2 周 |
 | M2 | ✅ | 文本流渲染（HN fixture 能看出标题列表） | 3 周 |
-| M3 | ⚪ | JS 执行（动态创建的元素能进 DOM） | 4 周 |
+| M3 | ✅ | JS 执行（动态创建的元素能进 DOM） | 4 周 |
 | M4 | ⚪ | SPA 渲染（React/Vue 应用可爬） | 5 周 |
 | M5 | ⚪ | GUI 窗口（跨平台开窗浏览） | 持续 |
 
@@ -52,8 +52,31 @@ cargo run -p browser-cli -- render-file tests/fixtures/news.ycombinator.com.html
 
 ---
 
-## M3 — JS 执行（待细化）
+## M3 — JS 执行 ✅
 
-## M4 — SPA 渲染（待 M3 后细化）
+**完成日期：** 2026-06-06
+
+| Step | 状态 | Commit |
+|------|------|--------|
+| M3.1 | ✅ | `feat(js-runtime): embed boa_engine for JS execution` |
+| M3.2 | ✅ | `feat(js-runtime): write-only JS-to-DOM bridge` |
+| M3.3 | ✅ | `feat(js-runtime): extract and execute <script> tags in document order` |
+| M3.4 | ✅ | `feat(cli): render-script subcommand executes <script> tags before layout` |
+| M3.5 | ✅ | `docs: M3 complete, postmortem added` |
+
+**最终验收：**
+```
+cargo test --workspace     → 140 passed, 0 failed
+cargo clippy -- -D warnings → 0 warnings
+cargo run -p browser-cli -- render-script tests/fixtures/spa-blog.html --width 120
+  → 输出 "Welcome to my blog / Recent posts / Author: Jane Doe"
+  → stderr: "3 script(s) executed"
+```
+
+复盘见 `docs/postmortems/M3.md`。
+
+---
+
+## M4 — SPA 渲染（待细化）
 
 ## M5 — GUI 窗口（持续）
