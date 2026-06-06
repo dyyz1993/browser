@@ -1,8 +1,8 @@
 # 自研浏览器项目 — 全程进度大纲
 
-> 执行状态：**M0-M10 全部完成 ✅**（SPA 爬虫功能满足）
-> 当前 HEAD: fa580fa (M10 完成)
-> Workspace: 217 tests, 0 clippy warnings
+> 执行状态：**M0-M10 全部完成 ✅**
+> 当前 HEAD: 92fd4ea (同步 memory)
+> Workspace: 217 tests, 0 clippy warnings（待确认）
 
 ---
 
@@ -21,7 +21,7 @@
 - ✅ 表单交互（input/textarea/button/form）
 - ✅ 图片占位符渲染（[IMG: src]）
 
-**结论**：M4 已满足 SPA 爬虫核心需求，M7-10 为增强功能。
+**结论**：M4 已满足 SPA 爬虫核心需求，M7-8-9-10 为增强功能。
 
 ---
 
@@ -55,19 +55,19 @@
 
 ## M8 — 表单交互 ✅ (4 commits)
 
-**M8.1**: __getValue/__setValue 橋
+**M8.1**: __getValue/__setValue 橋（4010ff0）
 **M8.2**: textarea 支持
-**M8.3**: __click 橋
-**M8.4**: __submit 橋
-**M8.5**: e2e 测试
+**M8.3**: __click 橋（7bc4b76）
+**M8.4**: __submit 橋（2dbae55）
+**M8.5**: e2e 测试（6bd8a24）
 
 ---
 
 ## M9 — 图片渲染 ✅ (3 commits)
 
-**M9.1.0**: 移除 img 黑名单
-**M9.1.1**: 注入占位符 [IMG: src]
-**M9.5**: e2e 验收
+**M9.1.0**: 移除 img 黑名单（3baef11）
+**M9.1.1**: 注入占位符 [IMG: src]（77bf69b）
+**M9.5**: e2e 验收（8dcde2b）
 
 ---
 
@@ -75,11 +75,11 @@
 
 **M10.1** ✅ (05e3f9f): LayoutCache 实现
 - `get_or_compute(tree, styles)` → &LayoutTree（缓存）
-- 3 个单元测试
+- 3 个单元测试（命中/增长/清除）
 
 **M10.2** ✅ (9bcad04): DirtyTracker 实现
 - `mark(id)` / `mark_subtree(tree, root_id)` / `is_dirty(id)` / `clear()`
-- 3 个单元测试
+- 3 个单元测试（单个节点/子树/清除）
 
 ---
 
@@ -89,10 +89,13 @@
 - 连接管理 + 消息发送/接收
 
 **M12** 🟡: Storage（localStorage/sessionStorage）
+- 简单 KV 存储
 
 **M13** 🟡: History API（pushState/replaceState）
+- 浏览器历史栈
 
 **M14** 🟡: Worker 线程
+- 计算密集任务分离
 
 ---
 
@@ -109,9 +112,9 @@
 - 图片占位符（M9）
 - 性能优化框架（M10）
 
-**Workspace**：217 tests, 0 clippy warnings
+**Workspace**：217 tests（待确认）, 0 clippy warnings
 
-**实际 HEAD**：fa580fa（M10 完成）
+**实际 HEAD**：92fd4ea
 
 ---
 
