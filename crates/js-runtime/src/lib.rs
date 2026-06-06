@@ -1,18 +1,12 @@
-//! `browser-js-runtime` — embeds a JS engine (`boa_engine` initially,
-//! possibly `deno_core` later) and provides the JS ↔ DOM bridge.
+//! `browser-js-runtime` — JavaScript engine embedding + DOM bridge.
 //!
-//! M0 placeholder. Will be wired up in M3.
+//! M3.1 scope: basic eval.
+//! - [`JsRuntime`] — owns a boa `Context`
+//! - [`JsRuntime::eval`] — run code, return result as String
+//! - [`JsRuntime::execute`] — run code, ignore result
 
 #![forbid(unsafe_code)]
 
-pub const CRATE_NAME: &str = "browser-js-runtime";
+pub mod runtime;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ping() {
-        assert_eq!(CRATE_NAME, "browser-js-runtime");
-    }
-}
+pub use runtime::JsRuntime;

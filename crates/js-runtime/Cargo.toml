@@ -7,5 +7,7 @@ license.workspace = true
 description = "JavaScript engine embedding + DOM bridge"
 
 [dependencies]
+browser-dom = { path = "../dom" }
+boa_engine = "0.20"
 
 [dev-dependencies]
