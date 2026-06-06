@@ -8,6 +8,7 @@ description = "JavaScript engine embedding + DOM bridge"
 
 [dependencies]
 browser-dom = { path = "../dom" }
+browser-storage = { path = "../storage" }
 browser-net = { path = "../net" }
 boa_engine = "0.20"
 tokio = { workspace = true, features = ["rt", "net"] }

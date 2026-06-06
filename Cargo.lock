@@ -414,6 +414,7 @@ dependencies = [
  "browser-dom",
  "browser-html-parser",
  "browser-net",
+ "browser-storage",
  "tokio",
  "url",
  "wiremock",

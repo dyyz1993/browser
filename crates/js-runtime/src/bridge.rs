@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use boa_engine::{Context, JsArgs, JsResult, JsValue, NativeFunction};
 use browser_dom::{Node, NodeData, NodeId, Tree};
+use browser_storage::StorageHandle;
 
 /// A shared, mutate-able handle to the DOM tree that JS sees.
 pub type SharedTree = Rc<RefCell<Tree>>;
@@ -28,6 +29,8 @@ pub type SharedTree = Rc<RefCell<Tree>>;
 thread_local! {
     static CURRENT_TREE: RefCell<Option<SharedTree>> = const { RefCell::new(None) };
     static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+    // M13.2: localStorage / sessionStorage backend.
+    static CURRENT_STORAGE: RefCell<Option<StorageHandle>> = const { RefCell::new(None) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -41,6 +44,9 @@ impl Drop for TreeGuard {
             *slot.borrow_mut() = None;
         });
         BASE_URL.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        CURRENT_STORAGE.with(|slot| {
             *slot.borrow_mut() = None;
         });
     }
@@ -153,6 +159,13 @@ pub fn install(ctx: &mut Context) {
     register_fn1(ctx, "__click", click as NativeFn);
     // M8.4: form submit bridge.
     register_fn1(ctx, "__submit", submit as NativeFn);
+    // M13.2: localStorage / sessionStorage bridges.
+    register_fn1(ctx, "__storageGet", storage_get_bridge as NativeFn);
+    register_fn2(ctx, "__storageSet", storage_set_bridge as NativeFn);
+    register_fn1(ctx, "__storageRemove", storage_remove_bridge as NativeFn);
+    register_fn0(ctx, "__storageClear", storage_clear_bridge as NativeFn);
+    register_fn0(ctx, "__storageLen", storage_len_bridge as NativeFn);
+    register_fn1(ctx, "__storageKey", storage_key_bridge as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -635,6 +648,99 @@ fn submit(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsV
     };
     eprintln!("[dom-submit] #{id}");
     Ok(JsValue::undefined())
+}
+
+// M13.2: Web Storage bridges.
+//
+// SPA 场景：很多 React/Vue 应用在 localStorage 里塞 token、用户偏好、
+// 缓存数据。这些都是同步 API，直接从 thread-local slot 拿 StorageHandle
+// 调 browser_storage 函数。
+//
+// 注意：localStorage 和 sessionStorage 共享同一个 handle（MVP 爬虫
+// 场景不区分 session/local，session 一般也不会跨刷新）。
+
+fn with_storage<F, R>(f: F) -> R
+where
+    F: FnOnce(&StorageHandle) -> R,
+{
+    CURRENT_STORAGE.with(|slot| {
+        let borrowed = slot.borrow();
+        let handle = borrowed
+            .as_ref()
+            .expect("storage bridge called without install_storage()");
+        f(handle)
+    })
+}
+
+/// Install `handle` as the current thread's storage backend.
+/// Must be called before invoking any JS that uses localStorage/
+/// sessionStorage. Cleared automatically by TreeGuard drop.
+pub fn install_storage(handle: StorageHandle) {
+    CURRENT_STORAGE.with(|slot| {
+        *slot.borrow_mut() = Some(handle);
+    });
+}
+
+fn storage_get_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let key = match arg_string(args, 0) {
+        Some(k) => k,
+        None => return Ok(JsValue::undefined()),
+    };
+    let value = with_storage(|s| browser_storage::storage_get(s, &key));
+    match value {
+        Some(v) => Ok(JsValue::String(boa_engine::string::JsString::from(v))),
+        None => Ok(JsValue::null()),
+    }
+}
+
+fn storage_set_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let key = match arg_string(args, 0) {
+        Some(k) => k,
+        None => return Ok(JsValue::undefined()),
+    };
+    let value = arg_string(args, 1).unwrap_or_default();
+    with_storage(|s| browser_storage::storage_set(s, &key, &value));
+    eprintln!("[storage-set] {key}={value}");
+    Ok(JsValue::undefined())
+}
+
+fn storage_remove_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let key = match arg_string(args, 0) {
+        Some(k) => k,
+        None => return Ok(JsValue::undefined()),
+    };
+    with_storage(|s| browser_storage::storage_remove(s, &key));
+    Ok(JsValue::undefined())
+}
+
+fn storage_clear_bridge(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    with_storage(browser_storage::storage_clear);
+    Ok(JsValue::undefined())
+}
+
+fn storage_len_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let len = with_storage(browser_storage::storage_len);
+    Ok(JsValue::new(len as f64))
+}
+
+fn storage_key_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let idx = match arg_usize(args, 0) {
+        Some(i) => i,
+        None => return Ok(JsValue::undefined()),
+    };
+    let key = with_storage(|s| browser_storage::storage_key(s, idx));
+    match key {
+        Some(k) => Ok(JsValue::String(boa_engine::string::JsString::from(k))),
+        None => Ok(JsValue::null()),
+    }
 }
 
 #[cfg(test)]
