@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+
+<head>
+  <title>Loading</title>
+</head>
+
+<body>
+  <p>Loading...</p>
+  <script>
+    // M16.5 fixture: 用 setTimeout + Promise 模拟真实 SPA 的异步数据加载。
+    // 场景：页面初始显示 "Loading..."，JS 异步"请求数据"（用 setTimeout
+    // 模拟网络延迟 + Promise 模拟 fetch.then），渲染完成后替换为产品列表。
+    var products=[];
+
+    function render() {
+      var html="Products:\n"+products.map(function(p) {
+        return "- "+p;
+      }).join("\n");
+      __setBody(html);
+    }
+
+    // 模拟异步数据获取：100ms 后用 Promise resolve 数据
+    setTimeout(function() {
+      Promise.resolve().then(function() {
+        products.push("Widget","Gadget","Gizmo");
+        render();
+      });
+    },0);
+  </script>
+</body>
+
+</html>
