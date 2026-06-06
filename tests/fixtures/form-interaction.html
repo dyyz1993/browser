@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Form Interaction Test</title>
+</head>
+<body>
+<form id="f">
+  <input id="user" value="">
+  <input type="submit" id="btn">
+</form>
+<div id="output"></div>
+<script>
+(function() {
+  var user = __getElById("user");
+  __setValue(user, "Alice");
+  var btn = __getElById("btn");
+  __click(btn);
+  var form = __getElById("f");
+  __submit(form);
+  var output = __getElById("output");
+  __setText(output, "Form submitted");
+})();
+</script>
+</body>
+</html>
