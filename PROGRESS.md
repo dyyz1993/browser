@@ -182,12 +182,13 @@
 **目标**：<img> 标签渲染（占位符 → 真实图像）
 
 **验收**：
-- `<img src="logo.png">` → 渲染 `[IMG: logo.png]` 占位符（M9.1）
+- `<img src="logo.png">` → 渲染 `[IMG: logo.png]` 占位符（M9.1.0-1）
 - `<img src="https://example.com/logo.png">` → fetch 二进制图像（M9.2）
 - 图像解码 + 绘制（M9.3）
 
 **子任务**：
-- M9.1: <img> 标签占位符渲染（进行中）
+- M9.1.0 ✅ (3baef11): 移除 img 非渲染黑名单
+- M9.1.1 ✅ (77bf69b): 注入占位符文本 [IMG: src]
 - M9.2: fetch 二进制图像（png/jpg）
 - M9.3: 图像解码 + 绘制
 - M9.4: img src 属性解析
