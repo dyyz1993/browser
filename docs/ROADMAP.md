@@ -24,7 +24,9 @@
 | M12 | ✅ | 截图 + 图像 ASCII（--screenshot / image-ascii） | 225 |
 | M13 | ✅ | Web Storage（localStorage/sessionStorage） | 241 |
 | M14 | 🟡 | Navigation（history/location） | 260（M14.1-3 完成） |
-| M15+ | ⚪ | 前瞻（见下） | — |
+| M15 | ✅ | Cookie jar（跨请求会话保持） | 291 |
+| M16 | ✅ | 异步 JS（setTimeout + Promise，boa 自研） | 318 |
+| M17+ | ⚪ | 前瞻（见下） | — |
 
 ---
 
@@ -95,15 +97,21 @@
 
 ---
 
-## M16（进行中 🟡）— 切 deno_core
+## M16（异步 JS）✅ — setTimeout + Promise（用 boa 自研，非 deno_core）
 
-> 解锁 setTimeout/Promise/async-await/真实 SPA bundle。工作量大，先做可行性 spike。
+> 决策见 docs/decisions/0002-boa-settimeout-vs-deno-core.md：调研发现
+> boa 0.20 的 JobQueue/enqueue_job/NativeFunction::call/JsFunction::call
+> 全是 pub，推翻 M7.3 defer 理由。用现有 boa 自研，避免 300MB V8。
 
 | Sub | 状态 | 内容 |
 |-----|------|------|
-| M16.0 | 🟡 | 可行性 spike（V8 binary 能否编译链接） |
-| M16.1 | ⚪ | ADR-0002 决策记录（是否采纳 deno_core） |
-| M16.2+ | ⚪ | 待 spike 结果后规划 |
+| M16.0 | ✅ | ADR-0002 决策（调研 + deno_core spike + kill） |
+| M16.1 | ✅ | browser-eventloop crate（TimerWheel 纯算法，14 tests） |
+| M16.2 | ✅ | setTimeout/clearTimeout 桥 + 全局名 |
+| M16.3 | ✅ | event loop 接入 run_scripts（pump_event_loop） |
+| M16.4 | ✅ | Promise.then 触发（ctx.run_jobs） |
+| M16.5 | ✅ | e2e fixture（timer-spa.html） |
+| M16.6 | ✅ | PROGRESS + ROADMAP + ADR 引用同步 |
 
 ---
 
