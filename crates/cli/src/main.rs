@@ -66,6 +66,9 @@ enum Cmd {
         /// M12.1: write rendered ASCII as a PNG screenshot to this path.
         #[arg(long)]
         screenshot: Option<PathBuf>,
+        /// M18.2: after rendering, assert network is idle.
+        #[arg(long)]
+        assert_network_idle: bool,
     },
     /// Fetch a URL, parse, execute <script> tags, then render.
     /// End-to-end SPA rendering pipeline.
@@ -79,6 +82,11 @@ enum Cmd {
         /// M12.1: write rendered ASCII as a PNG screenshot to this path.
         #[arg(long)]
         screenshot: Option<PathBuf>,
+        /// M18.2: after rendering, assert network is idle (no pending
+        /// timers / fetches). Exits non-zero if SPA left work pending.
+        /// No-op with --no-js.
+        #[arg(long)]
+        assert_network_idle: bool,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
@@ -149,6 +157,7 @@ async fn run() -> Result<()> {
             file,
             width,
             screenshot,
+            assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -159,6 +168,18 @@ async fn run() -> Result<()> {
                     .map_err(|e| anyhow!("screenshot failed: {e}"))?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
+            // M18.2: 断言 networkidle。
+            if assert_network_idle && !browser_js_runtime::is_network_idle() {
+                eprintln!(
+                    "[networkidle] NOT idle: {} pending timers, {} pending requests",
+                    browser_js_runtime::pending_timers(),
+                    browser_js_runtime::pending_requests()
+                );
+                return Err(anyhow!("network not idle after render"));
+            }
+            if assert_network_idle {
+                eprintln!("[networkidle] OK");
+            }
             Ok(())
         }
         Cmd::RenderUrl {
@@ -166,6 +187,7 @@ async fn run() -> Result<()> {
             width,
             no_js,
             screenshot,
+            assert_network_idle,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -176,6 +198,18 @@ async fn run() -> Result<()> {
                 screenshot::render_text_to_png(&text, &p)
                     .map_err(|e| anyhow!("screenshot failed: {e}"))?;
                 eprintln!("[screenshot] wrote {}", p.display());
+            }
+            // M18.2: 断言 networkidle（爬虫调试用）。
+            if assert_network_idle && !no_js {
+                if !browser_js_runtime::is_network_idle() {
+                    eprintln!(
+                        "[networkidle] NOT idle: {} pending timers, {} pending requests",
+                        browser_js_runtime::pending_timers(),
+                        browser_js_runtime::pending_requests()
+                    );
+                    return Err(anyhow!("network not idle after render"));
+                }
+                eprintln!("[networkidle] OK");
             }
             Ok(())
         }
