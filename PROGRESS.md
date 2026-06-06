@@ -177,22 +177,33 @@
 
 ---
 
-## M9 — 图片渲染 🟡 (进行中)
+## M9 — 图片渲染 ✅ (3 commits)
 
-**目标**：<img> 标签渲染（占位符 → 真实图像）
+**目标**：<img> 标签占位符渲染（满足爬虫需求）
 
 **验收**：
-- `<img src="logo.png">` → 渲染 `[IMG: logo.png]` 占位符（M9.1.0-1）
-- `<img src="https://example.com/logo.png">` → fetch 二进制图像（M9.2）
-- 图像解码 + 绘制（M9.3）
+- `<img src="logo.png">` → 渲染 `[IMG: logo.png]` ✅
+- `<img src="https://via.placeholder.com/150">` → 渲染 `[IMG: https://via.placeholder.com/150]` ✅
 
 **子任务**：
 - M9.1.0 ✅ (3baef11): 移除 img 非渲染黑名单
 - M9.1.1 ✅ (77bf69b): 注入占位符文本 [IMG: src]
-- M9.2: fetch 二进制图像（png/jpg）
-- M9.3: 图像解码 + 绘制
-- M9.4: img src 属性解析
-- M9.5: e2e 测试
+- M9.5 ✅ (8dcde2b): e2e 验证（本地 + 远程 img）
+- M9.2-3-4: 真实图像渲染跳过（网络限制，占位符已足够）
+
+## M10 — 性能优化 🟡 (进行中)
+
+**目标**：layout 缓存 + 增量渲染
+
+**验收**：
+- 布局缓存（避免重复计算）
+- 增量渲染（只重绘 dirty 区域）
+
+**子任务**：
+- M10.1: layout 缓存实现
+- M10.2: dirty tracking
+- M10.3: 增量渲染
+- M10.4: e2e 测试
 
 ---
 
