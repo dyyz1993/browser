@@ -191,6 +191,25 @@ impl ApplicationHandler for AppState {
                         st.window.request_redraw();
                         // M7.5.3: fetch + render (deferred to later).
                     }
+                    // M7.5.5: PageUp/PageDown/Home/End.
+                    Key::Named(NamedKey::PageDown) => {
+                        st.scroll_y += 10;
+                        st.window.request_redraw();
+                    }
+                    Key::Named(NamedKey::PageUp) => {
+                        st.scroll_y = st.scroll_y.saturating_sub(10);
+                        st.window.request_redraw();
+                    }
+                    Key::Named(NamedKey::Home) => {
+                        st.scroll_y = 0;
+                        st.window.request_redraw();
+                    }
+                    Key::Named(NamedKey::End) => {
+                        // Jump to bottom (approximate: 100 lines past max lines).
+                        let max_lines = st.text.lines().count();
+                        st.scroll_y = max_lines.saturating_sub(20);
+                        st.window.request_redraw();
+                    }
                     _ => {}
                 }
             }
