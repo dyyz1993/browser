@@ -53,6 +53,15 @@ pub fn install_current(tree: Tree) -> (SharedTree, TreeGuard) {
     (shared, TreeGuard { _private: () })
 }
 
+/// Install an already-shared tree as the current thread's tree.
+#[must_use]
+pub fn install_shared(shared: SharedTree) -> TreeGuard {
+    CURRENT_TREE.with(|slot| {
+        *slot.borrow_mut() = Some(shared);
+    });
+    TreeGuard { _private: () }
+}
+
 fn with_tree<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Tree) -> R,
