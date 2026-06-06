@@ -7,5 +7,7 @@ license.workspace = true
 description = "Block / inline / flex layout engine"
 
 [dependencies]
+browser-dom = { path = "../dom" }
+browser-css-engine = { path = "../css-engine" }
 
 [dev-dependencies]

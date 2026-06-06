@@ -1,17 +1,11 @@
-//! `browser-layout` — block / inline / flex layout engine.
+//! `browser-layout` — block / inline / anonymous layout engine.
 //!
-//! M0 placeholder. Will be wired up in M2.
+//! M2.4 scope: tree construction.
 
 #![forbid(unsafe_code)]
 
-pub const CRATE_NAME: &str = "browser-layout";
+pub mod boxes;
+pub mod construct;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ping() {
-        assert_eq!(CRATE_NAME, "browser-layout");
-    }
-}
+pub use boxes::{BoxType, Dimensions, LayoutBox, LayoutTree};
+pub use construct::construct_layout_tree;

@@ -158,6 +158,10 @@ version = "0.0.1"
 [[package]]
 name = "browser-layout"
 version = "0.0.1"
+dependencies = [
+ "browser-css-engine",
+ "browser-dom",
+]
 
 [[package]]
 name = "browser-net"
