@@ -7,6 +7,7 @@
 //! - `browser render-script <file>`   parse + execute scripts + layout + render
 //! - `browser render-url  <url>`      fetch + parse + execute scripts + render
 
+mod img_ascii;
 mod screenshot;
 
 use std::path::PathBuf;
@@ -33,6 +34,16 @@ struct Cli {
 enum Cmd {
     /// Parse a local HTML file and print the DOM tree.
     Parse { file: PathBuf },
+    /// M12.3: convert a PNG/JPG image to ASCII art.
+    ImageAscii {
+        file: PathBuf,
+        /// Max output width (characters). Default 80 = terminal width.
+        #[arg(long, default_value_t = 80)]
+        width: u32,
+        /// Max output height (lines).
+        #[arg(long, default_value_t = 40)]
+        height: u32,
+    },
     /// Fetch a URL via HTTPS and print the parsed DOM tree.
     Get { url: String },
     /// Parse, lay out, and render a local HTML file as terminal ASCII.
@@ -90,6 +101,16 @@ enum Cmd {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::ImageAscii {
+            file,
+            width,
+            height,
+        } => {
+            let ascii = img_ascii::image_to_ascii(&file, width, height)
+                .map_err(|e| anyhow!("image-ascii failed: {e}"))?;
+            print!("{ascii}");
+            Ok(())
+        }
         Cmd::Parse { file } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
