@@ -79,6 +79,7 @@ struct RunningState {
     window: std::sync::Arc<Window>,
     text: String,
     scale: usize,
+    url_buffer: String, // M7.5.1: URL input buffer.
     surface: softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>,
 }
 
@@ -126,6 +127,7 @@ impl ApplicationHandler for AppState {
             window: window_arc,
             text: config.text,
             scale: config.scale,
+            url_buffer: String::new(),
             surface,
         }));
     }
@@ -175,9 +177,10 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
     let title_bg = pack_argb(0xd9, 0xd9, 0xd9); // gray title bar
     let fg = pack_argb(0x00, 0x00, 0x00); // black text
 
-    let title_bar_height = 30u32;
+    let url_bar_height = 30u32;
     let text_y0 = 40usize;
     let margin = 20usize;
+    let url_bar_text_y = 6usize; // y offset inside URL bar for text.
 
     let mut buffer = st.surface.buffer_mut()?;
     let buf_len = (w as usize) * (h as usize);
@@ -191,13 +194,26 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
         *px = bg;
     }
 
-    // 2) Title bar (gray) at the top.
-    for y in 0..title_bar_height {
+    // 2) URL bar (gray) at the top (M7.5.1).
+    for y in 0..url_bar_height {
         let row = y as usize * w as usize;
         for x in 0..w {
             buffer[row + x as usize] = title_bg;
         }
     }
+
+    // 2b) Render URL buffer text inside URL bar (M7.5.1).
+    // If empty, show placeholder "https://".
+    let display_url = if st.url_buffer.is_empty() {
+        "https://".to_string()
+    } else {
+        st.url_buffer.clone()
+    };
+    draw_text(margin, url_bar_text_y, st.scale, &display_url, |x, y| {
+        if x < w as usize && y < h as usize {
+            buffer[y * w as usize + x] = fg;
+        }
+    });
 
     // 3) Text body — paint glyph pixels in black.
     draw_text(margin, text_y0, st.scale, &st.text, |x, y| {
