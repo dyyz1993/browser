@@ -397,6 +397,10 @@ name = "browser-dom"
 version = "0.0.1"
 
 [[package]]
+name = "browser-eventloop"
+version = "0.0.1"
+
+[[package]]
 name = "browser-gui"
 version = "0.0.1"
 dependencies = [

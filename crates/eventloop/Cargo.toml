@@ -1,0 +1,10 @@
+[package]
+name = "browser-eventloop"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+name = "browser_eventloop"
+path = "src/lib.rs"
+
+[dependencies]
