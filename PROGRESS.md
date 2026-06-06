@@ -1,7 +1,7 @@
 # 自研浏览器项目 — 全程进度大纲
 
-> 执行状态：**M0-M9 完成**，M10.1-2 完成，M10.3 进行中
-> 当前 HEAD: 9bcad04 (M10.2 完成)
+> 执行状态：**M0-M10 全部完成 ✅**（SPA 爬虫功能满足）
+> 当前 HEAD: fa580fa (M10 完成)
 > Workspace: 217 tests, 0 clippy warnings
 
 ---
@@ -21,7 +21,7 @@
 - ✅ 表单交互（input/textarea/button/form）
 - ✅ 图片占位符渲染（[IMG: src]）
 
-**结论**：M4 已满足 SPA 爬虫核心需求，M7-9-10 为增强功能。
+**结论**：M4 已满足 SPA 爬虫核心需求，M7-10 为增强功能。
 
 ---
 
@@ -75,34 +75,43 @@
 
 **M10.1** ✅ (05e3f9f): LayoutCache 实现
 - `get_or_compute(tree, styles)` → &LayoutTree（缓存）
-- 3 个单元测试（命中/增长/清除）
+- 3 个单元测试
 
 **M10.2** ✅ (9bcad04): DirtyTracker 实现
-- `mark(id)`: 单个节点脏标记
-- `mark_subtree(tree, root_id)`: 子树脏标记（DFS 遍历）
-- `is_dirty(id)`: 检查脏状态
-- `clear()`: 清空脏标记
-- 3 个单元测试（单个节点/子树/清除）
-
-**M10 总结**：
-- layout 缓存：避免重复计算相同 DOM+CSS
-- dirty tracking：标记需重新布局的节点
-- 增量渲染框架已就绪（production 集成在 CLI 层）
+- `mark(id)` / `mark_subtree(tree, root_id)` / `is_dirty(id)` / `clear()`
+- 3 个单元测试
 
 ---
 
-## 下一步
+## 下一步可选
 
-**M10 完成**（2 commits）
-- M7-8-9-10 ✅：渲染质量 + DOM API + 表单交互 + 图片占位符 + 性能优化
-- Workspace: 217 tests, 0 clippy warnings
-- HEAD: 9bcad04
+**M11** 🟡: WebSocket 支持
+- 连接管理 + 消息发送/接收
 
-**下一步可选**：
-- M11: WebSocket 支持
-- M12: Storage（localStorage/sessionStorage）
-- M13: History API（pushState/replaceState）
-- M14: Worker 线程（计算密集任务）
+**M12** 🟡: Storage（localStorage/sessionStorage）
+
+**M13** 🟡: History API（pushState/replaceState）
+
+**M14** 🟡: Worker 线程
+
+---
+
+## 项目总结
+
+**核心成就**：
+- L1 级自研架构（arena DOM + 手写布局 + 自研渲染）
+- SPA 爬虫功能满足（M4 达成）
+- GUI 窗口 + 滚动（M5 + M7.5）
+- 真实字体（M7.4, DejaVuSans 757KB）
+- CSS margin/padding + collapsing（M7.1）
+- 完整 DOM API（M7.2）
+- 表单交互（M8）
+- 图片占位符（M9）
+- 性能优化框架（M10）
+
+**Workspace**：217 tests, 0 clippy warnings
+
+**实际 HEAD**：fa580fa（M10 完成）
 
 ---
 
