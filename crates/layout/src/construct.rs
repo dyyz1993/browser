@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use browser_css_engine::Declaration;
+use browser_css_engine::{parse_box_lengths, Declaration, Length};
 use browser_dom::{NodeData, NodeId, Tree};
 
 use crate::boxes::{BoxType, LayoutBox, LayoutTree};
@@ -69,47 +69,111 @@ fn box_type_for_element(tag: &str) -> BoxType {
 #[must_use]
 pub fn construct_layout_tree(
     tree: &Tree,
-    _styles: &HashMap<NodeId, Vec<Declaration>>,
+    styles: &HashMap<NodeId, Vec<Declaration>>,
 ) -> LayoutTree {
     // The DOM root is Document; we model the layout root as an
     // anonymous block that contains whatever Document's children produce.
     let mut root = LayoutBox::new(BoxType::Anonymous);
     root.element_id = Some(tree.root());
     for &child in tree.children_of(tree.root()) {
-        build_box(tree, child, &mut root.children);
+        build_box(tree, child, styles, &mut root.children);
     }
     LayoutTree { root }
 }
 
-fn build_box(tree: &Tree, id: NodeId, out: &mut Vec<LayoutBox>) {
+fn build_box(
+    tree: &Tree,
+    id: NodeId,
+    styles: &HashMap<NodeId, Vec<Declaration>>,
+    out: &mut Vec<LayoutBox>,
+) {
     match tree.data(id) {
         NodeData::Element { tag, .. } => {
-            // Browsers never render <script> / <style> / <noscript>
-            // content. Skip the entire subtree.
             if is_non_rendered_tag(tag) {
                 return;
             }
             let bt = box_type_for_element(tag);
             let mut bx = LayoutBox::new(bt).with_element(id);
-            bx.children = build_children(tree, id, bt);
-            // M6.0c: <li> gets a "• " bullet prefix on its first text
-            // child. Real browsers do this via CSS ::marker; we inline it
-            // until our CSS engine supports pseudo-elements.
+            bx.children = build_children(tree, id, bt, styles);
+            // M7.1.3: fill margin/padding from CSS + UA defaults.
+            apply_box_model(tag, id, styles, &mut bx);
+            // M6.0c: <li> bullet prefix (CSS ::marker placeholder).
             if tag.eq_ignore_ascii_case("li") {
                 inject_li_bullet(&mut bx);
             }
             out.push(bx);
         }
         NodeData::Text(s) => {
-            // Wrap text in an anonymous inline box.
             let bx = LayoutBox::new(BoxType::Inline)
                 .with_element(id)
                 .with_text(s.clone());
             out.push(bx);
         }
         NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::Document => {
-            // Skip — comments / doctype don't render.
+            // Skip.
         }
+    }
+}
+
+/// Apply CSS margin/padding + UA defaults to a freshly-built box.
+/// CSS overrides non-Zero UA edges. Longhands override shorthand
+/// via parse_box_lengths.
+fn apply_box_model(
+    tag: &str,
+    id: NodeId,
+    styles: &HashMap<NodeId, Vec<Declaration>>,
+    bx: &mut LayoutBox,
+) {
+    bx.margin = ua_default_margins(tag);
+    if let Some(decls) = styles.get(&id) {
+        let css_margin = parse_box_lengths(decls, "margin");
+        let css_padding = parse_box_lengths(decls, "padding");
+        if css_margin.top != Length::Zero {
+            bx.margin.top = css_margin.top;
+        }
+        if css_margin.right != Length::Zero {
+            bx.margin.right = css_margin.right;
+        }
+        if css_margin.bottom != Length::Zero {
+            bx.margin.bottom = css_margin.bottom;
+        }
+        if css_margin.left != Length::Zero {
+            bx.margin.left = css_margin.left;
+        }
+        bx.padding = css_padding;
+    }
+}
+
+/// UA default margins for block-level elements. ASCII mode: 1em = 1 line.
+#[must_use]
+fn ua_default_margins(tag: &str) -> browser_css_engine::BoxEdges<Length> {
+    let lower = tag.to_ascii_lowercase();
+    match lower.as_str() {
+        "p" | "div" => browser_css_engine::BoxEdges {
+            top: Length::Em(1.0),
+            right: Length::Zero,
+            bottom: Length::Em(1.0),
+            left: Length::Zero,
+        },
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => browser_css_engine::BoxEdges {
+            top: Length::Em(0.67),
+            right: Length::Zero,
+            bottom: Length::Em(0.67),
+            left: Length::Zero,
+        },
+        "ul" | "ol" => browser_css_engine::BoxEdges {
+            top: Length::Em(1.0),
+            right: Length::Zero,
+            bottom: Length::Em(1.0),
+            left: Length::Zero,
+        },
+        "hr" => browser_css_engine::BoxEdges {
+            top: Length::Em(0.5),
+            right: Length::Zero,
+            bottom: Length::Em(0.5),
+            left: Length::Zero,
+        },
+        _ => browser_css_engine::BoxEdges::default(),
     }
 }
 
@@ -130,7 +194,12 @@ fn is_non_rendered_tag(tag: &str) -> bool {
 
 /// Build the children of an Element, inserting Anonymous block wrappers
 /// whenever a Block parent has Inline children mixed with Block children.
-fn build_children(tree: &Tree, parent_id: NodeId, parent_box: BoxType) -> Vec<LayoutBox> {
+fn build_children(
+    tree: &Tree,
+    parent_id: NodeId,
+    parent_box: BoxType,
+    styles: &HashMap<NodeId, Vec<Declaration>>,
+) -> Vec<LayoutBox> {
     let dom_children = tree.children_of(parent_id);
     if dom_children.is_empty() {
         return Vec::new();
@@ -144,11 +213,11 @@ fn build_children(tree: &Tree, parent_id: NodeId, parent_box: BoxType) -> Vec<La
             let is_inline = is_inline_node(tree, child_id);
             if is_inline {
                 let mut tmp = Vec::new();
-                build_box(tree, child_id, &mut tmp);
+                build_box(tree, child_id, styles, &mut tmp);
                 inline_buf.extend(tmp);
             } else {
                 flush_inline_buf(&mut inline_buf, &mut result);
-                build_box(tree, child_id, &mut result);
+                build_box(tree, child_id, styles, &mut result);
             }
         }
         flush_inline_buf(&mut inline_buf, &mut result);
@@ -157,7 +226,7 @@ fn build_children(tree: &Tree, parent_id: NodeId, parent_box: BoxType) -> Vec<La
         // Inline parent → just collect children inline (no anonymous wrappers).
         let mut result = Vec::new();
         for &child_id in dom_children {
-            build_box(tree, child_id, &mut result);
+            build_box(tree, child_id, styles, &mut result);
         }
         result
     }

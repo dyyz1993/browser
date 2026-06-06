@@ -47,16 +47,14 @@ impl Length {
     /// Resolve a length against a containing-block size and an em
     /// size, returning a plain `f32` in character units.
     ///
-    /// - `Zero` / `Auto` → 0
-    /// - `Px(v)` → `v` (character units in ASCII mode)
-    /// - `Em(v)` → `v * em_size`
-    /// - `Percent(v)` → `v / 100.0 * container_size`
-    #[must_use]
+    /// Resolve against a containing-block size and em size, in
+    /// character units. Em values are rounded up so that 0.67em (the
+    /// default heading margin) contributes 1 line, not 0.
     pub fn resolve(self, container_size: f32, em_size: f32) -> f32 {
         match self {
             Length::Zero | Length::Auto => 0.0,
             Length::Px(v) => v,
-            Length::Em(v) => v * em_size,
+            Length::Em(v) => (v * em_size).ceil(),
             Length::Percent(v) => v / 100.0 * container_size,
         }
     }
