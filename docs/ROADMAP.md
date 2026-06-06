@@ -68,31 +68,56 @@
 
 ---
 
-## M14（进行中 🟡）— Navigation
+## M14（Navigation）✅
 
 | Sub | 状态 | 内容 |
 |-----|------|------|
 | M14.1 | ✅ | browser-navigation crate（HistoryStack + Location 解析） |
 | M14.2 | ✅ | `__history*` / `__location*` bridges + `install_navigation` |
 | M14.3 | ✅ | history/location JS 对象 shim + 接入 run_scripts |
-| M14.4 | ⚪ | e2e fixture（SPA 路由 + 百度 `location.replace` 跟随） |
-| M14.5 | ⚪ | PROGRESS.md + memory 同步 |
+| M14.4 | ✅ | e2e fixture（navigation-spa.html，SPA 路由 + 百度场景） |
+| M14.5 | ✅ | PROGRESS.md + memory 同步 |
 
 ---
 
-## 前瞻（M15+，待排序）
+### M15（Cookie jar）✅
 
-> 按 **爬虫价值**（见 GOALS.md 决策原则）排序，非按号。
+| Sub | 状态 | 内容 |
+|-----|------|------|
+| M15.1 | ✅ | browser-cookie crate（RFC 6265 子集，domain/path/secure 匹配） |
+| M15.2 | ✅ | net::get_with_headers（带 Cookie 头 + 返回 Set-Cookie） |
+| M15.3 | ✅ | JS fetch_sync 接入 jar（主线程读写，新线程传 String） |
+| M15.4 | ✅ | cli get/render-url/open 主请求共享 jar（fetch_with_jar） |
+| M15.5 | ✅ | e2e（cookie jar 跨请求会话保持） |
+
+核心链路：主请求 Set-Cookie → jar → JS `__fetchSetBody` 带上 Cookie 头
+（解决百度等登录态反爬）。
+
+---
+
+## M16（进行中 🟡）— 切 deno_core
+
+> 解锁 setTimeout/Promise/async-await/真实 SPA bundle。工作量大，先做可行性 spike。
+
+| Sub | 状态 | 内容 |
+|-----|------|------|
+| M16.0 | 🟡 | 可行性 spike（V8 binary 能否编译链接） |
+| M16.1 | ⚪ | ADR-0002 决策记录（是否采纳 deno_core） |
+| M16.2+ | ⚪ | 待 spike 结果后规划 |
+
+---
+
+## 前瞻（M17+，已排序）
+
+> 用户已确认推进顺序：A（M16 deno_core）→ C（M17 XMLHttpRequest）→ D（M18 networkidle）。
 
 | 候选 | 价值 | 工作量 | 备注 |
 |------|------|--------|------|
-| **切 deno_core** | ⭐⭐⭐⭐⭐ | 大 | 一举解锁 setTimeout/Promise/async-await/真实 SPA bundle |
-| **Cookie jar** | ⭐⭐⭐⭐ | 中 | 跨请求保持会话，解决百度等登录态反爬 |
-| **XMLHttpRequest** | ⭐⭐⭐ | 中 | 老 SPA 依赖，fetch 的补充 |
-| **真实图像渲染进 GUI** | ⭐⭐ | 中 | PNG/JPG 解码显示（非占位符） |
-| **WebSocket** | ⭐⭐ | 大 | 实时 SPA（聊天/推送） |
-| **networkidle 算法** | ⭐⭐⭐ | 中 | 自动判断 SPA 何时渲染完，爬虫体验提升 |
-| **资源拦截器** | ⭐⭐⭐ | 小 | block image/font/media，省 60% 内存 |
+| **M16 deno_core** | ⭐⭐⭐⭐⭐ | 大 | 进行中：解锁 setTimeout/Promise/async-await |
+| **M17 XMLHttpRequest** | ⭐⭐⭐ | 中 | 老 SPA（jQuery 时代）依赖，fetch 的补充 |
+| **M18 networkidle** | ⭐⭐⭐ | 中 | 自动判断 SPA 何时渲染完，爬虫体验提升 |
+| 真实图像渲染进 GUI | ⭐⭐ | 中 | PNG/JPG 解码显示（非占位符） |
+| WebSocket | ⭐⭐ | 大 | 实时 SPA（聊天/推送） |
 
 **决策原则**：见 [GOALS.md](./GOALS.md) §决策原则。每次只推进一个模块，
 "先实现后完善"（MVP → 测试 → e2e → 文档）。
