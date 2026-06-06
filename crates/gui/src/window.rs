@@ -151,8 +151,12 @@ impl ApplicationHandler for AppState {
             WindowEvent::KeyboardInput { event, .. } => {
                 use winit::keyboard::{Key, NamedKey};
                 match event.logical_key.as_ref() {
-                    Key::Character(c) if !c.is_control() => {
-                        st.url_buffer.push(c);
+                    Key::Character(c) => {
+                        for ch in c.chars() {
+                            if !ch.is_control() {
+                                st.url_buffer.push(ch);
+                            }
+                        }
                         st.window.request_redraw();
                     }
                     Key::Named(NamedKey::Backspace) => {
@@ -160,9 +164,14 @@ impl ApplicationHandler for AppState {
                         st.window.request_redraw();
                     }
                     Key::Named(NamedKey::Enter) => {
-                        eprintln!("[gui] navigate to: {}", st.url_buffer);
+                        if st.url_buffer.is_empty() {
+                            return;
+                        }
+                        let url = st.url_buffer.clone();
+                        eprintln!("[gui] navigate to: {url}");
                         st.url_buffer.clear();
                         st.window.request_redraw();
+                        // M7.5.3: fetch + render (deferred to later).
                     }
                     _ => {}
                 }
