@@ -92,6 +92,12 @@ fn build_box(tree: &Tree, id: NodeId, out: &mut Vec<LayoutBox>) {
             let bt = box_type_for_element(tag);
             let mut bx = LayoutBox::new(bt).with_element(id);
             bx.children = build_children(tree, id, bt);
+            // M6.0c: <li> gets a "• " bullet prefix on its first text
+            // child. Real browsers do this via CSS ::marker; we inline it
+            // until our CSS engine supports pseudo-elements.
+            if tag.eq_ignore_ascii_case("li") {
+                inject_li_bullet(&mut bx);
+            }
             out.push(bx);
         }
         NodeData::Text(s) => {
@@ -173,6 +179,36 @@ fn flush_inline_buf(buf: &mut Vec<LayoutBox>, out: &mut Vec<LayoutBox>) {
     let mut anon = LayoutBox::new(BoxType::Anonymous);
     anon.children = drained;
     out.push(anon);
+}
+
+/// Prepend a "• " bullet to the first text-bearing descendant of an
+/// `<li>` layout box. The bullet sits at the same (x, y) as the text
+/// would have started, then the text follows after 2 chars. We
+/// implement this by mutating the first inline text leaf's `text`.
+fn inject_li_bullet(bx: &mut LayoutBox) {
+    if let Some(leaf) = find_first_text_leaf_mut(bx) {
+        if let Some(text) = &mut leaf.text {
+            if !text.starts_with("• ") {
+                let mut new_text = String::with_capacity(text.len() + 2);
+                new_text.push_str("• ");
+                new_text.push_str(text);
+                *text = new_text;
+            }
+        }
+    }
+}
+
+/// Recursive mutable search for the first inline leaf with non-empty text.
+fn find_first_text_leaf_mut(bx: &mut LayoutBox) -> Option<&mut LayoutBox> {
+    if bx.box_type == BoxType::Inline && bx.text.as_ref().is_some_and(|t| !t.is_empty()) {
+        return Some(bx);
+    }
+    for child in bx.children.iter_mut() {
+        if let Some(found) = find_first_text_leaf_mut(child) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
