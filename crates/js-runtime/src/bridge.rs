@@ -146,6 +146,9 @@ pub fn install(ctx: &mut Context) {
     register_fn2(ctx, "__setText", set_text as NativeFn);
     register_fn1(ctx, "__getTag", get_tag as NativeFn);
     register_fn1(ctx, "__getBody", get_body as NativeFn);
+    // M8.1: form value bridges.
+    register_fn1(ctx, "__getValue", get_value as NativeFn);
+    register_fn2(ctx, "__setValue", set_value as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -578,6 +581,34 @@ fn get_body(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<
         Some(id) => id as f64,
         None => -1.0,
     }))
+}
+
+// M8.1: form value bridges.
+fn get_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let value = with_tree(|t| match t.data(id) {
+        NodeData::Element { tag, attrs, .. } if tag == "input" || tag == "textarea" => attrs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("value"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default(),
+        _ => String::new(),
+    });
+    eprintln!("[dom-getValue] #{id} = {value}");
+    Ok(JsValue::undefined())
+}
+
+fn set_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let value = arg_string(args, 1).unwrap_or_default();
+    with_tree(|t| set_attr_inner(t, id, "value", &value));
+    Ok(JsValue::undefined())
 }
 
 #[cfg(test)]
