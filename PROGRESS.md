@@ -1,7 +1,7 @@
 # 自研浏览器项目 — 全程进度大纲
 
 > 执行状态：**M0-M9 完成**，M10.1 进行中
-> 当前 HEAD: 518672e (全程大纲文档)
+> 当前 HEAD: 5992855 (同步实际 git 状态)
 > Workspace: 217 tests, 0 clippy warnings
 
 ---
@@ -47,37 +47,33 @@
 
 **M7.1** ✅ (8 commits): CSS margin/padding/collapsing/snapshots
 **M7.2** ✅ (3 commits): DOM API + selector（8 个桥 + * / .class / compound）
-**M7.5** ✅ (6 commits): URL 栏 + 滚动（灰底 placeholder + 键盘 + MouseWheel/PageUp/PageDown/Home/End + long-scroll）
+**M7.5** ✅ (6 commits): URL 栏 + 滚动
 **M7.4** ✅ (5 commits): 真实字体（FontCache + fontdue + DejaVuSans 757KB + 中文支持）
-**M7.3** 🟡 defer: 异步 JS（MicrotaskQueue 写完但 boa 0.20 API 复杂）
+**M7.3** 🟡 defer: 异步 JS
 
 ---
 
 ## M8 — 表单交互 ✅ (4 commits)
 
 **M8.1**: __getValue/__setValue 桥
-**M8.2**: textarea 支持（通过 __getValue）
+**M8.2**: textarea 支持
 **M8.3**: __click 桥
-**M8.4**: __submit 橋
-**M8.5**: e2e 测试（form-interaction.html）
+**M8.4**: __submit 桥
+**M8.5**: e2e 测试
 
 ---
 
 ## M9 — 图片渲染 ✅ (3 commits)
 
-**M9.1.0**: 移除 img 非渲染黑名单
-**M9.1.1**: 注入占位符文本 [IMG: src]
-**M9.5**: e2e 验收（本地 + 远程 img）
+**M9.1.0**: 移除 img 黑名单
+**M9.1.1**: 注入占位符 [IMG: src]
+**M9.5**: e2e 验收
 
 ---
 
 ## M10 — 性能优化 🟡 (进行中)
 
 **目标**：layout 缓存 + 增量渲染
-
-**验收**：
-- 布局缓存（避免重复计算）
-- 增量渲染（只重绘 dirty 区域）
 
 **子任务**：
 - M10.1: layout 缓存实现（进行中）
@@ -89,7 +85,7 @@
 
 ## 下一步
 
-**当前执行**：M10.1（layout 缓存实现）
+**当前执行**：M10.1（layout 缓存）
 **下一个**：M10.2（dirty tracking）
 
 ---
