@@ -5,7 +5,7 @@
 //! (with the bridge installed). The DOM mutations made by JS become
 //! visible to the subsequent layout + render passes.
 
-use boa_engine::{Context, Source};
+use boa_engine::{Context, JsValue, Source};
 use browser_dom::{NodeData, NodeId, Tree};
 
 use crate::bridge::install;
@@ -74,7 +74,36 @@ pub fn execute_scripts_with_base(
             }
         }
     }
+    // M16.3: pump the event loop. 执行完所有 script 后，drain 到期 timer
+    // 回调，回调可能 schedule 新 timer（或本身 schedule），重复直到 idle。
+    // 防死循环：最多迭代 MAX_TICKS 次（防止 setTimeout 无限递归卡死爬虫）。
+    executed += pump_event_loop(ctx);
     executed
+}
+
+/// M16.3: Drain due timer callbacks until the wheel is idle or the
+/// safety cap is hit. Returns the number of callbacks invoked.
+/// 每次取一批到期 callback → 逐个 call → 回调可能 enqueue 更多 timer
+/// → 下一轮再 drain。`ctx.eval` 不返回值我们也不关心（setTimeout
+/// 回调的副作用在 DOM 上，不在返回值）。
+fn pump_event_loop(ctx: &mut Context) -> usize {
+    const MAX_TICKS: usize = 1000;
+    let mut invoked = 0;
+    for _ in 0..MAX_TICKS {
+        let due = crate::bridge::drain_due_timer_callbacks();
+        if due.is_empty() {
+            break;
+        }
+        for callback in due {
+            // 调用 setTimeout 回调：this = undefined，无参。
+            // 回调内部如果 schedule 新 timer 或修改 DOM，会在下一轮 tick 处理。
+            if let Err(e) = callback.call(&JsValue::undefined(), &[], ctx) {
+                eprintln!("[js-runtime] timer callback error: {e}");
+            }
+            invoked += 1;
+        }
+    }
+    invoked
 }
 
 /// Convenience: install bridge + execute scripts in one call.
