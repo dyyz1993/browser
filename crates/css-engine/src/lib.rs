@@ -2,17 +2,21 @@
 //!
 //! M2.1 scope: parsing.
 //! M2.2 scope: selectors.
+//! M2.3 scope: computed styles.
 //! - [`parse`] — CSS text → [`Stylesheet`]
 //! - [`Stylesheet`] / [`Rule`] / [`Declaration`] — AST
 //! - [`Selector`] / [`CompoundSelector`] — selectors with matching
+//! - [`compute_styles`] — apply [`Stylesheet`] to a DOM [`Tree`]
 
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod computed;
 pub mod parser;
 pub mod selector;
 
 pub use ast::{Declaration, Rule, Stylesheet};
+pub use computed::compute_styles;
 pub use parser::parse;
 pub use selector::{CompoundSelector, Selector, SelectorChain};
 
