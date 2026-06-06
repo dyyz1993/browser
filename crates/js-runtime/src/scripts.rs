@@ -97,6 +97,10 @@ pub fn run_scripts_with_base(
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
     let mut ctx = Context::default();
     install(&mut ctx);
+    // M13.3: 安装 localStorage / sessionStorage 后端 + JS 对象
+    let storage = browser_storage::new_storage();
+    crate::bridge::install_storage(storage);
+    let _ = crate::storage_shim::install_storage_globals(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
