@@ -147,6 +147,26 @@ impl ApplicationHandler for AppState {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
+            // M7.5.2: keyboard input → URL buffer.
+            WindowEvent::KeyboardInput { event, .. } => {
+                use winit::keyboard::{Key, NamedKey};
+                match event.logical_key.as_ref() {
+                    Key::Character(c) if !c.is_control() => {
+                        st.url_buffer.push(c);
+                        st.window.request_redraw();
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        st.url_buffer.pop();
+                        st.window.request_redraw();
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        eprintln!("[gui] navigate to: {}", st.url_buffer);
+                        st.url_buffer.clear();
+                        st.window.request_redraw();
+                    }
+                    _ => {}
+                }
+            }
             WindowEvent::RedrawRequested => {
                 if let Err(e) = render_frame(st) {
                     eprintln!("[gui] render error: {e}");
