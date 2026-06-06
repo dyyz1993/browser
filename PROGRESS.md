@@ -1,7 +1,7 @@
 # 自研浏览器项目 — 全程进度大纲
 
 > 执行状态：**M0-M9 完成**，M10.1 进行中
-> 当前 HEAD: 4ed636b (memory 同步)
+> 当前 HEAD: 75640ee
 > Workspace: 217 tests, 0 clippy warnings
 
 ---
@@ -16,7 +16,7 @@
 - ✅ 布局引擎（block + inline + 折行 + margin/padding collapsing）
 - ✅ 文本渲染（ASCII + GUI + 真实字体）
 - ✅ CSS 选择器（tag/class/id/compound）
-- ✅ DOM API 桥（createEl/appendChild/setAttribute/innerHTML/getValue/setValue/click/submit）
+- ✅ DOM API 橋（createEl/appendChild/setAttribute/innerHTML/getValue/setValue/click/submit）
 - ✅ 异步 fetch 橋（__fetchSetBody/__fetchAppendBody）
 - ✅ 表单交互（input/textarea/button/form）
 - ✅ 图片占位符渲染（[IMG: src]）
@@ -32,7 +32,7 @@
 | M0 | ✅ | 5147b17 | — | 项目骨架 + CI（9 crate） |
 | M1 | ✅ | 多个 | — | HTML 获取 + DOM 树打印 |
 | M2 | ✅ | 多个 | 111 | 文本流渲染 + 最小布局引擎 |
-| M3 | ✅ | 多个 | 140 | JS 执行 + JS↔DOM 桥 |
+| M3 | ✅ | 多个 | 140 | JS 执行 + JS↔DOM 橋 |
 | M4 | ✅ | 多个 | 160 | SPA 渲染（**项目目标达成**） |
 | M5 | ✅ | 4 commits | 179 | GUI 窗口（winit + softbuffer） |
 | M6 | ✅ | 3 commits | 211 | 渲染质量修复 + 黄金对比 + CI |
@@ -55,9 +55,9 @@
 
 ## M8 — 表单交互 ✅ (4 commits)
 
-**M8.1**: __getValue/__setValue 桥
+**M8.1**: __getValue/__setValue 橋
 **M8.2**: textarea 支持
-**M8.3**: __click 桥
+**M8.3**: __click 橋
 **M8.4**: __submit 橋
 **M8.5**: e2e 测试
 
