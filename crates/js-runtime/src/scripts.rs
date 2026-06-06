@@ -141,6 +141,8 @@ pub fn run_scripts_with_base(
     let _ = crate::navigation_shim::install_navigation_globals(&mut ctx);
     // M15.3/M15.4: 安装 cookie jar 后端。如果 cli 已装（主请求）复用，否则新建。
     crate::bridge::ensure_cookie_jar();
+    // M17.2: 安装 XMLHttpRequest 全局构造器。
+    let _ = crate::xhr_shim::install_xml_http_request(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }

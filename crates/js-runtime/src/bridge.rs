@@ -42,6 +42,12 @@ thread_local! {
     static TIMER_WHEEL: RefCell<Option<TimerWheel>> = const { RefCell::new(None) };
     static TIMER_CALLBACKS: RefCell<Option<std::collections::HashMap<TimerId, JsObject>>> =
         const { RefCell::new(None) };
+    // M17.1: XMLHttpRequest 后端。id → 状态（method/url/response_text）。
+    // 爬虫场景：responseText 存 String，onload 由 JS shim 用 setTimeout(0) 触发
+    // （复用 M16 event loop），responseText 通过 __xhrGetResponseText 读。
+    static XHR_INSTANCES: RefCell<Option<std::collections::HashMap<u64, XhrState>>> =
+        const { RefCell::new(None) };
+    static XHR_NEXT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -73,6 +79,11 @@ impl Drop for TreeGuard {
         TIMER_CALLBACKS.with(|slot| {
             *slot.borrow_mut() = None;
         });
+        // M17.1: 清理 XHR 状态。
+        XHR_INSTANCES.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        XHR_NEXT_ID.with(|slot| slot.set(1));
     }
 }
 
@@ -212,6 +223,15 @@ pub fn install(ctx: &mut Context) {
     register_fn1(ctx, "__clearTimeout", clear_timeout_bridge as NativeFn);
     register_fn2(ctx, "setTimeout", set_timeout_bridge as NativeFn);
     register_fn1(ctx, "clearTimeout", clear_timeout_bridge as NativeFn);
+    // M17.1: XMLHttpRequest bridges（__xhr* 内部名，XMLHttpRequest shim 用）。
+    register_fn0(ctx, "__xhrCreate", xhr_create_bridge as NativeFn);
+    register_fn3(ctx, "__xhrOpen", xhr_open_bridge as NativeFn);
+    register_fn1(ctx, "__xhrSend", xhr_send_bridge as NativeFn);
+    register_fn1(
+        ctx,
+        "__xhrGetResponseText",
+        xhr_get_response_text_bridge as NativeFn,
+    );
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -977,6 +997,125 @@ pub fn drain_due_timer_callbacks() -> Vec<JsObject> {
 /// Pending timer count（M18 networkidle 信号源）。0 = idle。
 pub fn pending_timers() -> usize {
     TIMER_WHEEL.with(|slot| slot.borrow().as_ref().map(|w| w.pending()).unwrap_or(0))
+}
+
+// ===== M17.1: XMLHttpRequest 后端 =====
+
+/// 单个 XHR 实例的状态。open() 记录请求参数，send() 执行同步 fetch
+/// 并把响应存到 response_text，JS shim 用 setTimeout(0) 触发 onload。
+#[derive(Debug, Clone, Default)]
+struct XhrState {
+    method: String,
+    url: String,
+    response_text: String,
+    status: u16,
+    error: Option<String>,
+}
+
+/// Ensure the XHR instance map exists. Idempotent. (M17.1)
+fn ensure_xhr() {
+    XHR_INSTANCES.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(std::collections::HashMap::new());
+        }
+    });
+}
+
+/// `__xhrCreate() -> number`：新建一个 XHR 实例，返回 id 给 JS。
+fn xhr_create_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    ensure_xhr();
+    let id = XHR_NEXT_ID.with(|slot| {
+        let n = slot.get();
+        slot.set(n + 1);
+        n
+    });
+    XHR_INSTANCES.with(|slot| {
+        if let Some(map) = slot.borrow_mut().as_mut() {
+            map.insert(id, XhrState::default());
+        }
+    });
+    Ok(JsValue::new(id as f64))
+}
+
+/// `__xhrOpen(id, method, url) -> undefined`：记录请求参数（不立即 fetch）。
+fn xhr_open_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u64) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
+    let method = args
+        .get(1)
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_else(|| "GET".to_string());
+    let url = args
+        .get(2)
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
+    let resolved = resolve_url(&url);
+    XHR_INSTANCES.with(|slot| {
+        if let Some(map) = slot.borrow_mut().as_mut() {
+            if let Some(state) = map.get_mut(&id) {
+                state.method = method;
+                state.url = resolved;
+            }
+        }
+    });
+    Ok(JsValue::undefined())
+}
+
+/// `__xhrSend(id) -> undefined`：执行同步 fetch（复用 fetch_sync），
+/// 把响应存到 response_text。JS shim 随后用 setTimeout(0) 触发 onload。
+fn xhr_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u64) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
+    let url = XHR_INSTANCES.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|map| map.get(&id).map(|s| s.url.clone()))
+    });
+    let Some(url) = url else {
+        return Ok(JsValue::undefined());
+    };
+    let (response_text, status, error) = match fetch_sync(&url) {
+        Ok(body) => (body, 200u16, None),
+        Err(e) => (String::new(), 0u16, Some(e)),
+    };
+    XHR_INSTANCES.with(|slot| {
+        if let Some(map) = slot.borrow_mut().as_mut() {
+            if let Some(state) = map.get_mut(&id) {
+                state.response_text = response_text;
+                state.status = status;
+                state.error = error;
+            }
+        }
+    });
+    Ok(JsValue::undefined())
+}
+
+/// `__xhrGetResponseText(id) -> string | null`：读取响应体。
+/// JS shim 在 onload 回调里调用此函数拿到 responseText。
+fn xhr_get_response_text_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u64) {
+        Some(n) => n,
+        None => return Ok(JsValue::null()),
+    };
+    let text = XHR_INSTANCES.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|map| map.get(&id).map(|s| s.response_text.clone()))
+    });
+    match text {
+        Some(t) => Ok(JsValue::String(boa_engine::JsString::from(t))),
+        None => Ok(JsValue::null()),
+    }
 }
 
 fn history_push_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
