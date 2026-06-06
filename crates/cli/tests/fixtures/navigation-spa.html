@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Navigation Test SPA</title>
+</head>
+
+<body>
+  <p>Home Page</p>
+  <div id="content"></div>
+  <script>
+    // 模拟真实 SPA 路由：用 history.pushState 改 URL，同时更新内容
+    // （React Router / Vue Router 都这样工作）
+
+    var route=location.pathname();
+    __appendBody('INITIAL_ROUTE: '+route);
+
+    // 模拟用户点击导航：pushState 改 URL（不重新加载）+ 更新内容
+    history.pushState({page: 'about'},'','/about');
+    __appendBody('AFTER_PUSH_LENGTH: '+history.length());
+    __appendBody('AFTER_PUSH_HREF: '+location.href());
+
+    // replaceState 替换当前条目
+    history.replaceState({page: 'about-v2'},'','/about-v2');
+    __appendBody('AFTER_REPLACE_LENGTH: '+history.length());
+    __appendBody('AFTER_REPLACE_HREF: '+location.href());
+
+    // back 回到首页
+    history.back();
+    __appendBody('AFTER_BACK_HREF: '+location.href());
+
+    // 模拟百度反爬：location.replace 强制跳转
+    location.replace('/redirected');
+    __appendBody('AFTER_LOCATION_REPLACE: '+location.href());
+  </script>
+</body>
+
+</html>
