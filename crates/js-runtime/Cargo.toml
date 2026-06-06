@@ -11,3 +11,4 @@ browser-dom = { path = "../dom" }
 boa_engine = "0.20"
 
 [dev-dependencies]
+browser-html-parser = { path = "../html-parser" }
