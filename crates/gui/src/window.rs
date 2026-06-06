@@ -80,6 +80,7 @@ struct RunningState {
     text: String,
     scale: usize,
     url_buffer: String, // M7.5.1: URL input buffer.
+    scroll_y: usize,    // M7.5.4: vertical scroll offset (lines).
     surface: softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>,
 }
 
@@ -128,6 +129,7 @@ impl ApplicationHandler for AppState {
             text: config.text,
             scale: config.scale,
             url_buffer: String::new(),
+            scroll_y: 0,
             surface,
         }));
     }
@@ -146,6 +148,22 @@ impl ApplicationHandler for AppState {
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
+            }
+            // M7.5.4: mouse wheel → scroll.
+            WindowEvent::MouseWheel { delta, .. } => {
+                use winit::event::MouseScrollDelta;
+                let delta_y = match delta {
+                    MouseScrollDelta::LineDelta(_, dy) => dy,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                };
+                // Negative delta = scroll down → increase scroll_y.
+                // One scroll event ≈ 1 line.
+                if delta_y < 0.0 {
+                    st.scroll_y += 1;
+                } else if st.scroll_y > 0 {
+                    st.scroll_y -= 1;
+                }
+                st.window.request_redraw();
             }
             // M7.5.2: keyboard input → URL buffer.
             WindowEvent::KeyboardInput { event, .. } => {
@@ -245,7 +263,12 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
     });
 
     // 3) Text body — paint glyph pixels in black.
-    draw_text(margin, text_y0, st.scale, &st.text, |x, y| {
+    // M7.5.4: scroll_y offset — skip first N lines.
+    let scrolled_text = st.text.lines().skip(st.scroll_y).collect::<Vec<_>>().join(
+        "
+",
+    );
+    draw_text(margin, text_y0, st.scale, &scrolled_text, |x, y| {
         if x < w as usize && y < h as usize {
             buffer[y * w as usize + x] = fg;
         }
