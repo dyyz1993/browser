@@ -193,7 +193,7 @@ fn ua_default_margins(tag: &str) -> browser_css_engine::BoxEdges<Length> {
 fn is_non_rendered_tag(tag: &str) -> bool {
     matches!(
         tag.to_ascii_lowercase().as_str(),
-        "head" | "meta" | "link" | "title" | "script" | "style" | "noscript" | "template"
+        "head" | "meta" | "link" | "title" | "script" | "style" | "noscript" | "template" // M9.1: img 需要（渲染为 [IMG: src] 占位符），不列入黑名单
     )
 }
 
