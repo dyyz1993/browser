@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `238d97d`（M16.5 e2e fixture） |
-| 总 commits | 114 |
-| 测试 | 318 passed, 0 clippy warnings |
+| HEAD | `d02c333`（M17.3 XHR e2e） |
+| 总 commits | 117 |
+| 测试 | 325 passed, 0 clippy warnings |
 | Crates | 14 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,18 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M17 — XMLHttpRequest（老 SPA 依赖）✅
+- M17.1 ✅ XhrState + thread-local + 4 桥（__xhrCreate/Open/Send/GetResponseText）
+- M17.2 ✅ XMLHttpRequest 全局构造器（纯 JS 原型，闭包捕获 self）
+- M17.3 ✅ e2e（wiremock 真实 fetch + onload 渲染，3 tests）
+- M17.4 ✅ 文档同步 + 真实 SPA 手动验证（Users 表格渲染）
+
+异步 XHR 支持：new XMLHttpRequest() / open / send / onload / responseText。
+设计：同步 fetch（复用 fetch_sync + cookie jar）+ setTimeout(0) 异步触发 onload。
+教训：boa native fn 跨 eval 传 this 不可靠，纯 JS 原型更稳。
+
+---
 
 ### M16 — 异步 JS（setTimeout + Promise，用 boa 自研）✅
 - M16.0 ✅ ADR-0002 决策（调研推翻 M7.3 defer，用 boa 而非 deno_core）

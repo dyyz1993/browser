@@ -26,7 +26,8 @@
 | M14 | 🟡 | Navigation（history/location） | 260（M14.1-3 完成） |
 | M15 | ✅ | Cookie jar（跨请求会话保持） | 291 |
 | M16 | ✅ | 异步 JS（setTimeout + Promise，boa 自研） | 318 |
-| M17+ | ⚪ | 前瞻（见下） | — |
+| M17 | ✅ | XMLHttpRequest（老 SPA 依赖） | 325 |
+| M18+ | ⚪ | 前瞻（见下） | — |
 
 ---
 
