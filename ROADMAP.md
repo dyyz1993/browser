@@ -8,7 +8,7 @@
 |--------|------|------|------|
 | M0 | ✅ | 项目骨架 + CI | 1~2 天 |
 | M1 | ✅ | 能看到 HTML（curl + parse + 打印 DOM） | 2 周 |
-| M2 | ⚪ | 文本流渲染（Hacker News 能看出标题列表） | 3 周 |
+| M2 | ✅ | 文本流渲染（HN fixture 能看出标题列表） | 3 周 |
 | M3 | ⚪ | JS 执行（动态创建的元素能进 DOM） | 4 周 |
 | M4 | ⚪ | SPA 渲染（React/Vue 应用可爬） | 5 周 |
 | M5 | ⚪ | GUI 窗口（跨平台开窗浏览） | 持续 |
@@ -16,52 +16,43 @@
 ---
 
 ## M0 — 项目初始化 ✅
-
-**完成日期：** 2026-06-06
-**单次 commit：** `chore: initial workspace skeleton with 9 crates`
-
-**产出：**
-- Cargo workspace（9 个 crate：net / dom / html-parser / css-engine / layout / render / js-runtime / page / cli）
-- ROADMAP.md / ARCHITECTURE.md / README.md
-- docs/decisions/ + docs/postmortems/ 模板
-- .github/workflows/ci.yml（三平台 matrix）
-- 每个 crate 含占位 `ping` test
-
-**验收命令：**
-```bash
-cargo build --workspace && cargo fmt --check --all && cargo clippy --workspace -- -D warnings && cargo test --workspace
-```
-
----
+完成日期：2026-06-06
+Commit：`chore: initial workspace skeleton with 9 crates`
 
 ## M1 — 能看到 HTML ✅
+完成日期：2026-06-06
+复盘见 `docs/postmortems/M1.md`
+
+## M2 — 文本流渲染 ✅
 
 **完成日期：** 2026-06-06
 
-| Step | 状态 | Commit | 验收命令 |
-|------|------|--------|---------|
-| M1.1 | ✅ | `feat(net): add HTTPS client with rustls` | `cargo test -p browser-net` |
-| M1.2 | ✅ | `feat(dom): arena-backed DOM tree (ADR-0001)` | `cargo test -p browser-dom` |
-| M1.3 | ✅ | `feat(html-parser): wrap html5ever with 5 edge-case fixtures` | `cargo test -p browser-html-parser` |
-| M1.4 | ✅ | `feat(dom): add tree pretty-printer` | `cargo test -p browser-dom -- print` |
-| M1.5 | ✅ | `feat(cli): add get and parse subcommands` | `cargo run -p browser-cli -- parse <fixture>` |
-| M1.6 | ✅ | `test(cli): add e2e tests for get/parse subcommands` | `cargo test -p browser-cli` |
-| M1.7 | ✅ | `docs: M1 complete, postmortem added` | 三平台 CI 全绿 |
+| Step | 状态 | Commit |
+|------|------|--------|
+| M2.1 | ✅ | `feat(css-engine): wrap cssparser for stylesheets and declarations` |
+| M2.2 | ✅ | `feat(css-engine): tag/class/id selector matching` |
+| M2.3 | ✅ | `feat(css-engine): compute_styles traverses DOM applying matching rules` |
+| M2.4 | ✅ | `feat(layout): layout tree construction (block/inline/anonymous)` |
+| M2.5 | ✅ | `feat(layout): block-level layout algorithm` |
+| M2.6 | ✅ | `feat(layout): inline layout + char-level text wrapping` |
+| M2.7 | ✅ | `feat(render): terminal ASCII renderer` |
+| M2.8 | ✅ | `feat(cli): add render-file subcommand` |
+| M2.9 | ✅ | `test(cli): e2e render-file against HN snapshot` |
+| M2.10 | ✅ | `docs: M2 complete, postmortem added` |
 
 **最终验收：**
 ```
-cargo test --workspace     → 48 passed, 0 failed
+cargo test --workspace     → 111 passed, 0 failed
 cargo clippy -- -D warnings → 0 warnings
-cargo run -p browser-cli -- get https://example.com → DOM 树输出
+cargo run -p browser-cli -- render-file tests/fixtures/news.ycombinator.com.html --width 400
+  → 输出包含全部 4 条 HN 标题 / 点数 / 用户名 / 时间
 ```
 
-复盘见 `docs/postmortems/M1.md`。
+复盘见 `docs/postmortems/M2.md`。
 
 ---
 
-## M2 — 文本流渲染（待细化）
-
-## M3 — JS 执行（待 M2 后细化）
+## M3 — JS 执行（待细化）
 
 ## M4 — SPA 渲染（待 M3 后细化）
 
