@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use browser_css_engine::{parse_box_lengths, Declaration, Length};
+use browser_css_engine::{parse_box_lengths, BoxEdges, Declaration, Length};
 use browser_dom::{NodeData, NodeId, Tree};
 
 use crate::boxes::{BoxType, LayoutBox, LayoutTree};
@@ -125,22 +125,27 @@ fn apply_box_model(
     bx: &mut LayoutBox,
 ) {
     bx.margin = ua_default_margins(tag);
+    bx.padding = BoxEdges::default();
     if let Some(decls) = styles.get(&id) {
         let css_margin = parse_box_lengths(decls, "margin");
         let css_padding = parse_box_lengths(decls, "padding");
-        if css_margin.top != Length::Zero {
-            bx.margin.top = css_margin.top;
+        // M7.1.6 fix: explicit `0` in CSS must override UA defaults.
+        // If the user declared *any* margin property (shorthand or
+        // longhand), replace the whole BoxEdges — parse_box_lengths
+        // fills missing longhand edges with Zero, which is the right
+        // behavior for "user reset to zero".
+        let any_margin_decl = decls
+            .iter()
+            .any(|d| d.property == "margin" || d.property.starts_with("margin-"));
+        let any_padding_decl = decls
+            .iter()
+            .any(|d| d.property == "padding" || d.property.starts_with("padding-"));
+        if any_margin_decl {
+            bx.margin = css_margin;
         }
-        if css_margin.right != Length::Zero {
-            bx.margin.right = css_margin.right;
+        if any_padding_decl {
+            bx.padding = css_padding;
         }
-        if css_margin.bottom != Length::Zero {
-            bx.margin.bottom = css_margin.bottom;
-        }
-        if css_margin.left != Length::Zero {
-            bx.margin.left = css_margin.left;
-        }
-        bx.padding = css_padding;
     }
 }
 

@@ -45,18 +45,38 @@ fn layout_block_children(bx: &mut LayoutBox, containing_width: f32) {
     let base_x = bx.dimensions.x;
     let mut cursor_y = bx.dimensions.y;
     let em = 1.0_f32;
+    let mut prev_margin_bottom: f32 = 0.0;
+    let mut first_child = true;
     for child in &mut bx.children {
-        // M7.1.3: margin-top pushes the child down from the cursor.
+        let margin_left = child.margin.left.resolve(containing_width, em);
+        let margin_right = child.margin.right.resolve(containing_width, em);
+        let child_x = base_x + margin_left;
+        let child_width = (containing_width - margin_left - margin_right).max(0.0);
         let margin_top = child.margin.top.resolve(containing_width, em);
-        cursor_y += margin_top;
-        layout_box(child, base_x, cursor_y, containing_width);
-        cursor_y = child.dimensions.bottom();
-        // Margin-bottom pushes the *next* sibling down. With M7.1.4
-        // margin-collapsing this becomes max(child.bottom, prev.bottom),
-        // but M7.1.3 keeps the additive form (correct for first pass).
         let margin_bottom = child.margin.bottom.resolve(containing_width, em);
-        cursor_y += margin_bottom;
+        // M7.1.6: anonymous blocks that turn out to have zero height
+        // (typically whitespace-only wrappers from source formatting)
+        // are fully skipped from cursor / margin collapsing. We layout
+        // them so their dimensions are filled in, then check the height.
+        if child.box_type == BoxType::Anonymous {
+            layout_box(child, child_x, cursor_y, child_width);
+            if child.dimensions.height > 0.0 {
+                cursor_y = child.dimensions.bottom();
+            }
+            continue;
+        }
+        let collapsed_top = if first_child {
+            first_child = false;
+            margin_top
+        } else {
+            margin_top.max(prev_margin_bottom)
+        };
+        cursor_y += collapsed_top;
+        layout_box(child, child_x, cursor_y, child_width);
+        cursor_y = child.dimensions.bottom();
+        prev_margin_bottom = margin_bottom;
     }
+    cursor_y += prev_margin_bottom;
     bx.dimensions.height = (cursor_y - bx.dimensions.y).max(0.0);
 }
 
@@ -90,10 +110,14 @@ fn layout_anonymous_children(bx: &mut LayoutBox, containing_width: f32) {
             }
             let em = 1.0_f32;
             let margin_top = bx.children[i].margin.top.resolve(containing_width, em);
-            cursor_y += margin_top;
-            layout_box(&mut bx.children[i], base_x, cursor_y, containing_width);
-            cursor_y = bx.children[i].dimensions.bottom();
             let margin_bottom = bx.children[i].margin.bottom.resolve(containing_width, em);
+            let margin_left = bx.children[i].margin.left.resolve(containing_width, em);
+            let margin_right = bx.children[i].margin.right.resolve(containing_width, em);
+            let child_x = base_x + margin_left;
+            let child_width = (containing_width - margin_left - margin_right).max(0.0);
+            cursor_y += margin_top;
+            layout_box(&mut bx.children[i], child_x, cursor_y, child_width);
+            cursor_y = bx.children[i].dimensions.bottom();
             cursor_y += margin_bottom;
         } else if inline_start.is_none() {
             inline_start = Some(i);

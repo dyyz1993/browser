@@ -92,3 +92,82 @@ fn render_file_empty_input_no_panic() {
     let _ = result;
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn render_file_applies_inline_style_block() {
+    // M7.1.6: <style> tag contents must be parsed and applied.
+    // Without M7.1.6 the 10% margin-left would be 0 — the text
+    // would start at column 0.
+    let dir = std::env::temp_dir();
+    let path = dir.join("browser_m716_test.html");
+    std::fs::write(
+        &path,
+        "<html><head><style>.indent { margin-left: 20px; }</style></head>\n\
+         <body><p class=\"indent\">indented text</p></body></html>",
+    )
+    .expect("write temp");
+    let result = bin()
+        .args(["render-file", path.to_str().unwrap(), "--width", "100"])
+        .assert()
+        .success();
+    let s = result.get_output().stdout.clone();
+    let s_str = std::str::from_utf8(&s).unwrap();
+    // The paragraph should have at least 20 chars of leading whitespace
+    // on its first line (the margin-left).
+    let first_text_line = s_str
+        .lines()
+        .find(|line| line.contains("indented text"))
+        .expect("missing indented text line");
+    let leading = first_text_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .count();
+    assert!(
+        leading >= 20,
+        "expected >=20 leading whitespace, got {leading} in {first_text_line:?}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn render_file_margin_collapsing_two_paragraphs() {
+    // M7.1.4: two adjacent <p> with margin-top:10px / margin-bottom:5px
+    // should have exactly max(10, 5) = 10 lines of vertical gap, not 15.
+    let dir = std::env::temp_dir();
+    let path = dir.join("browser_m714_test.html");
+    std::fs::write(
+        &path,
+        "<html><head><style>\n\
+         .a { margin-top: 10px; margin-bottom: 5px; }\n\
+         .b { margin-top: 8px; margin-bottom: 0; }\n\
+         </style></head>\n\
+         <body>\n\
+         <p class=\"a\">first</p>\n\
+         <p class=\"b\">second</p>\n\
+         </body></html>",
+    )
+    .expect("write temp");
+    let result = bin()
+        .args(["render-file", path.to_str().unwrap(), "--width", "50"])
+        .assert()
+        .success();
+    let s = std::str::from_utf8(&result.get_output().stdout).unwrap();
+    // Find the lines containing "first" and "second".
+    let first_line_idx = s
+        .lines()
+        .position(|l| l.contains("first"))
+        .expect("missing first");
+    let second_line_idx = s
+        .lines()
+        .position(|l| l.contains("second"))
+        .expect("missing second");
+    let gap = second_line_idx.saturating_sub(first_line_idx);
+    // CSS says gap = max(margin-bottom of a = 5, margin-top of b = 8) = 8.
+    // We allow some slack because .a's margin-top:10 also pushes "first"
+    // down, and rendering may add 1-2 lines of UA-default body padding.
+    assert!(
+        (2..=12).contains(&gap),
+        "expected collapsed gap (CSS spec: max(5,8)=8 lines, ±slack), got {gap}\noutput:\n{s}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

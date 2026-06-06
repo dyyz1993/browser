@@ -189,10 +189,13 @@ fn render_html_to_string(
     if run_js {
         eprintln!("[browser] {executed} script(s) executed");
     }
-    let tree = shared_tree.borrow();
-    let sheet = parse_css("");
-    let styles = compute_styles(&tree, &sheet);
-    let mut layout = construct_layout_tree(&tree, &styles);
+    // M7.1.6: extract <style> tag contents so they participate in
+    // computed styles. Walks the DOM in-tree before the immutable
+    // borrow for layout.
+    let style_text = extract_style_text(&shared_tree.borrow());
+    let sheet = parse_css(&style_text);
+    let styles = compute_styles(&shared_tree.borrow(), &sheet);
+    let mut layout = construct_layout_tree(&shared_tree.borrow(), &styles);
     run_layout(
         &mut layout,
         LayoutConfig {
@@ -200,6 +203,33 @@ fn render_html_to_string(
         },
     );
     Ok(render_ascii(&layout, width))
+}
+
+/// Walk a DOM tree and concatenate every `<style>` tag's text content
+/// into one CSS string. Used by [`render_html_to_string`] so that
+/// inline `<style>` rules participate in computed styles.
+fn extract_style_text(tree: &browser_dom::Tree) -> String {
+    use browser_dom::{NodeData, NodeId};
+    let mut buf = String::new();
+    let mut stack: Vec<NodeId> = vec![tree.root()];
+    while let Some(id) = stack.pop() {
+        match tree.data(id) {
+            NodeData::Element { tag, .. } if tag.eq_ignore_ascii_case("style") => {
+                for &child in tree.children_of(id) {
+                    if let NodeData::Text(s) = tree.data(child) {
+                        buf.push_str(s);
+                        buf.push('\n');
+                    }
+                }
+            }
+            _ => {
+                for &child in tree.children_of(id) {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+    buf
 }
 
 fn main() -> ExitCode {

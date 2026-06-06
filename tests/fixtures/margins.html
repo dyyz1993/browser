@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<title>Margin test</title>
+<style>
+  body { margin: 0; }
+  .m10 { margin: 10px; }
+  .mb5 { margin-bottom: 5px; }
+  .mt3 { margin-top: 3px; }
+  .collapse-test { margin-top: 4px; margin-bottom: 6px; }
+  .nested-outer { margin-bottom: 2px; }
+  .nested-inner { margin-top: 7px; }
+  .em-margin { margin: 2em 0; }
+  .pct-margin { margin-left: 10%; }
+</style>
+</head>
+<body>
+
+<p class="m10">paragraph with 10px margin all sides</p>
+
+<p class="mb5">paragraph A: margin-bottom 5px</p>
+<p class="mt3">paragraph B: margin-top 3px — collapsed gap should be max(5,3)=5 not 8</p>
+
+<p class="collapse-test">collapse-test paragraph</p>
+<p class="collapse-test">collapse-test paragraph 2 — gap max(6,4)=6 not 10</p>
+
+<div class="nested-outer">
+  <div class="nested-inner">nested — inner mt=7 does NOT collapse with outer mb=2 (parent boundary)</div>
+</div>
+
+<p class="em-margin">2em top+bottom margin = 2 lines each side</p>
+
+<p class="pct-margin">10% left margin — at width=100 that's 10 chars indent</p>
+
+</body>
+</html>
