@@ -25,7 +25,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-use crate::bitmap_font::{draw_text, BitmapFont};
+use crate::bitmap_font::draw_text;
 
 /// Window configuration. Width/height are in physical pixels (the
 /// pixmap size we hand to softbuffer).
@@ -308,10 +308,6 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
             }
         });
     }
-
-    // Quiet warnings about BitmapFont being unused as a type — we
-    // only use its constants indirectly via draw_text.
-    let _ = BitmapFont::CHAR_WIDTH;
 
     buffer.present()?;
     Ok(())

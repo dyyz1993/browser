@@ -11,9 +11,10 @@
 #![forbid(unsafe_code)]
 
 pub mod bitmap_font;
+pub mod font;
 pub mod window;
 
-pub use bitmap_font::{draw_text, measure_text, BitmapFont, BitmapGlyph};
+pub use bitmap_font::{draw_text, measure_text, BitmapGlyph};
 pub use window::{run_window, WindowConfig};
 
 #[cfg(test)]
