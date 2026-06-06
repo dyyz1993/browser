@@ -6,6 +6,7 @@
 //! - `LayoutBox`: typed box with optional DOM node id and text payload
 //! - `LayoutTree`: the constructed tree (owned root)
 
+use browser_css_engine::BoxEdges;
 use browser_dom::NodeId;
 
 /// Rectangular dimensions in device-independent "characters" for M2.
@@ -76,6 +77,12 @@ pub struct LayoutBox {
     /// uses this when present (it's more accurate than `text`+`x/y`
     /// because it knows where each wrapped word actually starts).
     pub words: Vec<(String, f32, f32)>,
+    /// CSS margin box-edges (M7.1.2+). Resolved to f32 by layout at
+    /// the time spacing is applied. Default = all zeros.
+    pub margin: BoxEdges<browser_css_engine::Length>,
+    /// CSS padding box-edges (M7.1.2+). Reserved for future use
+    /// (padding affects text content origin inside the box).
+    pub padding: BoxEdges<browser_css_engine::Length>,
     pub children: Vec<LayoutBox>,
 }
 
@@ -88,6 +95,8 @@ impl LayoutBox {
             element_id: None,
             text: None,
             words: Vec::new(),
+            margin: BoxEdges::default(),
+            padding: BoxEdges::default(),
             children: Vec::new(),
         }
     }
@@ -101,6 +110,14 @@ impl LayoutBox {
     #[must_use]
     pub fn with_text(mut self, text: String) -> Self {
         self.text = Some(text);
+        self
+    }
+
+    /// Set all four margin edges to the same [`browser_css_engine::Length`].
+    /// Test helper + used by construct.rs when there's no rule.
+    #[must_use]
+    pub fn with_margin_all(mut self, v: browser_css_engine::Length) -> Self {
+        self.margin = BoxEdges::all(v);
         self
     }
 }
