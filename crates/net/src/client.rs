@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::{Method, Request};
+use hyper::{header::HeaderMap, Method, Request, Response};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
@@ -56,6 +56,23 @@ impl HttpClient {
     /// Returns [`NetError`] for invalid URL, transport failure,
     /// or non-2xx HTTP status.
     pub async fn get(&self, url: &str) -> Result<Vec<u8>, NetError> {
+        let body = self.get_with_headers(url, None).await?;
+        Ok(body.0)
+    }
+
+    /// Issue a GET request with an optional `Cookie` header, returning
+    /// both the response body and all response headers (for `Set-Cookie`).
+    ///
+    /// M15.2: Cookie jar 集成点。`cookie_header` 为 None 时不发 Cookie 头；
+    /// 上层（cli/js-runtime）从返回的 headers 里解析 Set-Cookie 存入 jar。
+    ///
+    /// # Errors
+    /// See [`HttpClient::get`].
+    pub async fn get_with_headers(
+        &self,
+        url: &str,
+        cookie_header: Option<&str>,
+    ) -> Result<(Vec<u8>, HeaderMap), NetError> {
         let parsed = Url::parse(url).map_err(|_| NetError::InvalidUrl {
             url: url.to_string(),
         })?;
@@ -66,13 +83,17 @@ impl HttpClient {
         }
         // Build the request. `.uri(url)` accepts an &str here because
         // hyper's Uri type can parse a full absolute URL.
-        let req = Request::builder()
+        let mut builder = Request::builder()
             .method(Method::GET)
             .uri(url)
-            .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+        if let Some(cookie) = cookie_header {
+            builder = builder.header("cookie", cookie);
+        }
+        let req = builder
             .body(Full::default())
             .map_err(|e| NetError::RequestFailed(e.to_string()))?;
-        let resp = self
+        let resp: Response<_> = self
             .inner
             .request(req)
             .await
@@ -82,13 +103,14 @@ impl HttpClient {
                 code: resp.status().as_u16(),
             });
         }
+        let headers = resp.headers().clone();
         let body = resp
             .into_body()
             .collect()
             .await
             .map_err(|e| NetError::ReadFailed(e.to_string()))?
             .to_bytes();
-        Ok(body.to_vec())
+        Ok((body.to_vec(), headers))
     }
 }
 
