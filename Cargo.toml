@@ -9,6 +9,7 @@ members = [
     "crates/render",
     "crates/js-runtime",
     "crates/page",
+    "crates/gui",
     "crates/cli",
 ]
 
