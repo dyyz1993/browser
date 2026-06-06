@@ -88,7 +88,7 @@ fn build_box(
     out: &mut Vec<LayoutBox>,
 ) {
     match tree.data(id) {
-        NodeData::Element { tag, .. } => {
+        NodeData::Element { tag, attrs, .. } => {
             if is_non_rendered_tag(tag) {
                 return;
             }
@@ -97,6 +97,15 @@ fn build_box(
             bx.children = build_children(tree, id, bt, styles);
             // M7.1.3: fill margin/padding from CSS + UA defaults.
             apply_box_model(tag, id, styles, &mut bx);
+            // M9.1.1: inject placeholder for <img>.
+            if tag.eq_ignore_ascii_case("img") {
+                let src = attrs
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("src"))
+                    .map(|(_, v)| v.as_str())
+                    .unwrap_or("[no-src]");
+                bx.text = Some(format!("[IMG: {src}]"));
+            }
             // M6.0c: <li> bullet prefix (CSS ::marker placeholder).
             if tag.eq_ignore_ascii_case("li") {
                 inject_li_bullet(&mut bx);
