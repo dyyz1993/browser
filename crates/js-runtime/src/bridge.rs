@@ -627,6 +627,16 @@ fn click(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+// M8.4: form submit bridge.
+fn submit(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    eprintln!("[dom-submit] #{id}");
+    Ok(JsValue::undefined())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
