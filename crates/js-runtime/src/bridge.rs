@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use boa_engine::{Context, JsArgs, JsResult, JsValue, NativeFunction};
 use browser_dom::{Node, NodeData, NodeId, Tree};
+use browser_navigation::NavigationHandle;
 use browser_storage::StorageHandle;
 
 /// A shared, mutate-able handle to the DOM tree that JS sees.
@@ -31,6 +32,8 @@ thread_local! {
     static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
     // M13.2: localStorage / sessionStorage backend.
     static CURRENT_STORAGE: RefCell<Option<StorageHandle>> = const { RefCell::new(None) };
+    // M14.2: history / location backend.
+    static CURRENT_NAV: RefCell<Option<NavigationHandle>> = const { RefCell::new(None) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -47,6 +50,9 @@ impl Drop for TreeGuard {
             *slot.borrow_mut() = None;
         });
         CURRENT_STORAGE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        CURRENT_NAV.with(|slot| {
             *slot.borrow_mut() = None;
         });
     }
@@ -166,6 +172,22 @@ pub fn install(ctx: &mut Context) {
     register_fn0(ctx, "__storageClear", storage_clear_bridge as NativeFn);
     register_fn0(ctx, "__storageLen", storage_len_bridge as NativeFn);
     register_fn1(ctx, "__storageKey", storage_key_bridge as NativeFn);
+    // M14.2: history / location bridges.
+    register_fn3(ctx, "__historyPush", history_push_bridge as NativeFn);
+    register_fn3(ctx, "__historyReplace", history_replace_bridge as NativeFn);
+    register_fn1(ctx, "__historyBack", history_back_bridge as NativeFn);
+    register_fn1(ctx, "__historyForward", history_forward_bridge as NativeFn);
+    register_fn1(ctx, "__historyGo", history_go_bridge as NativeFn);
+    register_fn0(ctx, "__historyLen", history_len_bridge as NativeFn);
+    register_fn0(ctx, "__historyState", history_state_bridge as NativeFn);
+    register_fn0(ctx, "__locationHref", location_href_bridge as NativeFn);
+    register_fn1(
+        ctx,
+        "__locationReplace",
+        location_replace_bridge as NativeFn,
+    );
+    register_fn1(ctx, "__locationAssign", location_assign_bridge as NativeFn);
+    register_fn0(ctx, "__locationParts", location_parts_bridge as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -741,6 +763,146 @@ fn storage_key_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> 
         Some(k) => Ok(JsValue::String(boa_engine::string::JsString::from(k))),
         None => Ok(JsValue::null()),
     }
+}
+
+// M14.2: History / Location bridges.
+//
+// SPA 路由依赖 history.pushState / popstate。React Router / Vue Router
+// 都用这些 API。我们提供同步调用，pushState 不触发真实 fetch（MVP
+// 爬虫场景：JS 中 pushState 通常只改 URL 不重新加载）。
+
+fn with_navigation<F, R>(f: F) -> R
+where
+    F: FnOnce(&NavigationHandle) -> R,
+{
+    CURRENT_NAV.with(|slot| {
+        let borrowed = slot.borrow();
+        let handle = borrowed
+            .as_ref()
+            .expect("navigation bridge called without install_navigation()");
+        f(handle)
+    })
+}
+
+/// Install `handle` as the current thread's navigation backend.
+pub fn install_navigation(handle: NavigationHandle) {
+    CURRENT_NAV.with(|slot| {
+        *slot.borrow_mut() = Some(handle);
+    });
+}
+
+fn history_push_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let state = arg_string(args, 0);
+    let url = arg_string(args, 2).unwrap_or_default();
+    with_navigation(|h| browser_navigation::history_push(h, state, url));
+    Ok(JsValue::undefined())
+}
+
+fn history_replace_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let state = arg_string(args, 0);
+    let url = arg_string(args, 2).unwrap_or_default();
+    with_navigation(|h| browser_navigation::history_replace(h, state, url));
+    Ok(JsValue::undefined())
+}
+
+fn history_back_bridge(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let ok = with_navigation(browser_navigation::history_back);
+    Ok(JsValue::new(ok))
+}
+
+fn history_forward_bridge(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let ok = with_navigation(browser_navigation::history_forward);
+    Ok(JsValue::new(ok))
+}
+
+fn history_go_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let n = match args.first().and_then(|v| v.as_number()) {
+        Some(n) => n as i64,
+        None => return Ok(JsValue::undefined()),
+    };
+    let ok = with_navigation(|h| browser_navigation::history_go(h, n));
+    Ok(JsValue::new(ok))
+}
+
+fn history_len_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let len = with_navigation(browser_navigation::history_len);
+    Ok(JsValue::new(len as f64))
+}
+
+fn history_state_bridge(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let state = with_navigation(browser_navigation::history_state);
+    match state {
+        Some(s) => Ok(JsValue::String(boa_engine::string::JsString::from(s))),
+        None => Ok(JsValue::null()),
+    }
+}
+
+fn location_href_bridge(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let url = with_navigation(browser_navigation::current_url);
+    Ok(JsValue::String(boa_engine::string::JsString::from(url)))
+}
+
+fn location_replace_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let url = arg_string(args, 0).unwrap_or_default();
+    with_navigation(|h| browser_navigation::location_replace(h, url));
+    Ok(JsValue::undefined())
+}
+
+fn location_assign_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let url = arg_string(args, 0).unwrap_or_default();
+    with_navigation(|h| browser_navigation::location_assign(h, url));
+    Ok(JsValue::undefined())
+}
+
+fn location_parts_bridge(
+    _this: &JsValue,
+    _args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let href = with_navigation(browser_navigation::current_url);
+    let parts = browser_navigation::parse_url_parts(&href);
+    // 用 eval 构造对象，避免 JsObject::set 的 PropertyKey trait bound
+    // 复杂性（同 storage_shim 的做法）。
+    let code = format!(
+        "({{href:{:?},protocol:{:?},host:{:?},hostname:{:?},port:{:?},pathname:{:?},search:{:?},hash:{:?}}})",
+        parts.href,
+        parts.protocol,
+        parts.host,
+        parts.hostname,
+        parts.port,
+        parts.pathname,
+        parts.search,
+        parts.hash
+    );
+    ctx.eval(boa_engine::Source::from_bytes(&code))
 }
 
 #[cfg(test)]

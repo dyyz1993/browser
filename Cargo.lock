@@ -413,6 +413,7 @@ dependencies = [
  "boa_engine",
  "browser-dom",
  "browser-html-parser",
+ "browser-navigation",
  "browser-net",
  "browser-storage",
  "tokio",
