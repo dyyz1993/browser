@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Storage Test SPA</title>
+</head>
+
+<body>
+  <p>before</p>
+  <script>
+    // 模拟真实 SPA 启动逻辑：检查 localStorage 里的 token，渲染对应内容
+    var saved=localStorage.getItem('user_token');
+    if(saved) {
+      __setBody('welcome back, token='+saved);
+    } else {
+      // 首次访问：写入 token，再读出来渲染
+      localStorage.setItem('user_token','abc-123');
+      localStorage.setItem('theme','dark');
+      var t=localStorage.getItem('user_token');
+      __setBody('first visit, stored token='+t+', theme='+localStorage.getItem('theme'));
+    }
+  </script>
+</body>
+
+</html>
