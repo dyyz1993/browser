@@ -71,6 +71,11 @@ enum Cmd {
         win_height: u32,
         #[arg(long)]
         no_js: bool,
+        /// Don't open a window — just verify the render pipeline
+        /// succeeds and print the resulting text to stdout. Used
+        /// by e2e tests in headless environments.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -121,6 +126,7 @@ async fn run() -> Result<()> {
             win_width,
             win_height,
             no_js,
+            check,
         } => {
             let bytes = get(&url)
                 .await
@@ -129,6 +135,10 @@ async fn run() -> Result<()> {
                 .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
             let base = if no_js { None } else { Some(url.clone()) };
             let text = render_html_to_string(&html, width, !no_js, base)?;
+            if check {
+                print!("{text}");
+                return Ok(());
+            }
             eprintln!("[browser] opening window {win_width}x{win_height}, scale={scale}");
             let config = browser_gui::WindowConfig {
                 title: format!("browser — {url}"),
