@@ -137,6 +137,15 @@ pub fn install(ctx: &mut Context) {
     register_fn(ctx, "__log", log_fn as NativeFn);
     register_fn(ctx, "__fetchSetBody", fetch_set_body as NativeFn);
     register_fn(ctx, "__fetchAppendBody", fetch_append_body as NativeFn);
+    // M7.2.1: real DOM API bridges.
+    register_fn0(ctx, "__createEl", create_el as NativeFn);
+    register_fn2(ctx, "__appendChild", append_child as NativeFn);
+    register_fn3(ctx, "__setAttr", set_attr as NativeFn);
+    register_fn1(ctx, "__getElById", get_el_by_id as NativeFn);
+    register_fn1(ctx, "__qs", qs as NativeFn);
+    register_fn2(ctx, "__setText", set_text as NativeFn);
+    register_fn1(ctx, "__getTag", get_tag as NativeFn);
+    register_fn1(ctx, "__getBody", get_body as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -144,6 +153,35 @@ type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
 fn register_fn(ctx: &mut Context, name: &str, f: NativeFn) {
     let native = NativeFunction::from_fn_ptr(f);
     let _ = ctx.register_global_callable(name.into(), 1, native);
+}
+
+/// Register with arity 0 (variadic signature is the same — this is
+/// purely a documentation marker for bridges that take no args and
+/// match boa's `register_global_callable(name, 0, ...)` arity hint).
+fn register_fn0(ctx: &mut Context, name: &str, f: NativeFn) {
+    let native = NativeFunction::from_fn_ptr(f);
+    let _ = ctx.register_global_callable(name.into(), 0, native);
+}
+
+fn register_fn1(ctx: &mut Context, name: &str, f: NativeFn) {
+    let native = NativeFunction::from_fn_ptr(f);
+    let _ = ctx.register_global_callable(name.into(), 1, native);
+}
+
+fn register_fn2(ctx: &mut Context, name: &str, f: NativeFn) {
+    let native = NativeFunction::from_fn_ptr(f);
+    let _ = ctx.register_global_callable(name.into(), 2, native);
+}
+
+fn register_fn3(ctx: &mut Context, name: &str, f: NativeFn) {
+    let native = NativeFunction::from_fn_ptr(f);
+    let _ = ctx.register_global_callable(name.into(), 3, native);
+}
+
+fn arg_usize(args: &[JsValue], idx: usize) -> Option<usize> {
+    args.get(idx)
+        .and_then(|v| v.as_number())
+        .map(|n| n as usize)
 }
 
 fn set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
@@ -290,6 +328,178 @@ fn set_title_text(tree: &mut Tree, text: &str) {
     };
     tree.get_mut(title).children.clear();
     tree.insert(Some(title), NodeData::Text(text.into()));
+}
+
+// ---------------------------------------------------------------------------
+// M7.2.1: real DOM API bridges (NodeIds returned as f64 to JS).
+// ---------------------------------------------------------------------------
+
+fn create_el(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let tag = arg_string(args, 0).unwrap_or_else(|| "div".into());
+    let new_id = with_tree(|t| {
+        let parent = find_first_element(t, "body").unwrap_or_else(|| t.root());
+        t.insert(
+            Some(parent),
+            NodeData::Element {
+                tag,
+                attrs: Vec::new(),
+            },
+        )
+    });
+    Ok(JsValue::new(new_id as f64))
+}
+
+fn append_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let parent_id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let child_id = match arg_usize(args, 1) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    with_tree(|t| move_subtree(t, parent_id, child_id));
+    Ok(JsValue::undefined())
+}
+
+/// Detach `child` from its current parent and re-attach under `new_parent`.
+fn move_subtree(tree: &mut Tree, new_parent: NodeId, child: NodeId) {
+    let mut old_parent: Option<NodeId> = None;
+    for i in 0..tree.len() {
+        let id = i;
+        if tree.children_of(id).contains(&child) {
+            old_parent = Some(id);
+            break;
+        }
+    }
+    if let Some(op) = old_parent {
+        tree.get_mut(op).children.retain(|&c| c != child);
+    }
+    tree.get_mut(new_parent).children.push(child);
+}
+
+fn set_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let key = arg_string(args, 1).unwrap_or_default();
+    let value = arg_string(args, 2).unwrap_or_default();
+    if key.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    with_tree(|t| set_attr_inner(t, id, &key, &value));
+    Ok(JsValue::undefined())
+}
+
+fn set_attr_inner(tree: &mut Tree, id: NodeId, key: &str, value: &str) {
+    let node = tree.get_mut(id);
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        if let Some(existing) = attrs.iter_mut().find(|(k, _)| k == key) {
+            existing.1 = value.into();
+        } else {
+            attrs.push((key.into(), value.into()));
+        }
+    }
+}
+
+fn get_el_by_id(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id_str = arg_string(args, 0).unwrap_or_default();
+    let found = with_tree(|t| find_by_id(t, &id_str));
+    Ok(JsValue::new(match found {
+        Some(id) => id as f64,
+        None => -1.0,
+    }))
+}
+
+fn find_by_id(tree: &Tree, target: &str) -> Option<NodeId> {
+    let mut found = None;
+    tree.traverse(tree.root(), |id, node| {
+        if let NodeData::Element { attrs, .. } = &node.data {
+            if attrs
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == target)
+            {
+                found = Some(id);
+                return false;
+            }
+        }
+        true
+    });
+    found
+}
+
+fn qs(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    // M7.2.1 minimal querySelector: tag selectors (`div`) and id (`#foo`).
+    let sel = arg_string(args, 0).unwrap_or_default();
+    let found = with_tree(|t| find_by_selector(t, &sel));
+    Ok(JsValue::new(match found {
+        Some(id) => id as f64,
+        None => -1.0,
+    }))
+}
+
+fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
+    let sel = sel.trim();
+    if let Some(tag) = sel.strip_prefix('#') {
+        return find_by_id(tree, tag);
+    }
+    let mut found = None;
+    tree.traverse(tree.root(), |id, node| {
+        if let NodeData::Element { tag, .. } = &node.data {
+            if tag.eq_ignore_ascii_case(sel) {
+                found = Some(id);
+                return false;
+            }
+        }
+        true
+    });
+    found
+}
+
+fn set_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let text = arg_string(args, 1).unwrap_or_default();
+    with_tree(|t| set_text_inner(t, id, &text));
+    Ok(JsValue::undefined())
+}
+
+fn set_text_inner(tree: &mut Tree, id: NodeId, text: &str) {
+    tree.get_mut(id).children.clear();
+    tree.insert(Some(id), NodeData::Text(text.into()));
+}
+
+fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let tag = with_tree(|t| match t.data(id) {
+        NodeData::Element { tag, .. } => Some(tag.clone()),
+        _ => None,
+    });
+    match tag {
+        // M7.2.4 will return a real JsString once we sort out the boa 0.20
+        // JsString::from lifetime story. For M7.2.1 the placeholder logs
+        // to stderr and returns undefined — keeps the bridge callable
+        // for parity with other reader bridges.
+        Some(t) => {
+            eprintln!("[dom-getTag] #{id} = {t}");
+            Ok(JsValue::undefined())
+        }
+        None => Ok(JsValue::undefined()),
+    }
+}
+
+fn get_body(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = with_tree(|t| find_first_element(t, "body"));
+    Ok(JsValue::new(match id {
+        Some(id) => id as f64,
+        None => -1.0,
+    }))
 }
 
 #[cfg(test)]
@@ -523,5 +733,152 @@ mod fetch_tests {
         ctx.eval(Source::from_bytes(&script)).unwrap();
         drop(_guard);
         assert_eq!(body_text_content(&shared.borrow()), "AB");
+    }
+}
+
+#[cfg(test)]
+mod m7_dom_api_tests {
+    use super::*;
+    use boa_engine::Source;
+
+    fn tree_with_body(body_html: &str) -> Tree {
+        let html = format!("<html><head><title>t</title></head><body>{body_html}</body></html>");
+        browser_html_parser::parse(&html)
+    }
+
+    fn make_ctx() -> boa_engine::Context {
+        let mut ctx = boa_engine::Context::default();
+        install(&mut ctx);
+        ctx
+    }
+
+    #[test]
+    fn js_create_el_returns_nodeid_under_body() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("");
+        let (shared, _guard) = install_current(tree);
+        let result = ctx.eval(Source::from_bytes(r#"__createEl("div")"#));
+        let val = result.unwrap();
+        let id = val.as_number().unwrap() as usize;
+        assert!(id > 0, "id should be a positive usize, got {id}");
+        drop(_guard);
+        let t = shared.borrow();
+        let body = find_first_element(&t, "body").unwrap();
+        assert!(
+            t.children_of(body).contains(&id),
+            "new element should be under <body>"
+        );
+        assert!(matches!(t.data(id), NodeData::Element { tag, .. } if tag == "div"));
+    }
+
+    #[test]
+    fn js_set_text_clears_children_and_inserts_text() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("<p id='t'>old</p>");
+        let (shared, _guard) = install_current(tree);
+        ctx.eval(Source::from_bytes(
+            r#"(function(){ var p = __getElById("t"); __setText(p, "fresh"); })()"#,
+        ))
+        .unwrap();
+        drop(_guard);
+        let t = shared.borrow();
+        let p = find_by_id(&t, "t").unwrap();
+        let children = t.children_of(p);
+        assert_eq!(children.len(), 1);
+        assert!(matches!(t.data(children[0]), NodeData::Text(s) if s == "fresh"));
+    }
+
+    #[test]
+    fn js_set_attr_adds_and_updates_attribute() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("<p id='t'>x</p>");
+        let (shared, _guard) = install_current(tree);
+        ctx.eval(Source::from_bytes(
+            r#"(function(){ var p = __getElById("t"); __setAttr(p, "class", "red"); })()"#,
+        ))
+        .unwrap();
+        drop(_guard);
+        let t = shared.borrow();
+        let p = find_by_id(&t, "t").unwrap();
+        match t.data(p) {
+            NodeData::Element { attrs, .. } => {
+                // The element already has id='t' from <p id='t'>;
+                // __setAttr(p, 'class', 'red') should add class='red'.
+                let class_attr = attrs.iter().find(|(k, _)| k == "class");
+                assert_eq!(class_attr, Some(&("class".to_string(), "red".to_string())));
+            }
+            _ => panic!("expected element"),
+        }
+    }
+
+    #[test]
+    fn js_get_el_by_id_returns_minus_one_when_missing() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("<p>nothing here</p>");
+        let (_shared, _guard) = install_current(tree);
+        let val = ctx
+            .eval(Source::from_bytes(r#"__getElById("nope")"#))
+            .unwrap();
+        assert_eq!(val.as_number(), Some(-1.0));
+    }
+
+    #[test]
+    fn js_qs_finds_by_tag() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("<section><p>hi</p></section>");
+        let (shared, _guard) = install_current(tree);
+        let val = ctx.eval(Source::from_bytes(r#"__qs("section")"#)).unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        assert!(matches!(t.data(id), NodeData::Element { tag, .. } if tag == "section"));
+    }
+
+    #[test]
+    fn js_qs_finds_by_id_with_hash_prefix() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("<div id='a'><p>x</p></div>");
+        let (_shared, _guard) = install_current(tree);
+        let val = ctx.eval(Source::from_bytes(r##"__qs("#a")"##)).unwrap();
+        assert!(val.as_number().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn js_append_child_moves_subtree() {
+        let mut ctx = make_ctx();
+        // <body><div id="a"></div><span id="b">x</span></body>
+        // After appendChild(a, b), <div id="a"><span id="b">x</span></div>
+        let tree = tree_with_body(r#"<div id="a"></div><span id="b">x</span>"#);
+        let (shared, _guard) = install_current(tree);
+        ctx.eval(Source::from_bytes(
+            r#"(function(){
+                var a = __getElById("a");
+                var b = __getElById("b");
+                __appendChild(a, b);
+            })()"#,
+        ))
+        .unwrap();
+        drop(_guard);
+        let t = shared.borrow();
+        let a = find_by_id(&t, "a").unwrap();
+        let b = find_by_id(&t, "b").unwrap();
+        // <span id="b"> should now be a child of <div id="a">.
+        assert!(
+            t.children_of(a).contains(&b),
+            "span was not moved under div; a's children = {:?}",
+            t.children_of(a)
+        );
+    }
+
+    #[test]
+    fn js_get_body_returns_body_nodeid() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body("hello");
+        let (shared, _guard) = install_current(tree);
+        let val = ctx.eval(Source::from_bytes(r#"__getBody()"#)).unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        assert!(matches!(t.data(id), NodeData::Element { tag, .. } if tag == "body"));
     }
 }

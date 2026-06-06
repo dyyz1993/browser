@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>DOM API Test</title>
+<style>
+body { font-family: monospace; }
+#app { margin-left: 20px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function() {
+  // M7.2.2 e2e: test __createEl, __setText, __setAttr, __appendChild
+  var app = __getElById("app");
+  var h1 = __createEl("h1");
+  __setText(h1, "Hello from JS");
+  __setAttr(h1, "class", "title");
+  __appendChild(app, h1);
+  var p = __createEl("p");
+  __setText(p, "This paragraph was created via DOM API");
+  __appendChild(app, p);
+})();
+</script>
+</body>
+</html>
