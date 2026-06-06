@@ -9,6 +9,7 @@ members = [
     "crates/render",
     "crates/storage",
     "crates/navigation",
+    "crates/cookie",
     "crates/js-runtime",
     "crates/page",
     "crates/gui",

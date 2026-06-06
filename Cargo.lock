@@ -378,6 +378,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-cookie"
+version = "0.0.1"
+dependencies = [
+ "url",
+]
+
+[[package]]
 name = "browser-css-engine"
 version = "0.0.1"
 dependencies = [
