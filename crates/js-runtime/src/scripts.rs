@@ -83,13 +83,15 @@ pub fn execute_scripts_with_base(
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
 /// safety cap is hit. Returns the number of callbacks invoked.
-/// 每次取一批到期 callback → 逐个 call → 回调可能 enqueue 更多 timer
-/// → 下一轮再 drain。`ctx.eval` 不返回值我们也不关心（setTimeout
-/// 回调的副作用在 DOM 上，不在返回值）。
+/// M16.4: 每轮 tick 先 `ctx.run_jobs()`（执行 Promise then 回调 microtask），
+/// 再 drain 到期 timer。两者交叉驱动，直到都 idle。
+/// `ctx.eval` 不返回值我们也不关心（回调的副作用在 DOM 上，不在返回值）。
 fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
     let mut invoked = 0;
     for _ in 0..MAX_TICKS {
+        // M16.4: 先执行 Promise microtask（then 回调）。可能 schedule 新 timer。
+        ctx.run_jobs();
         let due = crate::bridge::drain_due_timer_callbacks();
         if due.is_empty() {
             break;
