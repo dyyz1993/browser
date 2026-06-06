@@ -1,112 +1,127 @@
 //! Inline layout: word-wrap text within a containing width.
 //!
-//! M2.6 scope: given an anonymous block's inline children, assign
-//! each text box a starting (x, y) and a height based on how many
-//! wrapped lines the text occupies. The actual character placement
-//! happens later in the renderer (`render::ascii`).
+//! M2.6+M2.9 scope: assign (x, y) and height to every inline box
+//! (text leaves) so the renderer can place characters.
 //!
-//! Wrapping rule (greedy, per-box):
+//! Wrapping rule (greedy):
 //! - Split text on whitespace into words.
-//! - Walk words left to right; emit a space before each word except
-//!   the first one on a line. If the next word + its leading space
-//!   does not fit, push it to a new line.
-//! - A single word longer than the line still gets placed (overflowing);
-//!   we don't break inside words in M2.
+//! - Pack words left to right on the current line. Each non-first
+//!   word consumes 1 column for a leading space.
+//! - If the next word + leading space doesn't fit, wrap to next line.
+//! - A single word longer than the line still gets placed (overflowing).
 
 use crate::boxes::{BoxType, LayoutBox};
 
-/// Lay out a sequence of inline boxes belonging to one anonymous block.
+/// Lay out a sequence of top-level boxes belonging to one anonymous block.
 ///
-/// Mutates each box's `dimensions`:
-/// - `x`, `y`: position of the first character of the box's text
-/// - `width`: `containing_width` (the box's allocated row width)
-/// - `height`: number of lines this box's text occupies (>= 1 if non-empty)
-///
-/// Returns the total number of lines consumed by the run.
+/// Mutates inline leaf boxes' `dimensions`. Returns total height
+/// consumed (in lines).
 pub fn layout_inline_run(
     boxes: &mut [LayoutBox],
     x_start: f32,
     y_start: f32,
     containing_width: f32,
 ) -> f32 {
-    let mut cursor_x = x_start;
-    let mut cursor_y = y_start;
-
+    let mut state = LayoutState::new(x_start, y_start, containing_width);
     for bx in boxes.iter_mut() {
-        // Anonymous wrappers inside an inline run (rare in M2 but
-        // possible) — recurse.
-        if bx.box_type == BoxType::Anonymous {
-            let h = layout_inline_run(&mut bx.children, cursor_x, cursor_y, containing_width);
-            bx.dimensions.x = x_start;
-            bx.dimensions.y = cursor_y;
-            bx.dimensions.width = containing_width;
-            bx.dimensions.height = h;
-            cursor_y += h;
-            cursor_x = x_start;
-            continue;
+        layout_box_recursive(bx, &mut state);
+    }
+    if state.cursor_x == x_start && state.cursor_y == y_start {
+        0.0
+    } else {
+        state.cursor_y - y_start + 1.0
+    }
+}
+
+struct LayoutState {
+    x_start: f32,
+    cursor_x: f32,
+    cursor_y: f32,
+    width: f32,
+}
+
+impl LayoutState {
+    fn new(x_start: f32, y_start: f32, width: f32) -> Self {
+        Self {
+            x_start,
+            cursor_x: x_start,
+            cursor_y: y_start,
+            width,
         }
-
-        let Some(text) = bx.text.clone() else {
-            // Inline element without direct text (e.g. <span><b>…</b></span>).
-            // Recurse into its children at the current cursor.
-            let h = layout_inline_run(&mut bx.children, cursor_x, cursor_y, containing_width);
-            bx.dimensions.x = cursor_x;
-            bx.dimensions.y = cursor_y;
-            bx.dimensions.width = containing_width - (cursor_x - x_start);
-            bx.dimensions.height = h;
-            cursor_y += h;
-            cursor_x = x_start;
-            continue;
-        };
-
-        let words: Vec<&str> = text.split_whitespace().collect();
-        if words.is_empty() {
-            bx.dimensions.x = cursor_x;
-            bx.dimensions.y = cursor_y;
-            bx.dimensions.width = 0.0;
-            bx.dimensions.height = 0.0;
-            continue;
-        }
-
-        let box_start_y = cursor_y;
-        let mut line_start_x = cursor_x;
-
-        for (i, word) in words.iter().enumerate() {
-            let word_cols = word.chars().count() as f32;
-            // First word on a fresh line: no leading space. Otherwise: 1 col.
-            let needed = if cursor_x == line_start_x {
-                word_cols
-            } else {
-                1.0 + word_cols
-            };
-            let available = (x_start + containing_width) - cursor_x;
-            if needed > available && cursor_x > line_start_x {
-                // Wrap.
-                cursor_y += 1.0;
-                cursor_x = x_start;
-                line_start_x = x_start;
-            }
-            if cursor_x > line_start_x {
-                cursor_x += 1.0; // leading space
-            }
-            // If this is the FIRST word of the box, freeze the box's (x, y).
-            if i == 0 {
-                bx.dimensions.x = cursor_x;
-                bx.dimensions.y = cursor_y;
-            }
-            cursor_x += word_cols;
-        }
-
-        // Box height = number of lines it spanned (>= 1).
-        let lines_used = (cursor_y - box_start_y).round() as i32 + 1;
-        bx.dimensions.height = lines_used.max(1) as f32;
-        bx.dimensions.width = containing_width;
-        // Advance to next line for the next sibling box.
-        cursor_y += 1.0;
-        cursor_x = x_start;
     }
 
-    (cursor_y - y_start).max(0.0)
+    /// Place one word. Returns (start_x, start_y) of the word's first
+    /// character — useful for the caller to record where its text
+    /// actually begins.
+    fn place_word(&mut self, word: &str) -> (f32, f32) {
+        let word_cols = word.chars().count() as f32;
+        let on_line_start = self.cursor_x == self.x_start;
+        let needed = if on_line_start {
+            word_cols
+        } else {
+            1.0 + word_cols
+        };
+        let available = self.x_start + self.width - self.cursor_x;
+        if !on_line_start && needed > available {
+            self.cursor_y += 1.0;
+            self.cursor_x = self.x_start;
+        }
+        if self.cursor_x > self.x_start {
+            self.cursor_x += 1.0; // leading space
+        }
+        let start_x = self.cursor_x;
+        let start_y = self.cursor_y;
+        self.cursor_x += word_cols;
+        (start_x, start_y)
+    }
+}
+
+fn layout_box_recursive(bx: &mut LayoutBox, state: &mut LayoutState) {
+    if bx.box_type == BoxType::Anonymous {
+        bx.dimensions.x = state.x_start;
+        bx.dimensions.y = state.cursor_y;
+        for child in bx.children.iter_mut() {
+            layout_box_recursive(child, state);
+        }
+        bx.dimensions.height = (state.cursor_y - bx.dimensions.y).max(0.0) + 1.0;
+        state.cursor_y += 1.0;
+        state.cursor_x = state.x_start;
+        return;
+    }
+
+    // Inline box (with or without direct text).
+    bx.dimensions.x = state.cursor_x;
+    bx.dimensions.y = state.cursor_y;
+
+    if let Some(text) = bx.text.clone() {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.is_empty() {
+            bx.dimensions.height = 0.0;
+            bx.dimensions.width = 0.0;
+            return;
+        }
+        let start_y = state.cursor_y;
+        let mut first_word = true;
+        for word in &words {
+            let (sx, sy) = state.place_word(word);
+            if first_word {
+                // Record where the text actually begins (after any
+                // leading space inserted by place_word).
+                bx.dimensions.x = sx;
+                bx.dimensions.y = sy;
+                first_word = false;
+            }
+        }
+        bx.dimensions.height = (state.cursor_y - start_y).round() + 1.0;
+        bx.dimensions.width = (state.cursor_x - bx.dimensions.x).max(0.0);
+    } else {
+        // Inline wrapper (e.g. <span>, <a>): recurse; its dimensions
+        // span the bounding box of its children.
+        for child in bx.children.iter_mut() {
+            layout_box_recursive(child, state);
+        }
+        bx.dimensions.height = (state.cursor_y - bx.dimensions.y).max(0.0) + 1.0;
+    }
 }
 
 #[cfg(test)]
@@ -118,21 +133,23 @@ mod tests {
         LayoutBox::new(BoxType::Inline).with_text(s.into())
     }
 
+    fn inline_wrap(children: Vec<LayoutBox>) -> LayoutBox {
+        let mut b = LayoutBox::new(BoxType::Inline);
+        b.children = children;
+        b
+    }
+
     #[test]
     fn short_text_fits_on_one_line() {
         let mut boxes = vec![inline_text("hello")];
         let h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
-        // Single non-empty box consumes 1 line for itself + 1 line advance
-        // for sibling separation = 1.0 in this implementation.
-        assert!(h >= 1.0, "h={h}");
+        assert!(h >= 1.0);
         assert_eq!(boxes[0].dimensions.x, 0.0);
         assert_eq!(boxes[0].dimensions.y, 0.0);
-        assert_eq!(boxes[0].dimensions.height, 1.0);
     }
 
     #[test]
     fn long_text_wraps_to_multiple_lines() {
-        // 80-col width; 200 chars should wrap to >= 3 lines.
         let long_text = "word ".repeat(50);
         let mut boxes = vec![inline_text(long_text.trim())];
         let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
@@ -146,45 +163,57 @@ mod tests {
     #[test]
     fn empty_text_has_zero_height() {
         let mut boxes = vec![inline_text("")];
-        let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
+        let h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
+        assert_eq!(h, 0.0);
         assert_eq!(boxes[0].dimensions.height, 0.0);
     }
 
     #[test]
-    fn whitespace_only_text_treated_as_empty() {
-        let mut boxes = vec![inline_text("   \t\n  ")];
+    fn two_short_boxes_share_line_with_space_between() {
+        let mut boxes = vec![inline_text("alpha"), inline_text("beta")];
         let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
-        assert_eq!(boxes[0].dimensions.height, 0.0);
-    }
-
-    #[test]
-    fn two_short_boxes_stack_vertically() {
-        let mut boxes = vec![inline_text("a"), inline_text("b")];
-        let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
-        assert_eq!(boxes[0].dimensions.y, 0.0);
-        assert_eq!(boxes[1].dimensions.y, 1.0);
-    }
-
-    #[test]
-    fn narrow_width_forces_wrap_on_long_word_no_break() {
-        // A single long word "supercalifragilistic" (20 chars) in a
-        // 5-col line: we don't break inside words, so it occupies 1
-        // line and overflows. Height = 1.
-        let mut boxes = vec![inline_text("supercalifragilistic")];
-        let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 5.0);
-        assert_eq!(boxes[0].dimensions.height, 1.0);
+        // alpha at (0, 0), beta at (6, 0) (alpha=5 chars + leading space).
         assert_eq!(boxes[0].dimensions.x, 0.0);
+        assert_eq!(boxes[1].dimensions.x, 6.0);
+        assert_eq!(boxes[0].dimensions.y, boxes[1].dimensions.y);
     }
 
     #[test]
-    fn multiple_words_split_across_lines() {
-        // Width 10, text = "aaa bbb ccc ddd" (each word 3 chars + 1 space).
-        // Expected layout:
-        //   line 0: "aaa bbb ccc" (3+1+3+1+3 = 11... actually 11 > 10)
-        // We're greedy: "aaa bbb ccc" needs 11 chars, so "ccc" wraps.
-        // Line 0: "aaa bbb" (7 chars)
-        // Line 1: "ccc ddd" (7 chars)
-        // → 2 lines.
+    fn inline_wrapper_recurse_into_text_child() {
+        // <span><a>text</a></span>
+        let text = inline_text("inside wrapper");
+        let a = inline_wrap(vec![text]);
+        let span = inline_wrap(vec![a]);
+        let mut boxes = vec![span];
+        let h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
+        assert!(h >= 1.0);
+        let span_b = &boxes[0];
+        let a_b = &span_b.children[0];
+        let text_b = &a_b.children[0];
+        assert_eq!(text_b.dimensions.x, 0.0);
+        assert_eq!(text_b.dimensions.y, 0.0);
+        assert!(text_b.dimensions.height >= 1.0);
+    }
+
+    #[test]
+    fn mixed_text_and_wrapper_in_order() {
+        // Inline run: [text "A"], [wrap > text "B"], [text "C"]
+        let a = inline_text("A");
+        let wrap = inline_wrap(vec![inline_text("B")]);
+        let c = inline_text("C");
+        let mut boxes = vec![a, wrap, c];
+        let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
+        // Order on line: A (x=0), B (x=2: A=1 + space), C (x=4: B=1 + space).
+        assert_eq!(boxes[0].dimensions.x, 0.0); // A
+        let wrap_b = &boxes[1];
+        let inner_b = &wrap_b.children[0];
+        assert_eq!(inner_b.dimensions.x, 2.0); // B
+        assert_eq!(boxes[2].dimensions.x, 4.0); // C
+        assert_eq!(boxes[0].dimensions.y, boxes[2].dimensions.y);
+    }
+
+    #[test]
+    fn narrow_width_forces_wrap() {
         let mut boxes = vec![inline_text("aaa bbb ccc ddd")];
         let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 10.0);
         assert_eq!(
@@ -192,5 +221,12 @@ mod tests {
             "expected 2 lines for 4 short words in 10 cols, got {}",
             boxes[0].dimensions.height
         );
+    }
+
+    #[test]
+    fn whitespace_only_text_treated_as_empty() {
+        let mut boxes = vec![inline_text("   \t  ")];
+        let h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
+        assert_eq!(h, 0.0);
     }
 }
