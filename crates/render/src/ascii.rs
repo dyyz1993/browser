@@ -45,7 +45,27 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
     // anonymous boxes are positioning containers; recurse into their
     // children.
     if bx.box_type == BoxType::Inline {
-        if let Some(text) = &bx.text {
+        // Prefer laid-out `words` (M6.0a fix) when present — this is
+        // what the inline word-wrap pass produced and accurately
+        // reflects where each wrapped word starts. The old code
+        // painted characters from `bx.dimensions.x` linearly, which
+        // ignored line wraps and produced truncation artifacts.
+        if !bx.words.is_empty() {
+            for (word, sx, sy) in &bx.words {
+                let mut x = sx.round() as usize;
+                let y = sy.round() as usize;
+                for ch in word.chars() {
+                    if ch == '\n' || ch == '\r' {
+                        continue;
+                    }
+                    buf.put(y, x, ch);
+                    x += 1;
+                }
+            }
+        } else if let Some(text) = &bx.text {
+            // Fallback for inline boxes whose layout didn't go through
+            // word-wrap (e.g. directly constructed LayoutBoxes in
+            // tests). Same behavior as before M6.0a.
             let mut x = bx.dimensions.x.round() as usize;
             let y = bx.dimensions.y.round() as usize;
             for ch in text.chars() {
@@ -53,8 +73,6 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
                     continue;
                 }
                 if ch.is_whitespace() {
-                    // Use a space char so adjacent words stay separated
-                    // in the rendered output.
                     buf.put(y, x, ' ');
                     x += 1;
                 } else {

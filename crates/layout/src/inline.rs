@@ -98,18 +98,18 @@ fn layout_box_recursive(bx: &mut LayoutBox, state: &mut LayoutState) {
         if words.is_empty() {
             bx.dimensions.height = 0.0;
             bx.dimensions.width = 0.0;
+            bx.words.clear();
             return;
         }
+        bx.words.clear();
+        bx.words.reserve(words.len());
         let start_y = state.cursor_y;
-        let mut first_word = true;
-        for word in &words {
+        for (i, word) in words.iter().enumerate() {
             let (sx, sy) = state.place_word(word);
-            if first_word {
-                // Record where the text actually begins (after any
-                // leading space inserted by place_word).
+            bx.words.push(((*word).to_string(), sx, sy));
+            if i == 0 {
                 bx.dimensions.x = sx;
                 bx.dimensions.y = sy;
-                first_word = false;
             }
         }
         bx.dimensions.height = (state.cursor_y - start_y).round() + 1.0;

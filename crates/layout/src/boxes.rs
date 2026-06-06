@@ -70,6 +70,12 @@ pub struct LayoutBox {
     pub element_id: Option<NodeId>,
     /// Text content if this is a text-bearing inline box.
     pub text: Option<String>,
+    /// Laid-out words from the inline word-wrap pass. Each tuple is
+    /// `(word, x_in_cells, y_in_lines)`. Empty for non-text boxes and
+    /// for text boxes whose `text` was all whitespace. The renderer
+    /// uses this when present (it's more accurate than `text`+`x/y`
+    /// because it knows where each wrapped word actually starts).
+    pub words: Vec<(String, f32, f32)>,
     pub children: Vec<LayoutBox>,
 }
 
@@ -81,6 +87,7 @@ impl LayoutBox {
             dimensions: Dimensions::default(),
             element_id: None,
             text: None,
+            words: Vec::new(),
             children: Vec::new(),
         }
     }
