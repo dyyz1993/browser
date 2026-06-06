@@ -88,7 +88,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // M7.4.1: real font file needed
     fn draw_text_draws_at_least_one_pixel() {
         let mut drawn = false;
         draw_text(0, 0, 1, "A", |_, _| drawn = true);
