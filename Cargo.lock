@@ -425,6 +425,7 @@ dependencies = [
  "boa_engine",
  "browser-cookie",
  "browser-dom",
+ "browser-eventloop",
  "browser-html-parser",
  "browser-navigation",
  "browser-net",

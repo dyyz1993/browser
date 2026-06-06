@@ -25,6 +25,13 @@ impl TimerId {
     pub const fn raw(self) -> u64 {
         self.0
     }
+
+    /// 从原始 `u64` 重建 `TimerId`（JS 桥跨边界传递后还原）。
+    /// M16.2: `setTimeout` 返回 number 给 JS，`clearTimeout` 接收 number 后还原。
+    #[must_use]
+    pub const fn from_raw(n: u64) -> Self {
+        Self(n)
+    }
 }
 
 /// 单个 timer 记录：到期时刻 + 注册序号（FIFO 稳定排序用）。

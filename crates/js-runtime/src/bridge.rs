@@ -19,9 +19,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use boa_engine::{Context, JsArgs, JsResult, JsValue, NativeFunction};
+use boa_engine::{object::JsObject, Context, JsArgs, JsResult, JsValue, NativeFunction};
 use browser_cookie::CookieHandle;
 use browser_dom::{Node, NodeData, NodeId, Tree};
+use browser_eventloop::{TimerId, TimerWheel};
 use browser_navigation::NavigationHandle;
 use browser_storage::StorageHandle;
 
@@ -37,6 +38,10 @@ thread_local! {
     static CURRENT_NAV: RefCell<Option<NavigationHandle>> = const { RefCell::new(None) };
     // M15.3: cookie jar backend.
     static CURRENT_COOKIE: RefCell<Option<CookieHandle>> = const { RefCell::new(None) };
+    // M16.2: setTimeout 后端。wheel 存时间+id，callbacks 存 JsObject（boa GC 保活）。
+    static TIMER_WHEEL: RefCell<Option<TimerWheel>> = const { RefCell::new(None) };
+    static TIMER_CALLBACKS: RefCell<Option<std::collections::HashMap<TimerId, JsObject>>> =
+        const { RefCell::new(None) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -59,6 +64,13 @@ impl Drop for TreeGuard {
             *slot.borrow_mut() = None;
         });
         CURRENT_COOKIE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        // M16.2: 清理 timer slots（防止上一次 run_scripts 的 timer 残留）。
+        TIMER_WHEEL.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        TIMER_CALLBACKS.with(|slot| {
             *slot.borrow_mut() = None;
         });
     }
@@ -194,6 +206,12 @@ pub fn install(ctx: &mut Context) {
     );
     register_fn1(ctx, "__locationAssign", location_assign_bridge as NativeFn);
     register_fn0(ctx, "__locationParts", location_parts_bridge as NativeFn);
+    // M16.2: setTimeout / clearTimeout bridges.
+    // __setTimeout: 内部名（统一 __* 约定）；setTimeout: Web 标准全局名（JS 直接用）。
+    register_fn2(ctx, "__setTimeout", set_timeout_bridge as NativeFn);
+    register_fn1(ctx, "__clearTimeout", clear_timeout_bridge as NativeFn);
+    register_fn2(ctx, "setTimeout", set_timeout_bridge as NativeFn);
+    register_fn1(ctx, "clearTimeout", clear_timeout_bridge as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -859,6 +877,108 @@ pub fn current_cookie_jar() -> Option<CookieHandle> {
     CURRENT_COOKIE.with(|slot| slot.borrow().as_ref().map(Clone::clone))
 }
 
+// ===== M16.2: setTimeout / clearTimeout event loop 后端 =====
+
+/// Ensure a timer wheel + callback map exist on the current thread.
+/// Idempotent: reuses if already installed (e.g. across run_scripts calls).
+/// (M16.2)
+fn ensure_eventloop() {
+    TIMER_WHEEL.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(TimerWheel::new());
+        }
+    });
+    TIMER_CALLBACKS.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(std::collections::HashMap::new());
+        }
+    });
+}
+
+/// `__setTimeout(callback: Function, delay: number) -> number`
+/// 注册一个 timer，返回 id 给 JS。callback 在到期时由 event loop 调用。
+fn set_timeout_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    // 1. 提取 callback（必须是 callable object）。clone 成 owned（JsObject 是 GC 引用计数）。
+    let callback = match args.first().and_then(|v| v.as_object()) {
+        Some(obj) if obj.is_callable() => obj.clone(),
+        _ => return Ok(JsValue::undefined()),
+    };
+    // 2. 提取 delay（毫秒，number；默认 0）
+    let delay_ms = args
+        .get(1)
+        .and_then(|v| v.as_number())
+        .map(|n| if n < 0.0 { 0u64 } else { n as u64 })
+        .unwrap_or(0);
+    ensure_eventloop();
+    let id = TIMER_WHEEL.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let wheel = slot.as_mut().expect("wheel ensured above");
+        wheel.schedule(delay_ms, std::time::Instant::now())
+    });
+    TIMER_CALLBACKS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cbs = slot.as_mut().expect("callbacks ensured above");
+        cbs.insert(id, callback);
+    });
+    Ok(JsValue::new(id.raw() as f64))
+}
+
+/// `__clearTimeout(id: number) -> undefined`
+/// 取消一个 timer。不存在的 id 安全调用（幂等）。
+fn clear_timeout_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id_raw = match args.first().and_then(|v| v.as_number()) {
+        Some(n) => n as u64,
+        None => return Ok(JsValue::undefined()),
+    };
+    let id = TimerId::from_raw(id_raw);
+    TIMER_WHEEL.with(|slot| {
+        if let Some(wheel) = slot.borrow_mut().as_mut() {
+            wheel.cancel(id);
+        }
+    });
+    TIMER_CALLBACKS.with(|slot| {
+        if let Some(cbs) = slot.borrow_mut().as_mut() {
+            cbs.remove(&id);
+        }
+    });
+    Ok(JsValue::undefined())
+}
+
+/// Drain all due timer callbacks, returning them in FIFO order. (M16.2)
+/// Event loop（run_scripts_with_base 的收尾循环）调用此函数，拿到到期
+/// 的 JsObject 列表，逐个 `.call(&JsValue::undefined(), ctx)` 执行。
+///
+/// Returns `Vec<JsObject>`（空的 vec 表示没有到期 timer）。
+pub fn drain_due_timer_callbacks() -> Vec<JsObject> {
+    let due_ids = TIMER_WHEEL.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .map(|w| w.drain_due(std::time::Instant::now()))
+            .unwrap_or_default()
+    });
+    let mut callbacks = Vec::with_capacity(due_ids.len());
+    TIMER_CALLBACKS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(cbs) = slot.as_mut() {
+            for id in due_ids {
+                if let Some(cb) = cbs.remove(&id) {
+                    callbacks.push(cb);
+                }
+            }
+        }
+    });
+    callbacks
+}
+
+/// Pending timer count（M18 networkidle 信号源）。0 = idle。
+pub fn pending_timers() -> usize {
+    TIMER_WHEEL.with(|slot| slot.borrow().as_ref().map(|w| w.pending()).unwrap_or(0))
+}
+
 fn history_push_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let state = arg_string(args, 0);
     let url = arg_string(args, 2).unwrap_or_default();
@@ -1059,16 +1179,11 @@ mod tests {
     }
 }
 
-// M7.3.1 (deferred): synchronous setTimeout / queueMicrotask bridges.
-//
-// boa 0.20 的 JsObject::call 是私有 API，需要用 JobQueue /
-// NativeObject 跨边界，复杂度远超爬虫 MVP 价值。完整实现推迟到
-// 产品化阶段（切到 deno_core / V8 后，async/await 一等公民，
-// setTimeout/promise 由 V8 本身提供）。
-//
-// 当前 SPA 爬虫场景：JS 中 setTimeout(fn, 0) 会抛 ReferenceError，
-// 但只要 SPA 在主 JS 流中完成 DOM 操作（如 spa-blog.html 那样调
-// __setBody），爬虫就能正确渲染。
+// M16.2 (done): setTimeout / clearTimeout 已实现，见上面的
+// set_timeout_bridge / clear_timeout_bridge + drain_due_timer_callbacks。
+// 决策见 docs/decisions/0002-boa-settimeout-vs-deno-core.md（推翻了
+// M7.3 当初的 defer 理由——boa 0.20 的 NativeFunction::call /
+// JsFunction::call 其实都是 pub）。event loop 接入在 M16.3 完成。
 
 #[cfg(test)]
 mod fetch_tests {
