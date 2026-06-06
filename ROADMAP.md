@@ -10,8 +10,9 @@
 | M1 | ✅ | 能看到 HTML（curl + parse + 打印 DOM） | 2 周 |
 | M2 | ✅ | 文本流渲染（HN fixture 能看出标题列表） | 3 周 |
 | M3 | ✅ | JS 执行（动态创建的元素能进 DOM） | 4 周 |
-| M4 | ⚪ | SPA 渲染（React/Vue 应用可爬） | 5 周 |
-| M5 | ⚪ | GUI 窗口（跨平台开窗浏览） | 持续 |
+| M4 | ✅ | SPA 渲染（React/Vue 应用可爬） | 5 周 |
+| M5 | ✅ | GUI 窗口（跨平台开窗浏览） | 持续 |
+| M6 | ✅ | 渲染质量修复 + 黄金对比 + 跨平台 CI | 1 天 |
 
 ---
 
@@ -77,6 +78,61 @@ cargo run -p browser-cli -- render-script tests/fixtures/spa-blog.html --width 1
 
 ---
 
-## M4 — SPA 渲染（待细化）
+## M4 — SPA 渲染 ✅
 
-## M5 — GUI 窗口（持续）
+**完成日期：** 2026-06-06
+
+| Step | 状态 | Commit |
+|------|------|--------|
+| M4.1 | ✅ | `feat(cli): render-url subcommand + suppress script/style/noscript/template` |
+| M4.2 | ✅ | `feat(js-runtime): sync __fetchSetBody / __fetchAppendBody bridges` |
+| M4.3 | ✅ | `test(cli): SPA-style page e2e with partial-failure tolerance` |
+| M4.4 | ✅ | `feat(js-runtime): RFC 3986 relative URL resolution` |
+| M4.5 | ✅ | `docs: M4 complete (project goal met), postmortem added` |
+
+**最终验收：** 160 passed, 0 failed。`render-url https://example.com/` 输出可读。
+**项目目标（SPA 可爬）达成。** 复盘见 `docs/postmortems/M4.md`。
+
+---
+
+## M5 — GUI 窗口（基础完成）✅
+
+**完成日期：** 2026-06-06
+
+| Step | 状态 | Commit |
+|------|------|--------|
+| M5.1 | ✅ | `feat(gui): winit + softbuffer + hand-written 5x7 bitmap font` |
+| M5.2 | ✅ | `feat(cli): browser open <url> subcommand wires SPA pipeline to GUI` |
+| M5.3 | ✅ | `test(cli): open subcommand e2e + --check headless flag` |
+| M5.4 | ✅ | `docs: M5 basic GUI complete, postmortem added` |
+
+**最终验收：** 179 passed, 0 failed。`open <url> --check` 无显示器可跑；`open <url>` 弹 winit 窗口。
+复盘见 `docs/postmortems/M5.md`。
+
+---
+
+## M6 — 渲染质量修复 + 黄金对比 + 跨平台 CI ✅
+
+**完成日期：** 2026-06-06
+
+| Step | 状态 | Commit |
+|------|------|--------|
+| M6.0a | ✅ | `fix(layout): word-wrap actually wraps in renderer` (`9c81957`) |
+| M6.0b | ✅ | `fix(layout): suppress <head> subtree` (`a43a1b0`) |
+| M6.0c | ✅ | `feat(layout): paragraph spacing + <li> bullet prefix` (`c23e7e2`) |
+| M6.0d | ✅ | `test(snapshots): Safari vs ours comparison script + artifacts` (`fe24c69`) |
+| M6.1  | ✅ | `test(cli): snapshot tests pinning M6.0a/b/c render output` (`96af6d6`) |
+| M6.2  | ✅ | `ci: install Linux GUI deps + drop unused tiny-skia dep` (`04edd00`) |
+| M6.3  | ✅ | `docs: M6 layout fixes + snapshot net complete, postmortem added` |
+
+**最终验收：**
+```
+cargo test --workspace        → 183 passed, 0 failed
+cargo clippy -- -D warnings   → 0 warnings
+python3 tests/snapshots/compare.py
+  → 6 个对比素材，Preview 弹出
+UPDATE_SNAPSHOTS=1 cargo test -p browser-cli --test integration_snapshot
+  → 重生成黄金对比（M6.0a/b/c 修复自动 pin 住）
+```
+
+复盘见 `docs/postmortems/M6.md`。
