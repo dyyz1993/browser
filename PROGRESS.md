@@ -11,10 +11,10 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `097fd4a`（M14.4 navigation e2e） |
-| 总 commits | 102 |
-| 测试 | 265 passed, 0 clippy warnings |
-| Crates | 12 |
+| HEAD | `cef0d02`（M15.5 cookie e2e） |
+| 总 commits | 108 |
+| 测试 | 291 passed, 0 clippy warnings |
+| Crates | 13 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
 | 截图 G2 | ✅ 达成（M12.1） |
@@ -36,6 +36,17 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M15 — Cookie jar（跨请求会话保持）✅
+- M15.1 ✅ browser-cookie crate（RFC 6265 子集，21 tests）
+- M15.2 ✅ net::get_with_headers（带 Cookie 头 + 返回 Set-Cookie）
+- M15.3 ✅ JS fetch_sync 接入 jar（主线程读写，新线程传 String）
+- M15.4 ✅ cli get/render-url/open 主请求共享 jar（fetch_with_jar）
+- M15.5 ✅ e2e（cookie jar 跨请求会话保持，2 tests）
+
+SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → JS fetch 带上。
+
+---
 
 ### M14 — Navigation（history / location）✅
 - M14.1 ✅ browser-navigation crate（HistoryStack + Location 解析，11 tests）
