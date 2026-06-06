@@ -74,6 +74,9 @@ enum Cmd {
         /// Skip <script> execution (render only the static HTML).
         #[arg(long)]
         no_js: bool,
+        /// M12.1: write rendered ASCII as a PNG screenshot to this path.
+        #[arg(long)]
+        screenshot: Option<PathBuf>,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
@@ -157,14 +160,25 @@ async fn run() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::RenderUrl { url, width, no_js } => {
+        Cmd::RenderUrl {
+            url,
+            width,
+            no_js,
+            screenshot,
+        } => {
             let bytes = get(&url)
                 .await
                 .with_context(|| format!("failed to fetch {url}"))?;
             let html = String::from_utf8(bytes)
                 .map_err(|e| anyhow!("response is not valid UTF-8: {e}"))?;
             let base = if no_js { None } else { Some(url.clone()) };
-            render_html_to_stdout(&html, width, !no_js, base)?;
+            let text = render_html_to_string(&html, width, !no_js, base)?;
+            print!("{text}");
+            if let Some(p) = screenshot {
+                screenshot::render_text_to_png(&text, &p)
+                    .map_err(|e| anyhow!("screenshot failed: {e}"))?;
+                eprintln!("[screenshot] wrote {}", p.display());
+            }
             Ok(())
         }
         Cmd::Open {
@@ -202,17 +216,6 @@ async fn run() -> Result<()> {
 }
 
 /// Shared render pipeline — prints ASCII to stdout.
-fn render_html_to_stdout(
-    html: &str,
-    width: usize,
-    run_js: bool,
-    base_url: Option<String>,
-) -> Result<()> {
-    let out = render_html_to_string(html, width, run_js, base_url)?;
-    print!("{out}");
-    Ok(())
-}
-
 /// Shared render pipeline — returns ASCII text. Used by `render-*` (prints)
 /// and `open` (passes to GUI window).
 fn render_html_to_string(
