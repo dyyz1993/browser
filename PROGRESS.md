@@ -1,7 +1,7 @@
 # 自研浏览器项目 — 全程进度大纲
 
-> 执行状态：**M0-M9 完成**，M10.1 进行中
-> 当前 HEAD: 75640ee
+> 执行状态：**M0-M9 完成**，M10.1 完成，M10.2 进行中
+> 当前 HEAD: 05e3f9f (M10.1 完成)
 > Workspace: 217 tests, 0 clippy warnings
 
 ---
@@ -39,7 +39,7 @@
 | M7 | ✅ | 23 commits | 217 | 渲染质量 + 交互 |
 | M8 | ✅ | 4 commits | 217 | 表单交互 |
 | M9 | ✅ | 3 commits | 217 | 图片占位符渲染 |
-| M10 | 🟡 | 进行中 | — | 性能优化（layout 缓存 + 增量渲染） |
+| M10 | 🟡 | 2 commits | — | 性能优化（M10.1 完成，M10.2 进行中） |
 
 ---
 
@@ -71,22 +71,24 @@
 
 ---
 
-## M10 — 性能优化 🟡 (进行中)
+## M10 — 性能优化 🟡 (2 commits)
 
-**目标**：layout 缓存 + 增量渲染
+**M10.1** ✅ (05e3f9f): LayoutCache 实现
+- `get_or_compute(tree, styles)` → &LayoutTree（缓存）
+- 3 个单元测试（命中/增长/清除）
 
-**子任务**：
-- M10.1: layout 缓存实现（进行中）
-- M10.2: dirty tracking
-- M10.3: 增量渲染
-- M10.4: e2e 测试
+**M10.2** 🟡 (进行中): Dirty tracking
+- 标记 dirty 元素（DOM 变化后）
+
+**M10.3**: 增量渲染
+**M10.4**: e2e 测试
 
 ---
 
 ## 下一步
 
-**当前执行**：M10.1（layout 缓存）
-**下一个**：M10.2（dirty tracking）
+**当前执行**：M10.2（dirty tracking）
+**下一个**：M10.3（增量渲染）
 
 ---
 
