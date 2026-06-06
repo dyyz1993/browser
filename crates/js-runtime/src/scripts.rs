@@ -101,6 +101,13 @@ pub fn run_scripts_with_base(
     let storage = browser_storage::new_storage();
     crate::bridge::install_storage(storage);
     let _ = crate::storage_shim::install_storage_globals(&mut ctx);
+    // M14.3: 安装 history / location 后端 + JS 对象（初始 URL = base_url）
+    let initial_url = base_url
+        .clone()
+        .unwrap_or_else(|| "about:blank".to_string());
+    let nav = browser_navigation::new_navigation(&initial_url);
+    crate::bridge::install_navigation(nav);
+    let _ = crate::navigation_shim::install_navigation_globals(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }

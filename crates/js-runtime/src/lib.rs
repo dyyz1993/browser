@@ -7,14 +7,16 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+pub mod navigation_shim;
 pub mod runtime;
 pub mod scripts;
 pub mod storage_shim;
 
 pub use bridge::{
-    current_base_url, install as install_bridge, install_current, install_shared,
-    install_shared_with_base, install_storage, resolve_url, SharedTree, TreeGuard,
+    current_base_url, install as install_bridge, install_current, install_navigation,
+    install_shared, install_shared_with_base, install_storage, resolve_url, SharedTree, TreeGuard,
 };
+pub use navigation_shim::install_navigation_globals;
 pub use runtime::JsRuntime;
 pub use scripts::{
     execute_scripts, execute_scripts_with_base, extract_scripts, run_scripts, run_scripts_with_base,
