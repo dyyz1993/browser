@@ -1,0 +1,8 @@
+[package]
+name = "browser-storage"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+name = "browser_storage"
+path = "src/lib.rs"

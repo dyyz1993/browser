@@ -454,6 +454,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-storage"
+version = "0.0.1"
+
+[[package]]
 name = "bstr"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
