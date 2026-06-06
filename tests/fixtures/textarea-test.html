@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Textarea Test</title>
+</head>
+<body>
+<textarea id="ta">Initial value</textarea>
+<script>
+(function() {
+  var ta = __getElById("ta");
+  __getValue(ta); // Should log "Initial value"
+  __setValue(ta, "Updated value");
+  __getValue(ta); // Should log "Updated value"
+})();
+</script>
+</body>
+</html>

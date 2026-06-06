@@ -149,6 +149,10 @@ pub fn install(ctx: &mut Context) {
     // M8.1: form value bridges.
     register_fn1(ctx, "__getValue", get_value as NativeFn);
     register_fn2(ctx, "__setValue", set_value as NativeFn);
+    // M8.3: button click bridge.
+    register_fn1(ctx, "__click", click as NativeFn);
+    // M8.4: form submit bridge.
+    register_fn1(ctx, "__submit", submit as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -608,6 +612,18 @@ fn set_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<
     };
     let value = arg_string(args, 1).unwrap_or_default();
     with_tree(|t| set_attr_inner(t, id, "value", &value));
+    Ok(JsValue::undefined())
+}
+
+// M8.3: button click bridge.
+fn click(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    // TODO: execute onclick handler when JS execution engine supports it.
+    // For M8.3, just log.
+    eprintln!("[dom-click] #{id}");
     Ok(JsValue::undefined())
 }
 
