@@ -122,16 +122,66 @@ cargo test --workspace
 
 ---
 
-## M2 — 文本流渲染（3 周，待 M1.7 后细化）
+## M2 — 文本流渲染（3 周）
 
-**最终验收：** 渲染 Hacker News 首页，stdout 肉眼可识别 30 条新闻标题
+**最终验收：** 渲染 Hacker News 首页（fixture 快照），stdout 肉眼可识别 30 条新闻标题
 
-框架：
-- M2.1 css-engine：cssparser 封装
-- M2.2 选择器引擎：tag/.class/#id
-- M2.3 布局引擎 v1：block/inline/inline-block（明确放弃 grid/float/table/动画）
-- M2.4 文本测量 + 折行（swash）
-- M2.5 终端 ASCII 渲染器
+### Step M2.1 — css-engine：CSS 解析（cssparser 封装）
+- **产出：** `crates/css-engine/src/{lib.rs, parser.rs}`
+- **API：** `pub fn parse(css: &str) -> Stylesheet`，`Stylesheet{rules}`，`Rule{selectors, declarations}`，`Declaration{property, value, important}`
+- **依赖：** cssparser
+- **验收：** `cargo test -p browser-css-engine`（含 4+ fixture 测试）
+- **Commit：** `feat(css-engine): wrap cssparser for stylesheets and declarations`
+
+### Step M2.2 — css-engine：选择器引擎（tag/.class/#id）
+- **产出：** `crates/css-engine/src/selector.rs`
+- **API：** `pub fn matches(selector: &Selector, elem_data: &NodeData) -> bool`，`Selector::parse(s: &str) -> Result<Selector>`
+- **依赖：** selectors crate
+- **验收：** `cargo test -p browser-css-engine`（tag/class/id/descendant 测试）
+- **Commit：** `feat(css-engine): tag/class/id selector matching`
+
+### Step M2.3 — css-engine：computed style
+- **产出：** `crates/css-engine/src/computed.rs`
+- **API：** `pub fn compute_styles(tree: &Tree, sheet: &Stylesheet) -> HashMap<NodeId, Vec<Declaration>>`
+- **验收：** `cargo test -p browser-css-engine -- computed`
+- **Commit：** `feat(css-engine): compute_styles traverses DOM applying matching rules`
+
+### Step M2.4 — layout：数据结构 + Box 构造
+- **产出：** `crates/layout/src/{lib.rs, box.rs, construct.rs}`
+- **API：** `LayoutBox`、`BoxType{Block, Inline, Anonymous}`、`Dimensions`、`construct_layout_tree(tree, styles) -> LayoutTree`
+- **验收：** `cargo test -p browser-layout`
+- **Commit：** `feat(layout): layout tree construction (block/inline/anonymous)`
+
+### Step M2.5 — layout：block 布局算法
+- **产出：** `crates/layout/src/block.rs`
+- **验收：** block 子元素从上到下堆叠，y 单调递增
+- **Commit：** `feat(layout): block-level layout algorithm`
+
+### Step M2.6 — layout：inline + 文本折行
+- **产出：** `crates/layout/src/inline.rs`
+- **验收：** 一段文本宽度限制 → 正确折成多行
+- **Commit：** `feat(layout): inline layout + char-level text wrapping`
+
+### Step M2.7 — render：ASCII 渲染器
+- **产出：** `crates/render/src/{lib.rs, ascii.rs}`
+- **API：** `pub fn render_ascii(layout: &LayoutTree, width: usize) -> String`
+- **验收：** `cargo test -p browser-render`
+- **Commit：** `feat(render): terminal ASCII renderer`
+
+### Step M2.8 — cli：render-file 子命令
+- **产出：** 更新 `crates/cli/src/main.rs`
+- **CLI：** `browser render-file <file>`
+- **验收：** 手测 fixture 输出可读
+- **Commit：** `feat(cli): add render-file subcommand`
+
+### Step M2.9 — cli：集成测试 + HN fixture
+- **产出：** `crates/cli/tests/integration_render.rs` + `tests/fixtures/news.ycombinator.com.html`
+- **验收：** `cargo test -p browser-cli -- render`
+- **Commit：** `test(cli): e2e render-file against HN snapshot`
+
+### Step M2.10 — M2 收尾
+- **产出：** 更新 ROADMAP.md、写 `docs/postmortems/M2.md`
+- **Commit：** `docs: M2 complete, postmortem added`
 
 ## M3 — JS 执行（4 周，待 M2 后细化）
 
