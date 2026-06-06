@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use boa_engine::{Context, JsArgs, JsResult, JsValue, NativeFunction};
-use browser_dom::{NodeData, NodeId, Tree};
+use browser_dom::{Node, NodeData, NodeId, Tree};
 
 /// A shared, mutate-able handle to the DOM tree that JS sees.
 pub type SharedTree = Rc<RefCell<Tree>>;
@@ -444,17 +444,94 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     if let Some(tag) = sel.strip_prefix('#') {
         return find_by_id(tree, tag);
     }
+    // M7.2.4: universal selector (*), class selector (.foo), and
+    // compound selectors (div.container, p.red).
+    // Strategy: tokenize into components (e.g., ["div", ".container"]),
+    // then match each.
+    let tokens = tokenize_selector(sel);
     let mut found = None;
     tree.traverse(tree.root(), |id, node| {
-        if let NodeData::Element { tag, .. } = &node.data {
-            if tag.eq_ignore_ascii_case(sel) {
-                found = Some(id);
-                return false;
-            }
+        if matches_selector(node, &tokens) {
+            found = Some(id);
+            return false;
         }
         true
     });
     found
+}
+
+/// Simple tokenizer for M7.2.4 selectors. Splits into:
+/// - "*" (universal)
+/// - "div", "p", "h1" (tags)
+/// - ".container", ".red" (class)
+/// No support for combinators (space, >, +) yet — deferred to M7.2.5.
+fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
+    let mut tokens = Vec::new();
+    let mut chars = sel.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_whitespace() {
+            chars.next();
+        } else if c == '*' {
+            tokens.push(SelectorToken::Universal);
+            chars.next();
+        } else if c == '.' {
+            chars.next();
+            let mut cls = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '-' {
+                    cls.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if !cls.is_empty() {
+                tokens.push(SelectorToken::Class(cls));
+            }
+        } else {
+            // Tag name.
+            let mut tag = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '-' {
+                    tag.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if !tag.is_empty() {
+                tokens.push(SelectorToken::Tag(tag));
+            }
+        }
+    }
+    tokens
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SelectorToken {
+    Universal,
+    Tag(String),
+    Class(String),
+}
+
+fn matches_selector(node: &Node, tokens: &[SelectorToken]) -> bool {
+    if let NodeData::Element { tag, attrs } = &node.data {
+        for tok in tokens {
+            let ok = match tok {
+                SelectorToken::Universal => true,
+                SelectorToken::Tag(t) => t.eq_ignore_ascii_case(tag),
+                SelectorToken::Class(cls) => attrs.iter().any(|(k, v)| {
+                    k.eq_ignore_ascii_case("class") && v.split_whitespace().any(|c| c == cls)
+                }),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
+    } else {
+        false
+    }
 }
 
 fn set_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
@@ -870,6 +947,63 @@ mod m7_dom_api_tests {
         );
     }
 
+    #[test]
+    fn qs_class_selector_matches_class_attr() {
+        let mut ctx = make_ctx();
+        // <div class="container">x</div><p class="red">y</p>
+        let tree = tree_with_body(r#"<div class="container">x</div><p class="red">y</p>"#);
+        let (shared, _guard) = install_current(tree);
+        let val = ctx.eval(Source::from_bytes(r#"__qs(".red")"#)).unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        let found = t.data(id);
+        if let NodeData::Element { tag, attrs, .. } = found {
+            assert_eq!(tag, "p");
+            assert!(attrs.iter().any(|(k, v)| k == "class" && v.contains("red")));
+        } else {
+            panic!("Expected element, got {found:?}");
+        }
+    }
+
+    #[test]
+    fn qs_compound_tag_and_class() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body(r#"<div class="box">x</div><p class="box">y</p>"#);
+        let (shared, _guard) = install_current(tree);
+        // p.box should match <p class="box">, not <div class="box">.
+        let val = ctx.eval(Source::from_bytes(r#"__qs("p.box")"#)).unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        let found = t.data(id);
+        if let NodeData::Element { tag, .. } = found {
+            assert_eq!(tag, "p");
+        } else {
+            panic!("Expected element, got {found:?}");
+        }
+    }
+
+    #[test]
+    fn qs_multi_class_spaces_split() {
+        let mut ctx = make_ctx();
+        // <div class="container fluid">x</div>
+        let tree = tree_with_body(r#"<div class="container fluid">x</div>"#);
+        let (shared, _guard) = install_current(tree);
+        // .fluid should match.
+        let val = ctx.eval(Source::from_bytes(r#"__qs(".fluid")"#)).unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        let found = t.data(id);
+        if let NodeData::Element { attrs, .. } = found {
+            assert!(attrs
+                .iter()
+                .any(|(k, v)| k == "class" && v.contains("fluid")));
+        } else {
+            panic!("Expected element, got {found:?}");
+        }
+    }
     #[test]
     fn js_get_body_returns_body_nodeid() {
         let mut ctx = make_ctx();
