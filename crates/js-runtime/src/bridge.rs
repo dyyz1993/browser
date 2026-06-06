@@ -723,6 +723,17 @@ mod tests {
     }
 }
 
+// M7.3.1 (deferred): synchronous setTimeout / queueMicrotask bridges.
+//
+// boa 0.20 的 JsObject::call 是私有 API，需要用 JobQueue /
+// NativeObject 跨边界，复杂度远超爬虫 MVP 价值。完整实现推迟到
+// 产品化阶段（切到 deno_core / V8 后，async/await 一等公民，
+// setTimeout/promise 由 V8 本身提供）。
+//
+// 当前 SPA 爬虫场景：JS 中 setTimeout(fn, 0) 会抛 ReferenceError，
+// 但只要 SPA 在主 JS 流中完成 DOM 操作（如 spa-blog.html 那样调
+// __setBody），爬虫就能正确渲染。
+
 #[cfg(test)]
 mod fetch_tests {
     use super::*;
