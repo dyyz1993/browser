@@ -1,6 +1,8 @@
 //! HTTP client based on `hyper` + `hyper-rustls`.
 //!
-//! M1.1 scope: HTTPS GET only. POST / WebSocket / cookies land in later steps.
+//! M1.1: HTTPS GET only.
+//! M15.2: GET + Cookie header / Set-Cookie 返回。
+//! M20.1: 通用 `request`（任意 method + body），POST/PUT 支持。
 
 use std::time::Duration;
 
@@ -73,6 +75,74 @@ impl HttpClient {
         url: &str,
         cookie_header: Option<&str>,
     ) -> Result<(Vec<u8>, HeaderMap), NetError> {
+        self.request(url, Method::GET, None, None, cookie_header)
+            .await
+    }
+
+    /// Issue a POST request with a request body and optional Content-Type.
+    ///
+    /// M20.1: 表单提交 / API 调用场景。`body` 为空时不发 body（某些 API
+    /// 用 POST 不带 body）。
+    ///
+    /// # Errors
+    /// See [`HttpClient::get`].
+    pub async fn post(
+        &self,
+        url: &str,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> Result<(Vec<u8>, HeaderMap), NetError> {
+        self.request(url, Method::POST, body, content_type, cookie_header)
+            .await
+    }
+
+    /// Issue a PUT request with a request body and optional Content-Type.
+    ///
+    /// M20.1: REST API 更新场景。
+    ///
+    /// # Errors
+    /// See [`HttpClient::get`].
+    pub async fn put(
+        &self,
+        url: &str,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> Result<(Vec<u8>, HeaderMap), NetError> {
+        self.request(url, Method::PUT, body, content_type, cookie_header)
+            .await
+    }
+
+    /// Issue a DELETE request. (M20.1)
+    ///
+    /// # Errors
+    /// See [`HttpClient::get`].
+    pub async fn delete(
+        &self,
+        url: &str,
+        cookie_header: Option<&str>,
+    ) -> Result<(Vec<u8>, HeaderMap), NetError> {
+        self.request(url, Method::DELETE, None, None, cookie_header)
+            .await
+    }
+
+    /// Generic request: any method + optional body + optional Content-Type +
+    /// optional Cookie header. Returns body + all response headers.
+    ///
+    /// M20.1: `get_with_headers` / `post` / `put` / `delete` 的统一后端。
+    ///
+    /// # Errors
+    /// Returns [`NetError`] for invalid URL, unsupported scheme,
+    /// transport failure, or non-2xx HTTP status.
+    pub async fn request(
+        &self,
+        url: &str,
+        method: Method,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> Result<(Vec<u8>, HeaderMap), NetError> {
         let parsed = Url::parse(url).map_err(|_| NetError::InvalidUrl {
             url: url.to_string(),
         })?;
@@ -81,17 +151,26 @@ impl HttpClient {
                 scheme: parsed.scheme().to_string(),
             });
         }
-        // Build the request. `.uri(url)` accepts an &str here because
-        // hyper's Uri type can parse a full absolute URL.
         let mut builder = Request::builder()
-            .method(Method::GET)
+            .method(method)
             .uri(url)
-            .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+            .header(
+                "user-agent",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            );
         if let Some(cookie) = cookie_header {
             builder = builder.header("cookie", cookie);
         }
+        if let Some(ct) = content_type {
+            builder = builder.header("content-type", ct);
+        }
+        // body：有则包进 Full<Bytes>，无则空 body（GET/DELETE 默认无 body）。
+        let req_body = match body {
+            Some(b) => Full::from(Bytes::copy_from_slice(b.as_bytes())),
+            None => Full::default(),
+        };
         let req = builder
-            .body(Full::default())
+            .body(req_body)
             .map_err(|e| NetError::RequestFailed(e.to_string()))?;
         let resp: Response<_> = self
             .inner
@@ -104,13 +183,13 @@ impl HttpClient {
             });
         }
         let headers = resp.headers().clone();
-        let body = resp
+        let resp_body = resp
             .into_body()
             .collect()
             .await
             .map_err(|e| NetError::ReadFailed(e.to_string()))?
             .to_bytes();
-        Ok((body.to_vec(), headers))
+        Ok((resp_body.to_vec(), headers))
     }
 }
 
