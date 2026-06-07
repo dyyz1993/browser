@@ -35,3 +35,5 @@
 | # | 标题 | 状态 |
 |---|------|------|
 | 0001 | DOM 存储：arena vs Rc<RefCell> | accepted (2026-06-06) |
+| 0002 | JavaScript 引擎选择（boa vs deno_core） | accepted (2026-06-07) |
+| 0003 | TLS 后端选择（hyper-rustls vs native-tls） | accepted (2026-06-07) |
