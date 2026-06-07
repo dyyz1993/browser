@@ -29,6 +29,12 @@ pub fn layout(tree: &mut LayoutTree, config: LayoutConfig) {
     layout_box(&mut tree.root, 0.0, 0.0, config.viewport_width);
 }
 
+/// M32: public entry for flex.rs recursion. Same as `layout_box`
+/// but visible to sibling modules.
+pub(crate) fn layout_box_pub(bx: &mut LayoutBox, x: f32, y: f32, containing_width: f32) {
+    layout_box(bx, x, y, containing_width);
+}
+
 fn layout_box(bx: &mut LayoutBox, x: f32, y: f32, containing_width: f32) {
     bx.dimensions.x = x;
     bx.dimensions.y = y;

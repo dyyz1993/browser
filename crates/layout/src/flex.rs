@@ -228,10 +228,12 @@ fn layout_box_into(bx: &mut LayoutBox, x: f32, y: f32, width: f32, em: f32) {
         return;
     }
 
-    // Block-like child: recurse via block layout for height.
+    // M32 fix: Block/Flex children must recurse — otherwise their
+    // children's dimensions are never computed (all stay 0,0),
+    // causing all nested text to pile at origin → only last item
+    // visible. Delegate to block::layout_box for full recursion.
     let _ = em;
-    // Default: 1 line height per child block.
-    bx.dimensions.height = 1.0;
+    crate::block::layout_box_pub(bx, x, y, width);
 }
 
 #[cfg(test)]
