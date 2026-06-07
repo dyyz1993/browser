@@ -101,6 +101,7 @@ fn build_box(
                         let v = d.value.trim().to_ascii_lowercase();
                         match v.as_str() {
                             "flex" | "inline-flex" => bt = BoxType::Flex,
+                            "grid" | "inline-grid" => bt = BoxType::Grid,
                             "block" => bt = BoxType::Block,
                             "inline" => bt = BoxType::Inline,
                             _ => {}
@@ -112,6 +113,10 @@ fn build_box(
             // M32: 如果是 flex 容器，从 CSS 读 flex-direction/justify-content/gap。
             if bt == BoxType::Flex {
                 apply_flex_props(id, styles, &mut bx);
+            }
+            // M33: 如果是 grid 容器，从 CSS 读 grid-template-columns/gap。
+            if bt == BoxType::Grid {
+                apply_grid_props(id, styles, &mut bx);
             }
             // M32: 读 flex-grow 属性（flex item）。
             apply_flex_grow(id, styles, &mut bx);
@@ -246,6 +251,25 @@ fn apply_flex_grow(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &
     }
 }
 
+/// M33: 从 CSS 读 grid-template-columns / gap 填充 GridProps。
+fn apply_grid_props(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &mut LayoutBox) {
+    let Some(decls) = styles.get(&id) else {
+        return;
+    };
+    for d in decls {
+        if d.property.eq_ignore_ascii_case("grid-template-columns") {
+            let tracks = crate::grid::parse_grid_template_columns(&d.value);
+            if !tracks.is_empty() {
+                bx.grid.columns = tracks;
+            }
+        } else if d.property.eq_ignore_ascii_case("gap") {
+            if let Some(Length::Px(v)) = parse_length(&d.value) {
+                bx.grid.gap = v;
+            }
+        }
+    }
+}
+
 /// UA default margins for block-level elements. ASCII mode: 1em = 1 line.
 #[must_use]
 fn ua_default_margins(tag: &str) -> browser_css_engine::BoxEdges<Length> {
@@ -340,6 +364,13 @@ fn build_children(
     } else if parent_box == BoxType::Flex {
         // M32: Flex 容器直接收集 children，不做 anonymous 包装。
         // Flex items 不管原始 tag 是 block 还是 inline，都直接成为 flex item。
+        let mut result: Vec<LayoutBox> = Vec::new();
+        for &child_id in dom_children {
+            build_box(tree, child_id, styles, &mut result);
+        }
+        result
+    } else if parent_box == BoxType::Grid {
+        // M33: Grid 容器同样直接收集 children（auto-placement）。
         let mut result: Vec<LayoutBox> = Vec::new();
         for &child_id in dom_children {
             build_box(tree, child_id, styles, &mut result);

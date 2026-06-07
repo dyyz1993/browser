@@ -63,6 +63,10 @@ pub enum BoxType {
     /// Children are laid out as flex items (horizontal row or
     /// vertical column) instead of normal block/inline flow.
     Flex,
+    /// M33: `display: grid` — establishes a grid formatting context.
+    /// Children are placed into a 2D cell grid defined by
+    /// `grid-template-columns`.
+    Grid,
 }
 
 /// M32: flex-direction property. `row` (default) lays items
@@ -106,6 +110,37 @@ impl Default for FlexProps {
     }
 }
 
+/// M33: A single grid track sizing value for `grid-template-columns`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrack {
+    /// `Nfr` — proportional fraction of leftover space.
+    Fr(f32),
+    /// `Npx` — fixed width in characters.
+    Px(f32),
+    /// `auto` — use natural content width.
+    Auto,
+}
+
+/// M33: grid container properties (only meaningful when
+/// `box_type == BoxType::Grid`). Defaults model `grid-template-columns:none`
+/// (single auto column) + `gap:0`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridProps {
+    /// Column track sizes. Empty = single auto column.
+    pub columns: Vec<GridTrack>,
+    /// Gap between rows and columns (character units).
+    pub gap: f32,
+}
+
+impl Default for GridProps {
+    fn default() -> Self {
+        Self {
+            columns: Vec::new(),
+            gap: 0.0,
+        }
+    }
+}
+
 /// A single layout box. Owns its children recursively.
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
@@ -138,6 +173,9 @@ pub struct LayoutBox {
     /// M32: flex item grow factor (only meaningful when the parent
     /// is a Flex box). `flex-grow:0` = use natural width.
     pub flex_grow: f32,
+    /// M33: grid container properties (only meaningful when
+    /// `box_type == BoxType::Grid`).
+    pub grid: GridProps,
     pub children: Vec<LayoutBox>,
 }
 
@@ -155,6 +193,7 @@ impl LayoutBox {
             link: false,
             flex: FlexProps::default(),
             flex_grow: 0.0,
+            grid: GridProps::default(),
             children: Vec::new(),
         }
     }
