@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `ead7644`（M20.3 fetch POST/PUT/DELETE） |
-| 总 commits | 124 |
-| 测试 | 350 passed, 0 clippy warnings |
+| HEAD | `5fa7954`（M21.2 cookie-file flag） |
+| 总 commits | 127 |
+| 测试 | 363 passed, 0 clippy warnings |
 | Crates | 14 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,16 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M21 — Cookie 持久化（跨进程保留登录态）✅
+- M21.1 ✅ cookie crate serialize/deserialize（TSV，不引入 serde，10 测试）
+- M21.2 ✅ cli --cookie-file flag + CookieFileGuard（RAII，持有 jar owned clone + sync_jar）
+
+解决"爬虫重启要重新登录"痛点：启动时 load cookie 文件，退出时 save。
+TSV 纯文本格式（自研优先，不引入 serde）。
+CookieFileGuard 持有 owned jar clone（避开 TreeGuard::drop 清空 thread-local）。
+
+---
 
 ### M20 — fetch 增强（POST/PUT/DELETE + 真实 status code）✅
 - M20.1+M20.2 ✅ net 通用 request（POST/PUT/DELETE wiremock 测试）
