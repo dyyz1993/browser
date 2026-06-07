@@ -9,6 +9,7 @@
 pub mod bridge;
 pub mod fetch_shim;
 pub mod navigation_shim;
+pub mod navigator_shim;
 pub mod runtime;
 pub mod scripts;
 pub mod storage_shim;

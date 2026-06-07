@@ -195,6 +195,8 @@ pub fn run_scripts_with_base(
     let _ = crate::fetch_shim::install_fetch(&mut ctx);
     // M23.5: 安装 WebSocket 全局构造器（ws:// 实时连接）。
     let _ = crate::ws_shim::install_websocket(&mut ctx);
+    // M28.1: 安装 navigator 全局对象（userAgent/platform/language，反爬必需）。
+    let _ = crate::navigator_shim::install_navigator(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
