@@ -393,7 +393,99 @@ fn render_html_to_string(
             viewport_width: width as f32,
         },
     );
-    Ok(render_ascii(&layout, width))
+    let rendered = render_ascii(&layout, width);
+    // M22.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
+    // http(s) URL 或不存在的文件 → 保留占位符（不报错，爬虫场景容错）。
+    Ok(post_process_images(&rendered, width))
+}
+
+/// M22.2: 扫描渲染输出里的 `[IMG: src]` 占位符，尝试把 src 解析为本地
+/// 图像文件并解码成 ASCII art 替换。无法解析的保留原占位符。
+///
+/// base_dir 用 cwd（render-file/render-script 从文件读，cwd 是合理的
+/// 相对基准）。max_w 用渲染宽度，max_h 用宽度的 1/3（图像高度通常小于文本）。
+fn post_process_images(rendered: &str, width: usize) -> String {
+    use browser_render::resolve_local_image_src;
+    let cwd = std::env::current_dir().ok();
+    let max_h = (width / 3).max(5) as u32;
+    // M22.2: 跨行扫描 [IMG: ... ]。src 可能因折行被拆到多行，
+    // ] 可能被 width 截断丢失。策略：find("[IMG:")（不带空格），
+    // 向后扫描跳过空白（含换行）收集 src 字符，直到 ] 或段落边界
+    // （连续 2 个换行 = 下一段文本）。src 去全部空白（路径无空格假设）。
+    let chars: Vec<char> = rendered.chars().collect();
+    let mut out = String::with_capacity(rendered.len());
+    let mut i = 0;
+    while i < chars.len() {
+        // 匹配 [IMG:
+        if i + 5 <= chars.len()
+            && chars[i] == '['
+            && chars[i + 1] == 'I'
+            && chars[i + 2] == 'M'
+            && chars[i + 3] == 'G'
+            && chars[i + 4] == ':'
+        {
+            // 扫描 src：跳过空白，收集非空白字符，直到 ] 或段落边界
+            let mut j = i + 5;
+            let mut src_raw = String::new();
+            let mut found_close = false;
+            let mut blank_lines = 0u32;
+            while j < chars.len() {
+                let c = chars[j];
+                if c == ']' {
+                    found_close = true;
+                    break;
+                }
+                if c == '\n' {
+                    // 检测段落边界（连续换行）
+                    if j + 1 < chars.len() && chars[j + 1] == '\n' {
+                        blank_lines += 1;
+                        if blank_lines >= 1 {
+                            break; // ] 丢失，到段落边界
+                        }
+                    }
+                    src_raw.push(c);
+                    j += 1;
+                    continue;
+                }
+                src_raw.push(c);
+                j += 1;
+            }
+            let src: String = src_raw.chars().filter(|c| !c.is_whitespace()).collect();
+            let advance = if found_close { j + 1 } else { j };
+            if src.is_empty() {
+                // 空 src：原样输出已扫描部分
+                out.push_str(&chars[i..advance].iter().collect::<String>());
+                i = advance;
+                continue;
+            }
+            // 尝试解析 + 解码
+            match resolve_local_image_src(&src, cwd.as_deref()) {
+                Some(path) => match browser_render::image_file_to_ascii(&path, width as u32, max_h)
+                {
+                    Ok(ascii) => {
+                        out.push_str("\n┌─ image: ");
+                        out.push_str(&src);
+                        out.push_str(" ─\n");
+                        out.push_str(ascii.trim_end_matches('\n'));
+                        out.push_str("\n└──────────────\n");
+                        eprintln!("[img] rendered {src} as ASCII");
+                    }
+                    Err(e) => {
+                        eprintln!("[img] decode {src} failed: {e}");
+                        out.push_str(&format!("[IMG: {src}]"));
+                    }
+                },
+                None => {
+                    out.push_str(&format!("[IMG: {src}]"));
+                }
+            }
+            i = advance;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Walk a DOM tree and concatenate every `<style>` tag's text content
