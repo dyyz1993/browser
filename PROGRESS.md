@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `5ac3111`（M27.1 <a href> 链接目标渲染） |
-| 总 commits | 142 |
-| 测试 | 452 passed, 0 clippy warnings |
+| HEAD | `eeef874`（M28.4 screen 全局对象） |
+| 总 commits | 150 |
+| 测试 | 481 passed, 0 clippy warnings |
 | Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,31 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M28 — JS 全局对象补齐（对齐 W3C/Chrome 基础子集）✅
+- M28.1 ✅ navigator_shim.rs（userAgent/platform/language/languages/onLine/cookieEnabled/vendor）
+- M28.2 ✅ window_shim.rs（window===globalThis 自引用 + innerWidth/innerHeight/视口数据）
+- M28.3 ✅ document_shim.rs（getElementById/querySelector/createElement 包装 __* 桥 + body/head/cookie/title/location）
+- M28.4 ✅ screen_shim.rs（width/height/colorDepth/orientation，响应式布局特性检测）
+- M28.5 ✅ 文档同步
+
+补齐 SPA 反爬/特性检测最常读的四大全局对象，对齐 W3C/Chrome 基础子集。
+所有对象用纯 JS 对象字面量（非 NativeFunction getter），避免跨 eval this 绑定丢失。
+
+设计决策（M28.1 关键教训）：navigator 值全是静态的（不依赖运行时 DOM），
+与 location/history（值依赖运行时需方法调 __locationHref()）不同——用 JS 对象字面量
+一次构造，是真正的**数据属性**，符合 W3C（`navigator.userAgent` 无括号），
+且代码更简单。第一版用 ObjectInitializer::function() 注册，访问返回函数对象
+而非字符串（ua=空），修为纯 JS 对象字面量解决。
+
+window = globalThis 自引用（不复制 navigator/location 到 window，经 globalThis 自动可见），
+document 方法包装现有 __* 桥，screen 全部静态默认值（无显示器环境）。
+
+验证：4 个 shim 共 29 单元测试，端到端全部验证（navigator userAgent/platform、
+window.innerWidth/self===window、document.readyState/body、screen.width/orientation），
+百度 JS 错误减少（document/window/navigator 不再未定义）。workspace 481 tests。
+
+---
 
 ### M27 — `<a href>` 链接目标渲染（G1 爬虫核心）✅
 - M27.1 ✅ construct.rs inject_a_href（`text` → `text (url)`，参照 inject_li_bullet）

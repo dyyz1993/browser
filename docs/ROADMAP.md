@@ -37,7 +37,8 @@
 | M25 | ✅ | 截图字形坐标修复（fontdue metrics，乱码→可读） | 446 |
 | M26 | ✅ | textarea CSS 泄漏修复（百度截图 50MB→1.3MB） | 449 |
 | M27 | ✅ | <a href> 链接目标渲染（G1 爬虫核心） | 452 |
-| M28+ | ⚪ | 前瞻（见下） | — |
+| M28 | ✅ | JS 全局对象补齐（navigator/window/document/screen） | 481 |
+| M29+ | ⚪ | 前瞻（见下） | — |
 
 ---
 
