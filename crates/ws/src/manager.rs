@@ -131,6 +131,13 @@ impl WsManager {
     pub fn connection_count(&self) -> usize {
         self.conns.borrow().len()
     }
+
+    /// Stop tracking a connection (after Closed/Error). The background
+    /// thread has already exited; this just drops the command-queue handle
+    /// so `connection_count` reflects live connections.
+    pub fn remove_connection(&self, id: u32) {
+        self.conns.borrow_mut().retain(|(i, _)| *i != id);
+    }
 }
 
 /// Background thread entry: own runtime → connect → recv loop.
@@ -205,7 +212,18 @@ fn run_connection(
                         match cmd {
                             WsCmd::SendText(s) => { let _ = ws.send_text(&s).await; }
                             WsCmd::SendBinary(b) => { let _ = ws.send_binary(&b).await; }
-                            WsCmd::Close => { let _ = ws.close().await; should_close = true; }
+                            WsCmd::Close => {
+                                let _ = ws.close().await;
+                                // M23.5: 必须 push Closed 事件，否则 pump 的
+                                // ws_connection_count 永不归零（Closed 才
+                                // remove_connection），导致 idle 超时。
+                                push_event(&events, WsEvent::Closed {
+                                    id,
+                                    code: Some(1000),
+                                    reason: String::new(),
+                                });
+                                should_close = true;
+                            }
                         }
                     }
                     if should_close {

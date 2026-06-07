@@ -89,13 +89,16 @@ pub fn execute_scripts_with_base(
 fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
     let mut invoked = 0;
+    // M23.5: WS 是长连接异步，握手/收消息在后台线程。即使 timer idle，
+    // 也要 poll WS 事件直到所有连接关闭（否则 onopen/onmessage 永不触发）。
+    let mut ws_idle_polls = 0u32;
+    const WS_MAX_IDLE_POLLS: u32 = 500; // ~2.5s（500 × 5ms）安全裕度
     for _ in 0..MAX_TICKS {
         // M16.4: 先执行 Promise microtask（then 回调）。可能 schedule 新 timer。
         ctx.run_jobs();
+        let mut tick_invoked = 0;
+        // Timer 回调（setTimeout）。
         let due = crate::bridge::drain_due_timer_callbacks();
-        if due.is_empty() {
-            break;
-        }
         for callback in due {
             // 调用 setTimeout 回调：this = undefined，无参。
             // 回调内部如果 schedule 新 timer 或修改 DOM，会在下一轮 tick 处理。
@@ -103,9 +106,54 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
                 eprintln!("[js-runtime] timer callback error: {e}");
             }
             invoked += 1;
+            tick_invoked += 1;
         }
+        // M23.5: WebSocket 事件（Open/Text/Binary/Closed/Error）。
+        let ws_events = crate::bridge::drain_ws_events();
+        for (id, etype, data) in ws_events {
+            let escaped = escape_js_ws_data(&data);
+            let js = format!("__wsDispatchEvent({id}, '{etype}', '{escaped}')");
+            if let Err(e) = ctx.eval(Source::from_bytes(&js)) {
+                eprintln!("[js-runtime] ws dispatch error: {e}");
+            }
+            invoked += 1;
+            tick_invoked += 1;
+        }
+        if tick_invoked > 0 {
+            // 有事件触发（可能 schedule 新操作），重置 WS idle 计数继续。
+            ws_idle_polls = 0;
+            continue;
+        }
+        // 没事件。判断是否还有活跃 WS 连接。
+        if crate::bridge::ws_connection_count() == 0 {
+            break; // timer + WS 都 idle，结束
+        }
+        // 有活跃 WS 但暂无事件：短暂 sleep 让后台线程收消息，再 poll。
+        if ws_idle_polls >= WS_MAX_IDLE_POLLS {
+            eprintln!("[js-runtime] WS idle poll 超时（{WS_MAX_IDLE_POLLS} 轮），连接可能未关闭");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        ws_idle_polls += 1;
     }
     invoked
+}
+
+/// M23.5: 转义 WS 消息载荷为安全的 JS 字符串字面量（单引号包裹）。
+/// 处理反斜杠/单引号/换行/回车/制表符，避免 eval 注入或语法错误。
+fn escape_js_ws_data(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Convenience: install bridge + execute scripts in one call.
@@ -145,6 +193,8 @@ pub fn run_scripts_with_base(
     let _ = crate::xhr_shim::install_xml_http_request(&mut ctx);
     // M19.1: 安装全局 fetch（标准 Promise-based API）。
     let _ = crate::fetch_shim::install_fetch(&mut ctx);
+    // M23.5: 安装 WebSocket 全局构造器（ws:// 实时连接）。
+    let _ = crate::ws_shim::install_websocket(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }

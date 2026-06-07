@@ -51,6 +51,10 @@ thread_local! {
     // M18.1: in-flight 网络请求计数器（fetch_sync / xhr_send 进入+1，退出-1）。
     // networkidle = pending_timers==0 && pending_requests==0。
     static PENDING_REQUESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // M23.5: WebSocket 多连接管理器（后台线程 + 命令/事件队列）。
+    // 与 XHR/fetch 同线程同步不同：WS 是长连接异步，每个 connect spawn 一个
+    // OS 线程 recv，事件走 WsManager.drain_events() → pump_event_loop dispatch。
+    static WS_MANAGER: RefCell<Option<browser_ws::WsManager>> = const { RefCell::new(None) };
 }
 
 /// RAII guard: keeps the thread-local tree installed until drop.
@@ -89,6 +93,10 @@ impl Drop for TreeGuard {
         XHR_NEXT_ID.with(|slot| slot.set(1));
         // M18.1: 重置网络请求计数器。
         PENDING_REQUESTS.with(|slot| slot.set(0));
+        // M23.5: 清理 WS 管理器（线程退出时后台线程 drop）。
+        WS_MANAGER.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
     }
 }
 
@@ -243,6 +251,10 @@ pub fn install(ctx: &mut Context) {
         "__xhrGetResponseText",
         xhr_get_response_text_bridge as NativeFn,
     );
+    // M23.5: WebSocket bridges（__ws* 内部名，WebSocket shim 用）。
+    register_fn1(ctx, "__wsCreate", ws_create_bridge as NativeFn);
+    register_fn2(ctx, "__wsSend", ws_send_bridge as NativeFn);
+    register_fn1(ctx, "__wsClose", ws_close_bridge as NativeFn);
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -1132,6 +1144,117 @@ fn inc_pending_requests() {
 
 fn dec_pending_requests() {
     PENDING_REQUESTS.with(|slot| slot.set(slot.get().saturating_sub(1)));
+}
+
+// ===== M23.5: WebSocket 后端 =====
+
+/// Ensure a WsManager exists on the current thread. Idempotent.
+fn ensure_ws_manager() {
+    WS_MANAGER.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(browser_ws::WsManager::new());
+        }
+    });
+}
+
+/// `__wsCreate(url: string) -> number`：发起 ws:// 连接，返回 id。
+/// 实际握手在后台线程异步进行；Open/Error 事件经 drain_ws_events 分派。
+fn ws_create_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let url = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
+    let resolved = resolve_url(&url);
+    ensure_ws_manager();
+    let id = WS_MANAGER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|m| m.connect(resolved))
+            .unwrap_or(0)
+    });
+    Ok(JsValue::new(id as f64))
+}
+
+/// `__wsSend(id: number, data: string) -> undefined`：队列文本消息到后台线程。
+fn ws_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u32) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
+    let data = args
+        .get(1)
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
+    WS_MANAGER.with(|slot| {
+        if let Some(m) = slot.borrow().as_ref() {
+            m.send_text(id, data);
+        }
+    });
+    Ok(JsValue::undefined())
+}
+
+/// `__wsClose(id: number) -> undefined`：队列关闭帧。
+fn ws_close_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u32) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
+    WS_MANAGER.with(|slot| {
+        if let Some(m) = slot.borrow().as_ref() {
+            m.close(id);
+        }
+    });
+    Ok(JsValue::undefined())
+}
+
+/// Drain all pending WebSocket events as JS-dispatchable strings.
+/// Returns Vec<(id, type, data)>，pump_event_loop 逐个 eval
+/// `__wsDispatchEvent(id, type, data)` 分派到 JS 回调。
+///
+/// type: "open" | "message" | "close" | "error"
+#[must_use]
+pub fn drain_ws_events() -> Vec<(u32, &'static str, String)> {
+    WS_MANAGER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(mgr) = slot.as_mut() else {
+            return Vec::new();
+        };
+        let events = mgr.drain_events();
+        let mut out = Vec::with_capacity(events.len());
+        for e in events {
+            let item = match e {
+                browser_ws::WsEvent::Open { id } => (id, "open", String::new()),
+                browser_ws::WsEvent::Text { id, data } => (id, "message", data),
+                browser_ws::WsEvent::Binary { id, data } => {
+                    // 爬虫场景以文本为主；binary 转 lossy UTF-8。
+                    (id, "message", String::from_utf8_lossy(&data).into_owned())
+                }
+                browser_ws::WsEvent::Closed { id, reason, .. } => {
+                    mgr.remove_connection(id);
+                    (id, "close", reason)
+                }
+                browser_ws::WsEvent::Error { id, message } => {
+                    mgr.remove_connection(id);
+                    (id, "error", message)
+                }
+            };
+            out.push(item);
+        }
+        out
+    })
+}
+
+/// 当前跟踪的 WS 连接数（用于 pump_event_loop 决定是否多 poll）。
+#[must_use]
+pub fn ws_connection_count() -> usize {
+    WS_MANAGER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(browser_ws::WsManager::connection_count)
+            .unwrap_or(0)
+    })
 }
 
 // ===== M17.1: XMLHttpRequest 后端 =====

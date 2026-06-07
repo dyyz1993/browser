@@ -431,6 +431,7 @@ dependencies = [
  "browser-navigation",
  "browser-net",
  "browser-storage",
+ "browser-ws",
  "tokio",
  "url",
  "wiremock",

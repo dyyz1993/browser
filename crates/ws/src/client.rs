@@ -63,6 +63,9 @@ impl XorShift64 {
 pub struct WebSocket {
     socket: TcpStream,
     rng: XorShift64,
+    // M23.5: TCP 是字节流，一次 read 可能读到多帧（或多帧的一部分）。
+    // recv_buf 跨调用保留未消费字节，避免丢失后续帧。
+    recv_buf: Vec<u8>,
 }
 
 /// Message received from the server (after reassembly of continuation frames).
@@ -156,7 +159,11 @@ impl WebSocket {
             None => return Err(WsError::InvalidFrame("missing sec-websocket-accept")),
         }
 
-        Ok(Self { socket, rng })
+        Ok(Self {
+            socket,
+            rng,
+            recv_buf: Vec::new(),
+        })
     }
 
     /// Send a Text message (masked, single frame).
@@ -185,12 +192,11 @@ impl WebSocket {
     /// Read the next complete message, auto-responding to Ping with Pong.
     /// Reassembles fragmented (continuation) frames per RFC 6455 §5.4.
     pub async fn recv_message(&mut self) -> Result<Message, WsError> {
-        let mut recv_buf: Vec<u8> = Vec::new();
         // Accumulator for fragmented messages.
         let mut acc: Option<(OpCode, Vec<u8>)> = None;
         loop {
             // Try to decode a frame from the recv buffer.
-            let frame_res = decode_frame(&recv_buf);
+            let frame_res = decode_frame(&self.recv_buf);
             let frame_and_consumed: Option<(Frame, usize)> = match frame_res {
                 Ok(Some(x)) => Some(x),
                 Ok(None) => {
@@ -204,13 +210,13 @@ impl WebSocket {
                     if n == 0 {
                         return Err(WsError::InvalidFrame("connection closed"));
                     }
-                    recv_buf.extend_from_slice(&tmp[..n]);
+                    self.recv_buf.extend_from_slice(&tmp[..n]);
                     continue;
                 }
                 Err(e) => return Err(e),
             };
             let (frame, consumed) = frame_and_consumed.unwrap();
-            recv_buf.drain(..consumed);
+            self.recv_buf.drain(..consumed);
 
             match frame.opcode {
                 OpCode::Ping => {

@@ -12,6 +12,7 @@ pub mod navigation_shim;
 pub mod runtime;
 pub mod scripts;
 pub mod storage_shim;
+pub mod ws_shim;
 pub mod xhr_shim;
 
 pub use bridge::{
@@ -26,4 +27,5 @@ pub use scripts::{
     execute_scripts, execute_scripts_with_base, extract_scripts, run_scripts, run_scripts_with_base,
 };
 pub use storage_shim::install_storage_globals;
+pub use ws_shim::install_websocket;
 pub use xhr_shim::install_xml_http_request;
