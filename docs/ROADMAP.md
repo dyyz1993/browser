@@ -42,7 +42,9 @@
 | M30 | ✅ | <a> 蓝色渲染（screenshot ANSI + #0000EE） | 489 |
 | M31 | ✅ | wss:// TLS 支持（ws crate + native-tls） | 489 |
 | M32 | ✅ | CSS flexbox 子集（row/column + grow + justify + gap） | 498 |
-| M33+ | ⚪ | 前瞻（CSS grid 子集 / GUI 像素图像） | — |
+| M33 | ✅ | CSS grid 子集（grid-template-columns + gap + auto-placement） | 508 |
+| M34 | ✅ | GUI 像素级渲染（render::font 共享，修复 'X' bug） | 508 |
+| M35+ | ⚪ | 前瞻（更多 flex 属性 / 性能优化） | — |
 
 ---
 

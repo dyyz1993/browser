@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `02826ee`（M32 CSS flexbox 子集） |
-| 总 commits | 158 |
-| 测试 | 498 passed, 0 clippy warnings |
+| HEAD | `195a0fc`（M34 GUI 像素级渲染） |
+| 总 commits | 164 |
+| 测试 | 508 passed, 0 clippy warnings |
 | Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
