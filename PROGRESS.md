@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `8e3ae7a`（M26.1 textarea CSS 泄漏修复） |
-| 总 commits | 140 |
-| 测试 | 449 passed, 0 clippy warnings |
+| HEAD | `5ac3111`（M27.1 <a href> 链接目标渲染） |
+| 总 commits | 142 |
+| 测试 | 452 passed, 0 clippy warnings |
 | Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,19 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M27 — `<a href>` 链接目标渲染（G1 爬虫核心）✅
+- M27.1 ✅ construct.rs inject_a_href（`text` → `text (url)`，参照 inject_li_bullet）
+- M27.2 ✅ integration_anchor.rs 3 e2e（有文本/空链接/无 href）+ example.com 快照更新
+- M27.3 ✅ 文档同步
+
+让爬虫从渲染文本直接看到链接指向，无需解析 DOM。ASCII 模式无颜色概念，
+内联 URL 比颜色/下划线对爬虫更直接可用。空链接（无文本子节点）seed 文本
+叶子显示 href（爬虫不丢链接）。
+
+验证：受控实验 + layout 23 单元测试 + 3 e2e + example.com 快照（预期更新）。
+
+---
 
 ### M26 — 真实站点渲染修复（百度截图可用）✅
 - M25.1+M25.2 ✅ 截图字形坐标修复（fontdue metrics 精确测量 + 坐标公式不翻转，乱码→可读）
