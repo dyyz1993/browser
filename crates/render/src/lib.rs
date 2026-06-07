@@ -5,5 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ascii;
+pub mod image;
 
 pub use ascii::render_ascii;
+pub use image::{image_file_to_ascii, image_to_ascii_from_img, resolve_local_image_src};

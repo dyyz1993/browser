@@ -475,6 +475,7 @@ name = "browser-render"
 version = "0.0.1"
 dependencies = [
  "browser-layout",
+ "image",
 ]
 
 [[package]]
