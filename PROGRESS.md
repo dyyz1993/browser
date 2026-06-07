@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `5fa7954`（M21.2 cookie-file flag） |
-| 总 commits | 127 |
-| 测试 | 363 passed, 0 clippy warnings |
+| HEAD | `7a1e50d`（M22.2 img ASCII 渲染） |
+| 总 commits | 130 |
+| 测试 | 366 passed, 0 clippy warnings |
 | Crates | 14 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,18 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M22 — 真实图像渲染（<img> → ASCII art）✅
+- M22.1 ✅ render crate image 模块（image_to_ascii_from_img + resolve_local_image_src，10 测试）
+- M22.2 ✅ cli render_html_to_string post_process_images（跨行扫描，3 e2e）
+- M22.3 ✅ 文档同步
+
+解决 M9 的 [IMG: src] 纯文本占位符问题：爬虫/CLI 现在能看到 <img> 图像内容。
+本地图像（file:// / 绝对路径 / 相对 cwd）解码成 ASCII art，http(s) URL 不下载
+（避免渲染管线引入网络）。M12.3 的 image_to_ascii 提升到 render crate。
+post_process_images 跨行扫描（src 可能因折行被拆，] 可能被 width 截断丢失）。
+
+---
 
 ### M21 — Cookie 持久化（跨进程保留登录态）✅
 - M21.1 ✅ cookie crate serialize/deserialize（TSV，不引入 serde，10 测试）
