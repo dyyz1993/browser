@@ -200,6 +200,10 @@ pub fn run_scripts_with_base(
     // M28.2: 安装 window 全局对象（window===globalThis 自引用 + 视口数据属性）。
     // 必须在 navigator/location 等之后，window.navigator 经 globalThis 自动可见。
     let _ = crate::window_shim::install_window(&mut ctx);
+    // M28.3: 安装 document 全局对象（getElementById/querySelector/createElement
+    // 包装 __* 桥 + body/head/cookie/title/location 数据属性）。必须在 window
+    // 之后（document.location 指向 location 全局对象）。
+    let _ = crate::document_shim::install_document(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
