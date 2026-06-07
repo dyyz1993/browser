@@ -106,6 +106,20 @@ fn build_box(
                     .unwrap_or("[no-src]");
                 bx.text = Some(format!("[IMG: {src}]"));
             }
+            // M27.1: <a href> append target URL so crawlers can see link
+            // destinations in rendered text. e.g. "News (https://...)".
+            // Browsers color/underline links; ASCII mode lacks color, so
+            // we surface the href inline (huge value for the G1 crawler goal).
+            if tag.eq_ignore_ascii_case("a") {
+                if let Some(href) = attrs
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("href"))
+                    .map(|(_, v)| v.as_str())
+                    .filter(|h| !h.trim().is_empty())
+                {
+                    inject_a_href(&mut bx, href);
+                }
+            }
             // M6.0c: <li> bullet prefix (CSS ::marker placeholder).
             if tag.eq_ignore_ascii_case("li") {
                 inject_li_bullet(&mut bx);
@@ -281,6 +295,29 @@ fn flush_inline_buf(buf: &mut Vec<LayoutBox>, out: &mut Vec<LayoutBox>) {
 /// `<li>` layout box. The bullet sits at the same (x, y) as the text
 /// would have started, then the text follows after 2 chars. We
 /// implement this by mutating the first inline text leaf's `text`.
+/// M27.1: Append ` (href)` to the first text leaf of an `<a>` box.
+/// If the `<a>` has no text child (e.g. `<a href="u"></a>`), we create
+/// a text leaf carrying just the href so the link is still discoverable
+/// by crawlers (matches browser behavior where a linkless anchor still
+/// has an href).
+fn inject_a_href(bx: &mut LayoutBox, href: &str) {
+    let suffix = format!(" ({href})");
+    if let Some(leaf) = find_first_text_leaf_mut(bx) {
+        if let Some(text) = &mut leaf.text {
+            if !text.ends_with(&suffix) {
+                text.push_str(&suffix);
+            }
+        }
+    } else {
+        // No text leaf: seed one so the link is still visible.
+        let mut seed = LayoutBox::new(BoxType::Inline).with_text(href.to_string());
+        // Mark as anonymous (no element id) so it doesn't interfere with
+        // DOM id mapping downstream.
+        seed.element_id = None;
+        bx.children.push(seed);
+    }
+}
+
 fn inject_li_bullet(bx: &mut LayoutBox) {
     if let Some(leaf) = find_first_text_leaf_mut(bx) {
         if let Some(text) = &mut leaf.text {
