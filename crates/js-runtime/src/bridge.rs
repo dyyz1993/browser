@@ -184,6 +184,11 @@ pub fn install(ctx: &mut Context) {
     register_fn(ctx, "__fetchSetBody", fetch_set_body as NativeFn);
     register_fn(ctx, "__fetchAppendBody", fetch_append_body as NativeFn);
     register_fn(ctx, "__fetchSync", fetch_sync_bridge as NativeFn);
+    register_fn(
+        ctx,
+        "__fetchSyncMethod",
+        fetch_sync_method_bridge as NativeFn,
+    );
     // M7.2.1: real DOM API bridges.
     register_fn0(ctx, "__createEl", create_el as NativeFn);
     register_fn2(ctx, "__appendChild", append_child as NativeFn);
@@ -352,6 +357,53 @@ fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
     }
 }
 
+/// `__fetchSyncMethod(url, method, body?, contentType?) -> string`：
+/// 通用 fetch 后端（任意 method）。M20.3：POST/PUT/DELETE 表单/API 调用。
+/// 返回编码 `"status\nbody"`（成功）或 `""`（失败）。
+fn fetch_sync_method_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let url = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
+    let method = args
+        .get(1)
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_else(|| "GET".to_string());
+    let body = args.get(2).and_then(|v| {
+        if v.is_null() || v.is_undefined() {
+            None
+        } else {
+            v.as_string().map(|s| s.to_std_string_escaped())
+        }
+    });
+    let content_type = args.get(3).and_then(|v| {
+        if v.is_null() || v.is_undefined() {
+            None
+        } else {
+            v.as_string().map(|s| s.to_std_string_escaped())
+        }
+    });
+    if url.is_empty() {
+        return Ok(JsValue::String(boa_engine::JsString::from("")));
+    }
+    let resolved = resolve_url(&url);
+    match fetch_sync_with_method(&resolved, &method, body.as_deref(), content_type.as_deref()) {
+        Ok((status, body)) => Ok(JsValue::String(boa_engine::JsString::from(format!(
+            "{status}\n{body}"
+        )))),
+        Err(e) => {
+            eprintln!("[js-fetch] {method} {url} failed: {e}");
+            Ok(JsValue::String(boa_engine::JsString::from("")))
+        }
+    }
+}
+
 /// Synchronously fetch a URL. Spawns a detached thread with its own
 /// tokio runtime so we can be called from inside an outer runtime
 /// (boa eval runs on the main thread which is already inside a
@@ -361,9 +413,19 @@ fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
 /// Set-Cookie 存入 jar（同主请求共享会话）。jar 是 `Rc<RefCell<>>`
 /// 不跨线程，所以在主线程读出 header、写入 jar；新线程只拿 String。
 fn fetch_sync(url: &str) -> Result<String, String> {
+    fetch_sync_with_method(url, "GET", None, None).map(|(_status, body)| body)
+}
+
+/// M20.3: 通用同步 fetch（任意 method + body + content_type）。
+/// 复用 fetch_sync 的 cookie jar / networkidle / 跨线程模式。
+fn fetch_sync_with_method(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<(u16, String), String> {
     // M18.1: 标记网络请求进行中（networkidle 信号源）。
     inc_pending_requests();
-    // guard 模式：用结构体确保即使 fetch 失败也 -1。
     struct RequestGuard;
     impl Drop for RequestGuard {
         fn drop(&mut self) {
@@ -372,6 +434,9 @@ fn fetch_sync(url: &str) -> Result<String, String> {
     }
     let _guard = RequestGuard;
     let url = url.to_string();
+    let method = method.to_string();
+    let body = body.map(String::from);
+    let content_type = content_type.map(String::from);
     // 主线程读 cookie header（thread-local jar）。
     let cookie_header = CURRENT_COOKIE.with(|slot| {
         slot.borrow().as_ref().and_then(|h| {
@@ -391,9 +456,14 @@ fn fetch_sync(url: &str) -> Result<String, String> {
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
         let client = browser_net::HttpClient::new();
-        let (bytes, headers) = rt
-            .block_on(client.get_with_headers(&url_clone, cookie_header.as_deref()))
-            .map_err(|e| format!("{e:?}"))?;
+        let result = rt.block_on(client.request_full_str(
+            &url_clone,
+            &method,
+            body.as_deref(),
+            content_type.as_deref(),
+            cookie_header.as_deref(),
+        ));
+        let (status, bytes, headers) = result.map_err(|e| format!("{e:?}"))?;
         // 收集所有 Set-Cookie 行返回给主线程写 jar。
         let set_cookies: Vec<String> = headers
             .get_all("set-cookie")
@@ -401,9 +471,9 @@ fn fetch_sync(url: &str) -> Result<String, String> {
             .filter_map(|v| v.to_str().ok().map(String::from))
             .collect();
         let body = String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))?;
-        Ok::<_, String>((body, set_cookies))
+        Ok::<_, String>((status, body, set_cookies))
     });
-    let (body, set_cookies) = handle
+    let (status, body, set_cookies) = handle
         .join()
         .map_err(|_| "fetch thread panicked".to_string())??;
     // 主线程写回 jar。
@@ -418,7 +488,7 @@ fn fetch_sync(url: &str) -> Result<String, String> {
             }
         });
     }
-    Ok(body)
+    Ok((status, body))
 }
 
 // ---------------------------------------------------------------------------

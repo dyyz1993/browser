@@ -1,23 +1,25 @@
 //! M19.1: 注入全局 `fetch` 函数（Web 标准 Promise-based API）。
+//! M20.3: 扩展支持 `fetch(url, {method, body, headers})`（POST/PUT/DELETE）。
 //!
 //! 让 JS 代码可以用现代 SPA 的标准模式：
 //! ```js
+//! // GET
 //! const res = await fetch('/api/data');
 //! const text = await res.text();
-//! // 或
-//! fetch('/api/data').then(res => res.text()).then(text => render(text));
+//! // POST（表单提交 / API 调用）
+//! await fetch('/api/login', {
+//!     method: 'POST',
+//!     body: 'user=alice&pass=x',
+//!     headers: {'Content-Type': 'application/x-www-form-urlencoded'}
+//! });
 //! ```
 //!
 //! 实现策略（复用 M16 Promise + M17 纯 JS shim 模式）：
-//! - `fetch(url)` 返回一个 Promise（异步语义，符合 Web 标准）。
-//! - Promise executor 内部：同步调 `__fetchSync(url)` 拿原始响应，
+//! - `fetch(url, options?)` 返回一个 Promise（异步语义，符合 Web 标准）。
+//! - Promise executor 内部：根据 options.method 选 `__fetchSync`（GET）
+//!   或 `__fetchSyncMethod`（POST/PUT/DELETE），拿原始响应，
 //!   然后用 `setTimeout(resolve, 0)` 让 resolve 走 event loop（macrotask）。
-//! - Response 对象：`{ ok, status, statusText, text: () => Promise }`。
-//!
-//! 这是 MVP：
-//! - 不支持 POST/PUT 等非 GET 方法（爬虫场景 GET 足够）
-//! - 不支持 request headers / body（cookie jar 自动带）
-//! - Response.text() 返回 Promise（标准语义），内部立即 resolve
+//! - Response 对象：`{ ok, status, statusText, text: () => Promise, json: () => Promise }`。
 
 use boa_engine::{Context, JsResult};
 
@@ -70,14 +72,39 @@ __FetchResponse.prototype.json = function() {
     });
 };
 
-// 全局 fetch：返回 Promise<Response>
-globalThis.fetch = function(input) {
+// 全局 fetch：返回 Promise<Response>。M20.3: 支持 options（method/body/headers）。
+globalThis.fetch = function(input, options) {
     var url = (typeof input === 'string') ? input
         : (input && input.url) ? input.url
         : String(input);
+    options = options || {};
+    var method = (options.method || 'GET').toUpperCase();
+    var body = options.body;
+    // 从 options.headers 提取 Content-Type（标准 fetch headers 是 Headers 对象或普通对象）
+    var contentType = null;
+    if (options.headers) {
+        // Headers 对象（有 get 方法）或普通对象
+        if (typeof options.headers.get === 'function') {
+            contentType = options.headers.get('Content-Type');
+        } else {
+            // 普通 key-value 对象（大小写不敏感查）
+            for (var k in options.headers) {
+                if (k.toLowerCase() === 'content-type') {
+                    contentType = options.headers[k];
+                    break;
+                }
+            }
+        }
+    }
     return new Promise(function(resolve, reject) {
-        // 同步 fetch（__fetchSync 带 cookie jar + networkidle 计数）
-        var raw = __fetchSync(url);
+        // 根据 method 选后端桥
+        var raw;
+        if (method === 'GET' || method === 'HEAD') {
+            raw = __fetchSync(url);
+        } else {
+            // POST/PUT/DELETE 用 __fetchSyncMethod（传 method + body + contentType）
+            raw = __fetchSyncMethod(url, method, body || null, contentType);
+        }
         // setTimeout(0) 让 resolve 走 macrotask（符合 Web 标准：
         // fetch 总是异步 resolve，即使响应已就绪）
         setTimeout(function() {

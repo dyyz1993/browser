@@ -75,8 +75,10 @@ impl HttpClient {
         url: &str,
         cookie_header: Option<&str>,
     ) -> Result<(Vec<u8>, HeaderMap), NetError> {
-        self.request(url, Method::GET, None, None, cookie_header)
-            .await
+        let (_status, body, headers) = self
+            .request_full(url, Method::GET, None, None, cookie_header)
+            .await?;
+        Ok((body, headers))
     }
 
     /// Issue a POST request with a request body and optional Content-Type.
@@ -135,6 +137,14 @@ impl HttpClient {
     /// # Errors
     /// Returns [`NetError`] for invalid URL, unsupported scheme,
     /// transport failure, or non-2xx HTTP status.
+    /// Generic request: any method + optional body + optional Content-Type +
+    /// optional Cookie header. Returns body + headers (status discarded).
+    ///
+    /// M20.1: `get_with_headers` / `post` / `put` / `delete` 的统一后端。
+    ///
+    /// # Errors
+    /// Returns [`NetError`] for invalid URL, unsupported scheme,
+    /// transport failure, or non-2xx HTTP status.
     pub async fn request(
         &self,
         url: &str,
@@ -143,6 +153,25 @@ impl HttpClient {
         content_type: Option<&str>,
         cookie_header: Option<&str>,
     ) -> Result<(Vec<u8>, HeaderMap), NetError> {
+        let (_status, body, headers) = self
+            .request_full(url, method, body, content_type, cookie_header)
+            .await?;
+        Ok((body, headers))
+    }
+
+    /// M20.3: Like [`request`] but also returns the real HTTP status code.
+    /// fetch API 需要真实 status code（201/204 等），不能丢给 is_success()。
+    ///
+    /// # Errors
+    /// See [`HttpClient::get`].
+    pub async fn request_full(
+        &self,
+        url: &str,
+        method: Method,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> Result<(u16, Vec<u8>, HeaderMap), NetError> {
         let parsed = Url::parse(url).map_err(|_| NetError::InvalidUrl {
             url: url.to_string(),
         })?;
@@ -177,10 +206,9 @@ impl HttpClient {
             .request(req)
             .await
             .map_err(|e| NetError::RequestFailed(e.to_string()))?;
+        let status = resp.status().as_u16();
         if !resp.status().is_success() {
-            return Err(NetError::BadStatus {
-                code: resp.status().as_u16(),
-            });
+            return Err(NetError::BadStatus { code: status });
         }
         let headers = resp.headers().clone();
         let resp_body = resp
@@ -189,7 +217,32 @@ impl HttpClient {
             .await
             .map_err(|e| NetError::ReadFailed(e.to_string()))?
             .to_bytes();
-        Ok((resp_body.to_vec(), headers))
+        Ok((status, resp_body.to_vec(), headers))
+    }
+
+    /// M20.3: Like [`request_full`] but takes method as `&str`（避免上层
+    /// 依赖 hyper::Method）。method 不区分大小写：GET/POST/PUT/DELETE 等。
+    ///
+    /// # Errors
+    /// See [`HttpClient::get`]. Unknown method → treated as GET.
+    pub async fn request_full_str(
+        &self,
+        url: &str,
+        method: &str,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> Result<(u16, Vec<u8>, HeaderMap), NetError> {
+        let m = match method.to_uppercase().as_str() {
+            "POST" => Method::POST,
+            "PUT" => Method::PUT,
+            "DELETE" => Method::DELETE,
+            "HEAD" => Method::HEAD,
+            "PATCH" => Method::PATCH,
+            _ => Method::GET,
+        };
+        self.request_full(url, m, body, content_type, cookie_header)
+            .await
     }
 }
 

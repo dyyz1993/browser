@@ -8,7 +8,7 @@
 
 use browser_html_parser::parse as parse_html;
 use browser_js_runtime::{bridge::body_text_content, run_scripts_with_base};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -175,5 +175,190 @@ fetchAppend('{base}/api/second');
     assert!(
         pos_first < pos_second,
         "fetches should resolve in order. body={body:?}"
+    );
+}
+
+// ===== M20.3: fetch POST / PUT / DELETE =====
+
+#[tokio::test]
+async fn fetch_post_with_form_body() {
+    let server = MockServer::start().await;
+    let base = server.uri();
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("logged-in"))
+        .mount(&server)
+        .await;
+
+    let html = format!(
+        r#"<html><body><p>init</p>
+<script>
+// 标准 fetch POST：method + body + headers（React/Vue 表单提交同款）
+fetch('{base}/login', {{
+    method: 'POST',
+    body: 'user=alice&pass=x',
+    headers: {{ 'Content-Type': 'application/x-www-form-urlencoded' }}
+}}).then(function(res) {{
+    return res.text();
+}}).then(function(text) {{
+    __setBody('GOT:' + text);
+}});
+</script>
+</body></html>"#,
+        base = base
+    );
+
+    let tree = parse_html(&html);
+    let (shared, _) = run_scripts_with_base(tree, Some(base));
+    let body = body_text_content(&shared.borrow());
+    assert!(
+        body.contains("GOT:logged-in"),
+        "fetch POST form should render response. body={body:?}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_post_json_body() {
+    let server = MockServer::start().await;
+    let base = server.uri();
+    Mock::given(method("POST"))
+        .and(path("/api/users"))
+        .and(header("content-type", "application/json"))
+        .respond_with(ResponseTemplate::new(201).set_body_string("created"))
+        .mount(&server)
+        .await;
+
+    let html = format!(
+        r#"<html><body><p>init</p>
+<script>
+fetch('{base}/api/users', {{
+    method: 'POST',
+    body: JSON.stringify({{name: 'Alice'}}),
+    headers: {{ 'Content-Type': 'application/json' }}
+}}).then(function(res) {{
+    __setBody('status=' + res.status);
+}});
+</script>
+</body></html>"#,
+        base = base
+    );
+
+    let tree = parse_html(&html);
+    let (shared, _) = run_scripts_with_base(tree, Some(base));
+    let body = body_text_content(&shared.borrow());
+    assert!(
+        body.contains("status=201"),
+        "fetch POST JSON should get 201. body={body:?}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_put_updates_resource() {
+    let server = MockServer::start().await;
+    let base = server.uri();
+    Mock::given(method("PUT"))
+        .and(path("/items/5"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("updated"))
+        .mount(&server)
+        .await;
+
+    let html = format!(
+        r#"<html><body><p>init</p>
+<script>
+fetch('{base}/items/5', {{
+    method: 'PUT',
+    body: 'new-data'
+}}).then(function(res) {{ return res.text(); }}).then(function(t) {{
+    __setBody('PUT:' + t);
+}});
+</script>
+</body></html>"#,
+        base = base
+    );
+
+    let tree = parse_html(&html);
+    let (shared, _) = run_scripts_with_base(tree, Some(base));
+    let body = body_text_content(&shared.borrow());
+    assert!(
+        body.contains("PUT:updated"),
+        "fetch PUT should render. body={body:?}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_delete_removes_resource() {
+    let server = MockServer::start().await;
+    let base = server.uri();
+    Mock::given(method("DELETE"))
+        .and(path("/items/9"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("deleted"))
+        .mount(&server)
+        .await;
+
+    let html = format!(
+        r#"<html><body><p>init</p>
+<script>
+fetch('{base}/items/9', {{ method: 'DELETE' }})
+    .then(function(res) {{ return res.text(); }})
+    .then(function(t) {{ __setBody('DEL:' + t); }});
+</script>
+</body></html>"#,
+        base = base
+    );
+
+    let tree = parse_html(&html);
+    let (shared, _) = run_scripts_with_base(tree, Some(base));
+    let body = body_text_content(&shared.borrow());
+    assert!(
+        body.contains("DEL:deleted"),
+        "fetch DELETE should render. body={body:?}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_post_carries_cookie_jar() {
+    // POST 也应自动带 cookie jar（登录后调用受保护 API 场景）
+    let server = MockServer::start().await;
+    let base = server.uri();
+    // 先 GET 设 cookie
+    Mock::given(method("GET"))
+        .and(path("/set"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("set-cookie", "AUTH=secret; Path=/")
+                .set_body_string("set"),
+        )
+        .mount(&server)
+        .await;
+    // POST 期望带 cookie
+    Mock::given(method("POST"))
+        .and(path("/secure"))
+        .and(header("cookie", "AUTH=secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("authorized"))
+        .mount(&server)
+        .await;
+
+    let html = format!(
+        r#"<html><body><p>init</p>
+<script>
+// 1. GET 设 cookie（进 jar）
+fetch('{base}/set').then(function() {{
+    // 2. POST 应自动带 cookie jar
+    return fetch('{base}/secure', {{ method: 'POST', body: 'x' }});
+}}).then(function(res) {{ return res.text(); }}).then(function(t) {{
+    __setBody('FINAL:' + t);
+}});
+</script>
+</body></html>"#,
+        base = base
+    );
+
+    let tree = parse_html(&html);
+    let (shared, _) = run_scripts_with_base(tree, Some(base));
+    let body = body_text_content(&shared.borrow());
+    assert!(
+        body.contains("FINAL:authorized"),
+        "fetch POST should carry cookie jar. body={body:?}"
     );
 }
