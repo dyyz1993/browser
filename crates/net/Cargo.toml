@@ -7,14 +7,18 @@ license.workspace = true
 description = "HTTP / HTTPS / WebSocket client for the browser project"
 
 [dependencies]
-hyper = { version = "1.5", features = ["client", "http1", "http2"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "webpki-roots", "ring"] }
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
-http-body-util = "0.1"
+# M24: 从 hyper-rustls(ring) 切换到 reqwest(default-tls/native-tls)。
+# 根因：hyper-rustls 的 ring provider 与百度等中国大站 CDN 的 TLS 实现不兼容
+# （AlertReceived(ProtocolVersion)），而系统 TLS 库（native-tls，curl 同款）能连。
+# 连真实站点是 GOALS.md 最高优先级（G1 爬虫），高于"纯 Rust 依赖"原则。
+reqwest = { version = "0.12", default-features = false, features = [
+    "default-tls",
+    "http2",
+    "charset",
+] }
 tokio = { workspace = true }
 url = "2"
 thiserror = { workspace = true }
-bytes = "1"
 
 [dev-dependencies]
 tokio = { workspace = true }

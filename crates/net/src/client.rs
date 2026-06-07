@@ -1,38 +1,30 @@
-//! HTTP client based on `hyper` + `hyper-rustls`.
+//! HTTP client based on `reqwest` (default-tls = native-tls = 系统 TLS 库).
 //!
-//! M1.1: HTTPS GET only.
+//! M1.1: HTTPS GET only (hyper-rustls).
 //! M15.2: GET + Cookie header / Set-Cookie 返回。
 //! M20.1: 通用 `request`（任意 method + body），POST/PUT 支持。
+//! M24.2: **TLS 后端切换** hyper-rustls(ring) → reqwest(native-tls)。
+//!
+//! ## M24 切换根因
+//! hyper-rustls 的 ring provider 与百度/腾讯等中国大站 CDN 的 TLS 实现不兼容
+//! （握手时收到 `AlertReceived(ProtocolVersion)`）。而系统 TLS 库（native-tls，
+//! curl/wget 同款）能正常连接。连真实站点是 GOALS.md 最高优先级（G1 爬虫），
+//! 高于"纯 Rust 依赖 + webpki-roots 可移植"原则。
+//! 详见 `docs/decisions/0003-tls-backend-native-tls.md`。
 
-use std::time::Duration;
-
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::{header::HeaderMap, Method, Request, Response};
-use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use reqwest::header::HeaderMap;
+use reqwest::Method;
 use url::Url;
 
 use crate::error::NetError;
 
-/// Build the HTTPS connector. Uses webpki-roots so we ship with the
-/// bundle and do not depend on the system trust store — keeps the
-/// binary portable across Windows / macOS / Linux.
-fn https_connector() -> HttpsConnector<HttpConnector> {
-    hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .build()
-}
+/// 真实 Chrome UA（解决反爬 + 模拟浏览器行为）。
+const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-/// HTTP client. Cheap to clone (internally `Arc`-wrapped).
+/// HTTP client. Cheap to clone (reqwest internally `Arc`-wrapped).
 #[derive(Clone)]
 pub struct HttpClient {
-    inner: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    inner: reqwest::Client,
 }
 
 impl Default for HttpClient {
@@ -45,10 +37,12 @@ impl HttpClient {
     /// Create a new client with default settings.
     #[must_use]
     pub fn new() -> Self {
-        let connector = https_connector();
-        let inner = Client::builder(TokioExecutor::new())
-            .pool_idle_timeout(Some(Duration::from_secs(30)))
-            .build(connector);
+        // 跟随 redirect（浏览器标准行为，最多 10 次防死循环）。
+        let inner = reqwest::Client::builder()
+            .user_agent(UA)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { inner }
     }
 
@@ -65,8 +59,7 @@ impl HttpClient {
     /// Issue a GET request with an optional `Cookie` header, returning
     /// both the response body and all response headers (for `Set-Cookie`).
     ///
-    /// M15.2: Cookie jar 集成点。`cookie_header` 为 None 时不发 Cookie 头；
-    /// 上层（cli/js-runtime）从返回的 headers 里解析 Set-Cookie 存入 jar。
+    /// M15.2: Cookie jar 集成点。
     ///
     /// # Errors
     /// See [`HttpClient::get`].
@@ -81,10 +74,7 @@ impl HttpClient {
         Ok((body, headers))
     }
 
-    /// Issue a POST request with a request body and optional Content-Type.
-    ///
-    /// M20.1: 表单提交 / API 调用场景。`body` 为空时不发 body（某些 API
-    /// 用 POST 不带 body）。
+    /// Issue a POST request with a request body and optional Content-Type. (M20.1)
     ///
     /// # Errors
     /// See [`HttpClient::get`].
@@ -99,9 +89,7 @@ impl HttpClient {
             .await
     }
 
-    /// Issue a PUT request with a request body and optional Content-Type.
-    ///
-    /// M20.1: REST API 更新场景。
+    /// Issue a PUT request with a request body and optional Content-Type. (M20.1)
     ///
     /// # Errors
     /// See [`HttpClient::get`].
@@ -131,16 +119,7 @@ impl HttpClient {
 
     /// Generic request: any method + optional body + optional Content-Type +
     /// optional Cookie header. Returns body + all response headers.
-    ///
-    /// M20.1: `get_with_headers` / `post` / `put` / `delete` 的统一后端。
-    ///
-    /// # Errors
-    /// Returns [`NetError`] for invalid URL, unsupported scheme,
-    /// transport failure, or non-2xx HTTP status.
-    /// Generic request: any method + optional body + optional Content-Type +
-    /// optional Cookie header. Returns body + headers (status discarded).
-    ///
-    /// M20.1: `get_with_headers` / `post` / `put` / `delete` 的统一后端。
+    /// (status discarded — use [`request_full`] for status)
     ///
     /// # Errors
     /// Returns [`NetError`] for invalid URL, unsupported scheme,
@@ -159,7 +138,7 @@ impl HttpClient {
         Ok((body, headers))
     }
 
-    /// M20.3: Like [`request`] but also returns the real HTTP status code.
+    /// Like [`request`] but also returns the real HTTP status code. (M20.3)
     /// fetch API 需要真实 status code（201/204 等），不能丢给 is_success()。
     ///
     /// # Errors
@@ -180,30 +159,18 @@ impl HttpClient {
                 scheme: parsed.scheme().to_string(),
             });
         }
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(url)
-            .header(
-                "user-agent",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            );
+        let mut builder = self.inner.request(method, url);
         if let Some(cookie) = cookie_header {
             builder = builder.header("cookie", cookie);
         }
         if let Some(ct) = content_type {
             builder = builder.header("content-type", ct);
         }
-        // body：有则包进 Full<Bytes>，无则空 body（GET/DELETE 默认无 body）。
-        let req_body = match body {
-            Some(b) => Full::from(Bytes::copy_from_slice(b.as_bytes())),
-            None => Full::default(),
-        };
-        let req = builder
-            .body(req_body)
-            .map_err(|e| NetError::RequestFailed(e.to_string()))?;
-        let resp: Response<_> = self
-            .inner
-            .request(req)
+        if let Some(b) = body {
+            builder = builder.body(b.to_string());
+        }
+        let resp = builder
+            .send()
             .await
             .map_err(|e| NetError::RequestFailed(e.to_string()))?;
         let status = resp.status().as_u16();
@@ -211,17 +178,16 @@ impl HttpClient {
             return Err(NetError::BadStatus { code: status });
         }
         let headers = resp.headers().clone();
-        let resp_body = resp
-            .into_body()
-            .collect()
+        let body = resp
+            .bytes()
             .await
             .map_err(|e| NetError::ReadFailed(e.to_string()))?
-            .to_bytes();
-        Ok((status, resp_body.to_vec(), headers))
+            .to_vec();
+        Ok((status, body, headers))
     }
 
-    /// M20.3: Like [`request_full`] but takes method as `&str`（避免上层
-    /// 依赖 hyper::Method）。method 不区分大小写：GET/POST/PUT/DELETE 等。
+    /// Like [`request_full`] but takes method as `&str`（避免上层依赖
+    /// `reqwest::Method`）。method 不区分大小写：GET/POST/PUT/DELETE 等。
     ///
     /// # Errors
     /// See [`HttpClient::get`]. Unknown method → treated as GET.
