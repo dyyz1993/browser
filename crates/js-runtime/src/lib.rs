@@ -12,6 +12,7 @@ pub mod fetch_shim;
 pub mod navigation_shim;
 pub mod navigator_shim;
 pub mod runtime;
+pub mod screen_shim;
 pub mod scripts;
 pub mod storage_shim;
 pub mod window_shim;

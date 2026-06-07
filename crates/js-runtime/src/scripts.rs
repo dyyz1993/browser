@@ -204,6 +204,9 @@ pub fn run_scripts_with_base(
     // 包装 __* 桥 + body/head/cookie/title/location 数据属性）。必须在 window
     // 之后（document.location 指向 location 全局对象）。
     let _ = crate::document_shim::install_document(&mut ctx);
+    // M28.4: 安装 screen 全局对象（width/height/colorDepth/orientation，响应式布局
+    // 特性检测常用）。静态默认值（无显示器环境）。
+    let _ = crate::screen_shim::install_screen(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
