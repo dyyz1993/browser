@@ -15,9 +15,11 @@
 pub mod base64;
 pub mod client;
 pub mod handshake;
+pub mod manager;
 pub mod sha1;
 
 pub use client::{Message, WebSocket};
+pub use manager::{WsEvent, WsManager};
 
 use thiserror::Error;
 
