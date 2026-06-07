@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `b9df09c`（M19.2 fetch e2e） |
-| 总 commits | 121 |
-| 测试 | 339 passed, 0 clippy warnings |
+| HEAD | `ead7644`（M20.3 fetch POST/PUT/DELETE） |
+| 总 commits | 124 |
+| 测试 | 350 passed, 0 clippy warnings |
 | Crates | 14 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,17 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M20 — fetch 增强（POST/PUT/DELETE + 真实 status code）✅
+- M20.1+M20.2 ✅ net 通用 request（POST/PUT/DELETE wiremock 测试）
+- M20.3 ✅ fetch(url, {method, body, headers}) JS 端 + request_full（真实 status 201）
+- M20.4 ✅ 文档同步
+
+fetch 现支持完整 HTTP method 集合：表单提交 / REST API 调用场景。
+request_full 返回真实 status code（不再被 is_success() 吞掉 201/204）。
+POST/PUT/DELETE 自动带 cookie jar（复用 M15）+ networkidle 计数（复用 M18）。
+
+---
 
 ### M19 — 标准 fetch API（现代 SPA 核心）✅
 - M19.1 ✅ __fetchSync 桥 + fetch_shim（Response 对象 + .text()/.json()）
