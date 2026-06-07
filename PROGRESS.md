@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `52af039`（M23.5 JS WebSocket 全局对象） |
-| 总 commits | 135 |
-| 测试 | 444 passed, 0 clippy warnings |
+| HEAD | `8e3ae7a`（M26.1 textarea CSS 泄漏修复） |
+| 总 commits | 140 |
+| 测试 | 449 passed, 0 clippy warnings |
 | Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,33 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M26 — 真实站点渲染修复（百度截图可用）✅
+- M25.1+M25.2 ✅ 截图字形坐标修复（fontdue metrics 精确测量 + 坐标公式不翻转，乱码→可读）
+- M26.1 ✅ textarea 加入非渲染黑名单（修复百度 CSS 泄漏，截图 50MB→1.3MB，降幅 78%）
+- M26.2 ✅ 文档同步
+
+让百度等真实站点截图真正可用。两大修复：
+1. fontdue 字形坐标：旧版用硬编码 COL_WIDTH/LINE_HEIGHT 且翻转公式导致字形重叠+垂直镜像。
+   改用 fontdue Metrics 精确测量（advance_width/ascent/descent）+ 正确坐标公式
+   （y_origin = baseline - ymin - height + 1，不翻转）+ 纯数学锁定测试。
+2. textarea CSS 泄漏：百度把 CSS 藏在 `<textarea style="display:none">` 做延迟加载，
+   旧版把 textarea 当普通元素渲染导致 CSS 泄漏（69% 噪音）。加入非渲染黑名单。
+
+验证：百度截图 2270×57100(50MB) → 2736×10600(1.3MB)，内容干净（百度首页/新闻/hao123 全在）。
+
+---
+
+### M24 — TLS 后端切换（百度可连）✅
+- M24.1 ✅ 诊断（curl 能秒连百度，hyper-rustls 报 AlertReceived(ProtocolVersion)）
+- M24.2 ✅ net crate hyper-rustls→reqwest(native-tls)，公开 API 不变
+- M24.3 ✅ 实测百度可连可截图 + commit + 文档
+
+推翻 memory 旧误判：'真实 HTTPS 连接失败 = 网络环境问题'是错的。真相是
+hyper-rustls 的 ring provider 与百度 CDN TLS 不兼容。换 reqwest(native-tls，
+curl 同款系统 TLS 库）解决。
+
+---
 
 ### M23 — WebSocket（手写 RFC 6455，实时 SPA）✅
 - M23.1 ✅ browser-ws crate：RFC 6455 帧编解码纯算法
