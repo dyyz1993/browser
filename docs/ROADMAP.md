@@ -32,7 +32,8 @@
 | M20 | ✅ | fetch 增强（POST/PUT/DELETE + 真实 status） | 350 |
 | M21 | ✅ | Cookie 持久化（跨进程登录态） | 363 |
 | M22 | ✅ | 真实图像渲染（<img> → ASCII art） | 366 |
-| M23+ | ⚪ | 前瞻（见下） | — |
+| M23 | ✅ | WebSocket（手写 RFC 6455，实时 SPA） | 444 |
+| M24+ | ⚪ | 前瞻（见下） | — |
 
 ---
 

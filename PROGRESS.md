@@ -11,10 +11,10 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `7a1e50d`（M22.2 img ASCII 渲染） |
-| 总 commits | 130 |
-| 测试 | 366 passed, 0 clippy warnings |
-| Crates | 14 |
+| HEAD | `52af039`（M23.5 JS WebSocket 全局对象） |
+| 总 commits | 135 |
+| 测试 | 444 passed, 0 clippy warnings |
+| Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
 | 截图 G2 | ✅ 达成（M12.1） |
@@ -36,6 +36,26 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M23 — WebSocket（手写 RFC 6455，实时 SPA）✅
+- M23.1 ✅ browser-ws crate：RFC 6455 帧编解码纯算法
+  （OpCode/Frame/apply_mask/encode_frame/decode_frame，7/16/64-bit 长度，控制帧校验）
+- M23.2 ✅ 握手 sha1 + base64 + handshake（纯算法，RFC 6455 §4.2.2 经典向量验证）
+- M23.3 ✅ tokio TCP 连接 + 握手 + 帧读写（ws://，XorShift64 PRNG）
+- M23.4 ✅ WsManager 多连接管理器（后台线程 + 命令/事件队列，修复 await_holding_lock）
+- M23.5 ✅ JS WebSocket 全局对象（纯 JS 原型，修复 Close 不 push 事件 + recv_buf 丢失）
+- M23.6 ✅ 文档同步
+
+解决实时 SPA（聊天/推送）的最后一块拼图。**手写 RFC 6455**，不引入 tungstenite
+（遵循 GOALS.md 自研优先）。ws:// 全链路验证（echo server e2e）。
+
+真实 bug 修复（2 个，记录教训）：
+1. manager.rs WsCmd::Close：发 Close 帧后必须 push Closed 事件，否则 pump
+   ws_connection_count 永不归零 → idle 超时。
+2. client.rs recv_message：recv_buf 必须是 struct 字段而非局部变量。一次
+   socket.read 可能读到多帧 TCP 数据，局部 buf return 时 drop 会丢失后续帧字节。
+
+---
 
 ### M22 — 真实图像渲染（<img> → ASCII art）✅
 - M22.1 ✅ render crate image 模块（image_to_ascii_from_img + resolve_local_image_src，10 测试）
