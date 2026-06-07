@@ -222,7 +222,7 @@ mod tests {
             "'p' bottom ({bottom_p}) must be below 'b' bottom ({bottom_b}) — 否则 descender 丢失"
         );
         // 3. 字形都在 cell 内（不溢出到相邻行）
-        let line_height = (ascent + 4 + LINE_GAP as i32) as i32;
+        let line_height = ascent + 4 + LINE_GAP as i32;
         assert!(top_b >= 0, "'b' top ({top_b}) 不能为负");
         assert!(
             bottom_p < line_height,

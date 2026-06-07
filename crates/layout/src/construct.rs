@@ -199,10 +199,23 @@ fn ua_default_margins(tag: &str) -> browser_css_engine::BoxEdges<Length> {
 ///   is the cleanest fix — `<title>` text won't leak into output.
 /// - `script` / `style` / `noscript` / `template`: already established
 ///   in M4.1.
+/// - `textarea`: form control, content is its initial *value*, not
+///   document flow text. **M26**: 百度等大站把 CSS 文本塞进
+///   `<textarea id="..." style="display:none">` 做延迟加载，导致
+///   渲染时 CSS 泄漏（69% 输出是 CSS 噪音）。真浏览器 textarea 内容
+///   不参与渲染。
 fn is_non_rendered_tag(tag: &str) -> bool {
     matches!(
         tag.to_ascii_lowercase().as_str(),
-        "head" | "meta" | "link" | "title" | "script" | "style" | "noscript" | "template" // M9.1: img 需要（渲染为 [IMG: src] 占位符），不列入黑名单
+        "head"
+            | "meta"
+            | "link"
+            | "title"
+            | "script"
+            | "style"
+            | "noscript"
+            | "template"
+            | "textarea" // M9.1: img 需要（渲染为 [IMG: src] 占位符），不列入黑名单
     )
 }
 
