@@ -483,6 +483,13 @@ name = "browser-storage"
 version = "0.0.1"
 
 [[package]]
+name = "browser-ws"
+version = "0.0.1"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "bstr"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

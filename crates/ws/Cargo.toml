@@ -1,0 +1,14 @@
+[package]
+name = "browser-ws"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "RFC 6455 WebSocket frame codec (hand-written, no tungstenite)"
+
+[lib]
+name = "browser_ws"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = { workspace = true }
