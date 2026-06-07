@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
+use browser_cookie::{load_from_file_shared, save_jar_to_file};
 use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
@@ -28,6 +29,10 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "browser", version, about = "Cross-platform browser toolkit")]
 struct Cli {
+    /// M21.2: load cookies from this file at start (if exists), save
+    /// updated jar back at exit. Enables login persistence across runs.
+    #[arg(long, global = true)]
+    cookie_file: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -113,7 +118,82 @@ enum Cmd {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
-    match cli.cmd {
+    // M21.2: 加载 cookie 文件（如果 --cookie-file 指定且文件存在）。
+    // 用 RAII guard 确保 run 退出时（无论成功还是 ? 提前返回）
+    // 都把更新后的 jar save 回文件（登录态持久化）。
+    let mut _cookie_guard = cli.cookie_file.as_ref().and_then(|path: &PathBuf| {
+        load_cookie_file(path);
+        // load 后 current_cookie_jar() 应非空（ensure_cookie_jar 已调）
+        current_cookie_jar().map(|jar| CookieFileGuard {
+            path: path.clone(),
+            jar,
+        })
+    });
+    let result = run_cmd(cli.cmd).await;
+    // M21.2: 命令执行后，把最新 jar 同步到 guard（保留新获取的 cookie）。
+    if let Some(g) = _cookie_guard.as_mut() {
+        g.sync_jar();
+    }
+    result
+}
+
+/// M21.2: RAII guard，Drop 时把 cookie jar save 回文件。
+/// 确保 `?` 提前返回时也持久化登录态。
+struct CookieFileGuard {
+    path: PathBuf,
+    /// M21.2: 持有 jar 的 owned clone，不受 thread-local 清空影响。
+    jar: browser_cookie::CookieHandle,
+}
+
+impl Drop for CookieFileGuard {
+    fn drop(&mut self) {
+        // M21.2: 始终 save。注意：保存 self.jar（owned clone），而非 current_cookie_jar()，
+        // 因为 run_scripts_with_base 的 TreeGuard::drop 会清空 thread-local slot。
+        if let Err(e) = save_jar_to_file(&self.jar, &self.path) {
+            eprintln!("[cookie] failed to save {}: {e}", self.path.display());
+        } else {
+            eprintln!("[cookie] saved {}", self.path.display());
+        }
+    }
+}
+
+impl CookieFileGuard {
+    /// M21.2: 在 run 退出前手动 flush，把最新 jar 同步到 self.jar。
+    /// 因 thread-local jar 可能被 TreeGuard::drop 清空，需在命令执行后、
+    /// guard drop 前同步一次。
+    fn sync_jar(&mut self) {
+        if let Some(jar) = current_cookie_jar() {
+            self.jar = jar;
+        }
+    }
+}
+
+/// M21.2: 加载 cookie 文件到当前 jar（文件不存在视为空 jar，返回 false）。
+fn load_cookie_file(path: &std::path::Path) -> bool {
+    ensure_cookie_jar();
+    if !path.exists() {
+        eprintln!("[cookie] {} not found, starting fresh", path.display());
+        return false;
+    }
+    if let Some(jar) = current_cookie_jar() {
+        match load_from_file_shared(&jar, path) {
+            Ok(()) => {
+                eprintln!("[cookie] loaded {}", path.display());
+                true
+            }
+            Err(e) => {
+                eprintln!("[cookie] load {} failed: {e}", path.display());
+                false
+            }
+        }
+    } else {
+        false
+    }
+}
+
+/// 把 Cmd match 拆出，让 run() 能套 cookie guard。
+async fn run_cmd(cmd: Cmd) -> Result<()> {
+    match cmd {
         Cmd::ImageAscii {
             file,
             width,

@@ -49,6 +49,22 @@ pub fn new_cookie_jar() -> CookieHandle {
     Rc::new(RefCell::new(CookieStore { cookies: vec![] }))
 }
 
+/// M21.2: 便利函数 —— 把 shared jar 加载自文件（覆盖当前内容）。
+///
+/// # Errors
+/// Returns error string if file read or parse fails.
+pub fn load_from_file_shared(jar: &CookieHandle, path: &std::path::Path) -> Result<(), String> {
+    jar.borrow_mut().load_from_file(path)
+}
+
+/// M21.2: 便利函数 —— 把 shared jar 保存到文件。
+///
+/// # Errors
+/// Returns error string if file write fails.
+pub fn save_jar_to_file(jar: &CookieHandle, path: &std::path::Path) -> Result<(), String> {
+    jar.borrow().save_to_file(path)
+}
+
 impl CookieStore {
     /// 当前 cookie 总数（含同域多份）。
     pub fn len(&self) -> usize {
