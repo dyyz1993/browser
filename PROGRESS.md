@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `eeef874`（M28.4 screen 全局对象） |
-| 总 commits | 150 |
-| 测试 | 481 passed, 0 clippy warnings |
+| HEAD | `f57624d`（M30 <a> 蓝色渲染） |
+| 总 commits | 155 |
+| 测试 | 489 passed, 0 clippy warnings |
 | Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -23,6 +23,29 @@
 ---
 
 ## 最近变更（倒序）
+
+### M29-M30 — ADR 文档 + 截图优化 + <a> 蓝色渲染 ✅
+- M29.1 ✅ ADR-0003 TLS 后端切换（hyper-rustls → native-tls）
+- M29.2 ✅ wss:// TLS 验证（代码层面确认 ws crate 只支持 ws://）
+- M29.3 ✅ 截图尺寸优化（--max-height 参数，限高避免超长截图）
+- M30 ✅ <a> 标签蓝色渲染（screenshot ANSI + W3C #0000EE）
+
+ADR-0003 记录 M24.2 决策：hyper-rustls 连百度报 AlertReceived(ProtocolVersion)，
+但 curl 能秒连。根因是 TLS 客户端兼容性，非网络环境问题。切换到 native-tls 解决。
+
+截图尺寸优化：screenshot.rs render_text_to_png 加 max_height 参数，从顶部截断。
+CLI render-file/render-script/render-url 加 --max-height flag。
+
+<a> 蓝色渲染（关键设计）：LayoutBox 加 link: bool，CharBuffer 加 links mask，
+render_ascii 双 API（plain + colored）。stdout 保持纯 ASCII（爬虫安全），
+screenshot 用 colored（ANSI \x1b[4;34m...\x1b[0m）。screenshot.rs
+strip_ansi_and_track_links 解析 ANSI → link span，渲染蓝色 (#0000EE)。
+render_html_to_string_inner 返回 (plain, colored) tuple，parse+layout+JS 只跑一次
+（避免重复执行 JS 的副作用风险）。
+
+验证：3 render 单元测试 + 4 screenshot ANSI 单元测试 + 百度截图 555K（max-height 2000）。
+
+---
 
 ### 2026-06-06 — 文档体系建立（wiki 重构）🟡 进行中
 **变更**：建立结构化 wiki 文档体系，解决多文档冗余 + 过时问题。

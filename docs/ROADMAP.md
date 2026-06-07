@@ -38,7 +38,9 @@
 | M26 | ✅ | textarea CSS 泄漏修复（百度截图 50MB→1.3MB） | 449 |
 | M27 | ✅ | <a href> 链接目标渲染（G1 爬虫核心） | 452 |
 | M28 | ✅ | JS 全局对象补齐（navigator/window/document/screen） | 481 |
-| M29+ | ⚪ | 前瞻（见下） | — |
+| M29 | ✅ | ADR-0003 + wss:// 验证 + 截图 --max-height | 482 |
+| M30 | ✅ | <a> 蓝色渲染（screenshot ANSI + #0000EE） | 489 |
+| M31+ | ⚪ | 前瞻（见下） | — |
 
 ---
 
