@@ -484,8 +484,10 @@ version = "0.0.1"
 name = "browser-ws"
 version = "0.0.1"
 dependencies = [
+ "native-tls",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-native-tls",
  "url",
 ]
 

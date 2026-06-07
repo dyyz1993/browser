@@ -1,28 +1,25 @@
-//! M29.2 e2e: wss:// WebSocket Secure 连接测试。
+//! M31 e2e: wss:// WebSocket Secure 连接测试。
 //!
-//! M24.2 切换到 reqwest(native-tls) 后，net crate 支持 HTTPS。
-//! 但 ws crate 代码层面只支持 ws://（client.rs 硬判断 scheme == "ws"），
-//! 不支持 wss://。M29.2 验证确认了这一点（ws://echo.websocket.org 能连，
-//! 但 wss:// 需 ws crate 加 TLS 支持，是单独的工程）。
-//!
-//! 这测试用 ws:// 验证基础 WebSocket 功能未退化（M23 ws:// echo server）。
+//! M31 ws crate 加 native-tls 支持，wss:// 已可用。用 postman-echo
+//! 真实 wss:// echo server 验证（echo.websocket.events 已停服）。
 //! 默认 #[ignore]（依赖外部服务，CI 不跑）。
+//!
+//! 运行: cargo test -p browser-js-runtime --test integration_wss -- --ignored
 
 use assert_cmd::Command;
 use std::io::Write;
 
 #[test]
 #[ignore] // 依赖外部服务，默认 skip
-fn ws_public_echo_server() {
-    // HTML 连接 ws://echo.websocket.org（plaintext WebSocket，M23 支持）
+fn wss_postman_echo() {
+    // HTML 连接 wss://ws.postman-echo.com/raw（M31 已支持 wss://）
     let html = r#"<!doctype html><html><body>
 <script>
-var ws = new WebSocket('ws://echo.websocket.org');
-ws.onopen = function() { __setBody('OPEN'); };
-ws.onmessage = function(e) { __setBody('MSG:' + e.data); };
+var ws = new WebSocket('wss://ws.postman-echo.com/raw');
+ws.onopen = function() { __setBody('OPEN'); ws.send('hello wss'); };
+ws.onmessage = function(e) { __appendBody(' MSG:' + e.data); };
 ws.onerror = function(e) { __setBody('ERR'); };
-ws.onclose = function() { __setBody('CLOSE'); };
-setTimeout(function() { ws.send('ping'); }, 500);
+ws.onclose = function() { __appendBody(' CLOSE'); };
 </script>
 </body></html>"#;
 
@@ -31,7 +28,7 @@ setTimeout(function() { ws.send('ping'); }, 500);
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = tmp.join(format!("m29-ws-{ts}.html"));
+    let path = tmp.join(format!("m31-wss-{ts}.html"));
     std::fs::File::create(&path)
         .unwrap()
         .write_all(html.as_bytes())
@@ -49,8 +46,11 @@ setTimeout(function() { ws.send('ping'); }, 500);
     eprintln!("stdout: {stdout}");
     eprintln!("stderr: {stderr}");
 
-    // 弱断言：至少有输出（说明脚本执行了）
     assert!(!stdout.is_empty(), "stdout empty - script not executed");
+    assert!(
+        stdout.contains("OPEN"),
+        "expected wss:// connection to open"
+    );
 
     let _ = std::fs::remove_file(&path);
 }

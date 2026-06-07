@@ -21,6 +21,10 @@ use crate::handshake::{
 };
 use crate::{decode_frame, encode_frame, Frame, OpCode, WsError};
 
+/// M31: 抽象 stream 类型——plaintext (TcpStream) 和 TLS (TlsStream) 共享同一接口。
+/// Box<dyn ...> 动态分发，避免泛型污染整个 WebSocket 结构。
+type BoxStream = Box<dyn AsyncReadWrite + Unpin + Send>;
+
 /// xorshift64 PRNG (Marsaglia). Non-crypto, fine for WS mask keys + client key.
 /// Seeded from system nanos so each run differs.
 struct XorShift64(u64);
@@ -59,9 +63,16 @@ impl XorShift64 {
     }
 }
 
+/// M31: AsyncRead + AsyncWrite 合一 trait（用于 trait object）。
+pub trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
+
+// Blanket impl: 所有同时实现 AsyncRead + AsyncWrite 的类型自动实现本 trait。
+impl<T> AsyncReadWrite for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
+
 /// An open WebSocket connection.
 pub struct WebSocket {
-    socket: TcpStream,
+    // M31: plaintext TcpStream 或 TlsStream<TcpStream>，统一为 trait object。
+    socket: BoxStream,
     rng: XorShift64,
     // M23.5: TCP 是字节流，一次 read 可能读到多帧（或多帧的一部分）。
     // recv_buf 跨调用保留未消费字节，避免丢失后续帧。
@@ -85,15 +96,18 @@ impl WebSocket {
     /// response, or Sec-WebSocket-Accept mismatch.
     pub async fn connect(url_str: &str) -> Result<Self, WsError> {
         let url = Url::parse(url_str).map_err(|_| WsError::InvalidFrame("invalid url"))?;
-        if url.scheme() != "ws" {
+        let scheme = url.scheme();
+        if scheme != "ws" && scheme != "wss" {
             return Err(WsError::InvalidFrame(
-                "only ws:// supported (wss:// is TODO)",
+                "unsupported scheme (only ws:// and wss://)",
             ));
         }
+        let is_tls = scheme == "wss";
         let host = url
             .host_str()
             .ok_or(WsError::InvalidFrame("missing host"))?;
-        let port = url.port().unwrap_or(80);
+        let default_port = if is_tls { 443 } else { 80 };
+        let port = url.port().unwrap_or(default_port);
         let path = if url.path().is_empty() {
             "/"
         } else {
@@ -107,9 +121,23 @@ impl WebSocket {
 
         // 1. TCP connect.
         let addr = format!("{host}:{port}");
-        let mut socket = TcpStream::connect(&addr)
+        let tcp_socket = TcpStream::connect(&addr)
             .await
             .map_err(|_| WsError::InvalidFrame("tcp connect failed"))?;
+
+        // M31: wss:// 需要 TLS handshake（native-tls，与 M24 决策一致）。
+        let mut socket: BoxStream = if is_tls {
+            let tls_connector = native_tls::TlsConnector::new()
+                .map_err(|_| WsError::InvalidFrame("tls connector init failed"))?;
+            let tls_connector = tokio_native_tls::TlsConnector::from(tls_connector);
+            let tls_socket = tls_connector
+                .connect(host, tcp_socket)
+                .await
+                .map_err(|_| WsError::InvalidFrame("tls handshake failed"))?;
+            Box::new(tls_socket)
+        } else {
+            Box::new(tcp_socket)
+        };
 
         // 2. Generate client key + send upgrade request.
         let mut rng = XorShift64::from_time();
