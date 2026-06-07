@@ -113,6 +113,104 @@ impl CookieStore {
             .collect::<Vec<_>>()
             .join("; ")
     }
+
+    /// M21.1: 序列化为纯文本（每行一个 cookie，TSV 风格）。不引入 serde（自研优先）。
+    /// 字段顺序：name\tvalue\tdomain\tpath\tsecure\thttp_only。首行是 # 注释。
+    #[must_use]
+    pub fn serialize(&self) -> String {
+        let mut out = String::from("# browser-cookie v1\n");
+        for c in &self.cookies {
+            out.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\n",
+                escape_field(&c.name),
+                escape_field(&c.value),
+                escape_field(&c.domain),
+                escape_field(&c.path),
+                if c.secure { "TRUE" } else { "FALSE" },
+                if c.http_only { "TRUE" } else { "FALSE" },
+            ));
+        }
+        out
+    }
+
+    /// M21.1: 从 serialize() 格式加载（清空当前 jar）。忽略 # 注释和空行（容错）。
+    ///
+    /// # Errors
+    /// Returns error string if a non-comment line has != 6 fields.
+    pub fn deserialize(&mut self, text: &str) -> Result<(), String> {
+        self.cookies.clear();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 6 {
+                return Err(format!(
+                    "invalid cookie line (expected 6 fields, got {}): {line}",
+                    fields.len()
+                ));
+            }
+            self.cookies.push(Cookie {
+                name: unescape_field(fields[0]),
+                value: unescape_field(fields[1]),
+                domain: unescape_field(fields[2]),
+                path: unescape_field(fields[3]),
+                secure: fields[4] == "TRUE",
+                http_only: fields[5] == "TRUE",
+            });
+        }
+        Ok(())
+    }
+
+    /// M21.1: 保存 jar 到文件（跨进程持久化登录态）。
+    ///
+    /// # Errors
+    /// Returns error string if file write fails.
+    pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), String> {
+        let text = self.serialize();
+        std::fs::write(path, text).map_err(|e| format!("write {path:?} failed: {e}"))
+    }
+
+    /// M21.1: 从文件加载 jar（覆盖当前内容）。
+    ///
+    /// # Errors
+    /// Returns error string if file read or parse fails.
+    pub fn load_from_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("read {path:?} failed: {e}"))?;
+        self.deserialize(&text)
+    }
+}
+
+/// M21.1: 字段转义（保护 tab/newline/backslash，避免破坏 TSV）。
+fn escape_field(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+}
+
+/// M21.1: 字段反转义（escape_field 的逆）。
+fn unescape_field(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('t') => out.push('\t'),
+                Some('n') => out.push('\n'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// domain 匹配（RFC 6265 §5.1.3 子集）。
@@ -225,6 +323,163 @@ mod tests {
 
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    fn unique_tmp(suffix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("browser-cookie-test-{nanos}-{suffix}"))
+    }
+
+    /// 构造一条 TSV cookie 行（避开字面量 tab/反斜杠转义歧义）。
+    fn cookie_line(
+        name: &str,
+        value: &str,
+        domain: &str,
+        path: &str,
+        secure: bool,
+        http_only: bool,
+    ) -> String {
+        let fields = [name, value, domain, path];
+        fields.join("\t")
+            + "\t"
+            + if secure { "TRUE" } else { "FALSE" }
+            + "\t"
+            + if http_only { "TRUE" } else { "FALSE" }
+            + "\n"
+    }
+
+    // --- M21.1 持久化测试 ---
+
+    #[test]
+    fn serialize_empty_jar_only_header() {
+        let jar = new_cookie_jar();
+        let text = jar.borrow().serialize();
+        assert!(text.starts_with("# browser-cookie v1"));
+        // 空 jar 只有 header 行
+        assert_eq!(text.lines().count(), 1);
+    }
+
+    #[test]
+    fn serialize_deserialize_round_trip() {
+        let jar = new_cookie_jar();
+        let u = url("https://example.com/app");
+        jar.borrow_mut().store_set_cookie("SID=abc123; Path=/", &u);
+        jar.borrow_mut().store_set_cookie("token=xyz; Secure", &u);
+        let text = jar.borrow().serialize();
+        let jar2 = new_cookie_jar();
+        jar2.borrow_mut().deserialize(&text).unwrap();
+        assert_eq!(jar.borrow().len(), jar2.borrow().len());
+        assert_eq!(
+            jar.borrow().to_cookie_header(&u),
+            jar2.borrow().to_cookie_header(&u)
+        );
+    }
+
+    #[test]
+    fn deserialize_clears_existing_cookies() {
+        let jar = new_cookie_jar();
+        jar.borrow_mut().insert(Cookie {
+            name: "old".into(),
+            value: "v".into(),
+            domain: "x.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+        });
+        let text =
+            "# v1\n".to_string() + &cookie_line("new", "val", "example.com", "/", false, false);
+        jar.borrow_mut().deserialize(&text).unwrap();
+        assert_eq!(jar.borrow().len(), 1);
+        assert_eq!(jar.borrow().cookies[0].name, "new");
+    }
+
+    #[test]
+    fn deserialize_ignores_comments_and_blank_lines() {
+        let jar = new_cookie_jar();
+        let text = "# header\n\n# comment\n".to_string()
+            + &cookie_line("k", "v", "x.com", "/", false, false);
+        jar.borrow_mut().deserialize(&text).unwrap();
+        assert_eq!(jar.borrow().len(), 1);
+    }
+
+    #[test]
+    fn deserialize_rejects_wrong_field_count() {
+        let jar = new_cookie_jar();
+        let text = "only\tthree\tfields\n";
+        assert!(jar.borrow_mut().deserialize(text).is_err());
+    }
+
+    #[test]
+    fn escape_field_round_trip_special_chars() {
+        let jar = new_cookie_jar();
+        // value 含 tab + newline + backslash（用 char 拼接避开字面量歧义）
+        let tricky: String = "a".to_string() + "\t" + "b" + "\n" + "c" + "\\";
+        jar.borrow_mut().insert(Cookie {
+            name: "k".into(),
+            value: tricky.clone(),
+            domain: "x.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+        });
+        let text = jar.borrow().serialize();
+        let jar2 = new_cookie_jar();
+        jar2.borrow_mut().deserialize(&text).unwrap();
+        assert_eq!(jar2.borrow().cookies[0].value, tricky);
+    }
+
+    #[test]
+    fn serialize_encodes_secure_and_httponly_flags() {
+        let jar = new_cookie_jar();
+        jar.borrow_mut().insert(Cookie {
+            name: "k".into(),
+            value: "v".into(),
+            domain: "x.com".into(),
+            path: "/".into(),
+            secure: true,
+            http_only: true,
+        });
+        let text = jar.borrow().serialize();
+        let expected = "\tTRUE\tTRUE";
+        assert!(
+            text.contains(expected),
+            "should encode flags. text={text:?}"
+        );
+    }
+
+    #[test]
+    fn save_load_file_round_trip() {
+        let tmp = unique_tmp("save-load.txt");
+        let jar = new_cookie_jar();
+        let u = url("https://example.com/");
+        jar.borrow_mut().store_set_cookie("SID=abc; Path=/", &u);
+        jar.borrow().save_to_file(&tmp).unwrap();
+        let jar2 = new_cookie_jar();
+        jar2.borrow_mut().load_from_file(&tmp).unwrap();
+        assert_eq!(jar2.borrow().to_cookie_header(&u), "SID=abc");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_err() {
+        let jar = new_cookie_jar();
+        let r = jar
+            .borrow_mut()
+            .load_from_file(std::path::Path::new("/nonexistent/xyz.txt"));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn save_empty_jar_creates_file_with_header() {
+        let tmp = unique_tmp("empty.txt");
+        let jar = new_cookie_jar();
+        jar.borrow().save_to_file(&tmp).unwrap();
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        assert!(content.starts_with("# browser-cookie v1"));
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
