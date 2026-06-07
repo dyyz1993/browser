@@ -40,7 +40,9 @@
 | M28 | ✅ | JS 全局对象补齐（navigator/window/document/screen） | 481 |
 | M29 | ✅ | ADR-0003 + wss:// 验证 + 截图 --max-height | 482 |
 | M30 | ✅ | <a> 蓝色渲染（screenshot ANSI + #0000EE） | 489 |
-| M31+ | ⚪ | 前瞻（见下） | — |
+| M31 | ✅ | wss:// TLS 支持（ws crate + native-tls） | 489 |
+| M32 | ✅ | CSS flexbox 子集（row/column + grow + justify + gap） | 498 |
+| M33+ | ⚪ | 前瞻（CSS grid 子集 / GUI 像素图像） | — |
 
 ---
 
