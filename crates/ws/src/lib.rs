@@ -13,8 +13,11 @@
 #![forbid(unsafe_code)]
 
 pub mod base64;
+pub mod client;
 pub mod handshake;
 pub mod sha1;
+
+pub use client::{Message, WebSocket};
 
 use thiserror::Error;
 
