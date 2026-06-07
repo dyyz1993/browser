@@ -7,5 +7,5 @@
 pub mod ascii;
 pub mod image;
 
-pub use ascii::render_ascii;
+pub use ascii::{render_ascii, render_ascii_colored};
 pub use image::{image_file_to_ascii, image_to_ascii_from_img, resolve_local_image_src};

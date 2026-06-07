@@ -83,6 +83,10 @@ pub struct LayoutBox {
     /// CSS padding box-edges (M7.1.2+). Reserved for future use
     /// (padding affects text content origin inside the box).
     pub padding: BoxEdges<browser_css_engine::Length>,
+    /// M30: marks this box as a hyperlink (`<a>`). When `colored=true`,
+    /// the renderer emits ANSI underline+blue for this box's text.
+    /// Screenshots parse the ANSI codes to paint blue text.
+    pub link: bool,
     pub children: Vec<LayoutBox>,
 }
 
@@ -97,6 +101,7 @@ impl LayoutBox {
             words: Vec::new(),
             margin: BoxEdges::default(),
             padding: BoxEdges::default(),
+            link: false,
             children: Vec::new(),
         }
     }
@@ -118,6 +123,13 @@ impl LayoutBox {
     #[must_use]
     pub fn with_margin_all(mut self, v: browser_css_engine::Length) -> Self {
         self.margin = BoxEdges::all(v);
+        self
+    }
+
+    /// M30: mark this box as a hyperlink (`<a>`).
+    #[must_use]
+    pub fn with_link(mut self) -> Self {
+        self.link = true;
         self
     }
 }

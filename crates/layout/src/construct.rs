@@ -111,6 +111,7 @@ fn build_box(
             // Browsers color/underline links; ASCII mode lacks color, so
             // we surface the href inline (huge value for the G1 crawler goal).
             if tag.eq_ignore_ascii_case("a") {
+                bx = bx.with_link(); // M30: mark for colored rendering
                 if let Some(href) = attrs
                     .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("href"))

@@ -23,7 +23,7 @@ use browser_js_runtime::{
 };
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
 use browser_net::HttpClient;
-use browser_render::render_ascii;
+use browser_render::{render_ascii, render_ascii_colored};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -241,7 +241,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let text = render_html_to_string(&html, width, false, None)?;
             print!("{text}");
             if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&text, &p, max_height)?;
+                let colored = render_html_to_string_colored(&html, width, false, None)?;
+                screenshot::render_text_to_png(&colored, &p, max_height)?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
             Ok(())
@@ -258,7 +259,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let text = render_html_to_string(&html, width, true, None)?;
             print!("{text}");
             if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&text, &p, max_height)
+                let colored = render_html_to_string_colored(&html, width, true, None)?;
+                screenshot::render_text_to_png(&colored, &p, max_height)
                     .map_err(|e| anyhow!("screenshot failed: {e}"))?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
@@ -287,10 +289,10 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
-            let text = render_html_to_string(&html, width, !no_js, base)?;
+            let (text, colored) = render_html_to_string_inner(&html, width, !no_js, base.clone())?;
             print!("{text}");
             if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&text, &p, max_height)
+                screenshot::render_text_to_png(&colored, &p, max_height)
                     .map_err(|e| anyhow!("screenshot failed: {e}"))?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
@@ -379,6 +381,29 @@ fn render_html_to_string(
     run_js: bool,
     base_url: Option<String>,
 ) -> Result<String> {
+    Ok(render_html_to_string_inner(html, width, run_js, base_url)?.0)
+}
+
+/// M30: colored variant for screenshots — link text gets ANSI blue/underline,
+/// which the PNG renderer parses to paint blue text.
+fn render_html_to_string_colored(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    base_url: Option<String>,
+) -> Result<String> {
+    Ok(render_html_to_string_inner(html, width, run_js, base_url)?.1)
+}
+
+/// M30: returns `(plain_text, colored_text)`. Parse + layout + JS run
+/// exactly **once**; only the final render pass differs (plain vs colored).
+/// Avoids double-executing JS when both stdout and screenshot are needed.
+fn render_html_to_string_inner(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    base_url: Option<String>,
+) -> Result<(String, String)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let (shared, n) = if base_url.is_some() {
@@ -408,10 +433,14 @@ fn render_html_to_string(
             viewport_width: width as f32,
         },
     );
-    let rendered = render_ascii(&layout, width);
+    let plain = render_ascii(&layout, width);
+    let colored = render_ascii_colored(&layout, width);
     // M22.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
     // http(s) URL 或不存在的文件 → 保留占位符（不报错，爬虫场景容错）。
-    Ok(post_process_images(&rendered, width))
+    Ok((
+        post_process_images(&plain, width),
+        post_process_images(&colored, width),
+    ))
 }
 
 /// M22.2: 扫描渲染输出里的 `[IMG: src]` 占位符，尝试把 src 解析为本地

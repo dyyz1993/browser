@@ -90,9 +90,13 @@ pub fn render_text_to_png<P: AsRef<Path>>(
     // 字符 → (metrics, bitmap) 缓存。
     let mut cache: HashMap<char, (fontdue::Metrics, Vec<u8>)> = HashMap::new();
 
-    for (row, line) in lines.iter().enumerate() {
+    for (row, raw_line) in lines.iter().enumerate() {
+        // M30: 解析 ANSI escape，提取纯字符序列 + link span 范围。
+        // 截图渲染时 link span 内的字形用蓝色（`#0000EE` W3C link 默认色）。
+        let (clean_chars, link_spans): (Vec<char>, Vec<(usize, usize)>) =
+            strip_ansi_and_track_links(raw_line);
         let row_top = row * line_height;
-        for (col, ch) in line.chars().enumerate() {
+        for (col, ch) in clean_chars.iter().copied().enumerate() {
             let (m, mask) = cache
                 .entry(ch)
                 .or_insert_with(|| {
@@ -133,9 +137,16 @@ pub fn render_text_to_png<P: AsRef<Path>>(
                     let idx = (pyu * img_w + pxu) * 4;
                     // alpha 0..=255 → 灰度 v = 255 - alpha（黑字白底）。
                     let v = 255 - (alpha.min(255) as u8);
-                    buf[idx] = v;
-                    buf[idx + 1] = v;
-                    buf[idx + 2] = v;
+                    // M30: link span 内用蓝色（W3C link 默认色 #0000EE）。
+                    let is_link = link_spans.iter().any(|&(s, e)| col >= s && col < e);
+                    let (r, g, b) = if is_link {
+                        (0u8, 0u8, 0xEEu8)
+                    } else {
+                        (v, v, v)
+                    };
+                    buf[idx] = r;
+                    buf[idx + 1] = g;
+                    buf[idx + 2] = b;
                 }
             }
         }
@@ -153,6 +164,68 @@ pub fn render_text_to_png<P: AsRef<Path>>(
         .write_image_data(&buf)
         .map_err(|e| anyhow::anyhow!("png write: {e}"))?;
     Ok(())
+}
+
+/// M30: 解析 ANSI escape，提取纯字符序列 + link span 范围。
+///
+/// 识别 `\x1b[4;34m`（link 开始）和 `\x1b[0m`（link 结束）。
+/// 其他 ANSI escape 直接 strip。
+///
+/// 返回 `(clean_chars, link_spans)`：
+/// - `clean_chars`: strip ANSI 后的纯字符序列
+/// - `link_spans`: link 范围列表，每个元素 `(start_col, end_col)` 半开区间
+///
+/// # Examples
+/// ```ignore
+/// let (chars, spans) = strip_ansi_and_track_links("\x1b[4;34mgo\x1b[0m");
+/// assert_eq!(chars, vec!['g', 'o']);
+/// assert_eq!(spans, vec![(0, 2)]);
+/// ```
+fn strip_ansi_and_track_links(line: &str) -> (Vec<char>, Vec<(usize, usize)>) {
+    let mut chars: Vec<char> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut link_start: Option<usize> = None;
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // ESC = 0x1B
+        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // CSI sequence: ESC [ ... letter
+            let j = i + 2;
+            let mut end = j;
+            while end < bytes.len() && !bytes[end].is_ascii_alphabetic() {
+                end += 1;
+            }
+            if end < bytes.len() {
+                let params = &line[j..end];
+                let final_byte = bytes[end] as char;
+                if final_byte == 'm' {
+                    // SGR sequence — check if it's link-on (4;34 or 34;4) or reset (0)
+                    if params == "4;34" || params == "34;4" {
+                        link_start = Some(chars.len());
+                    } else if params == "0" || params.is_empty() {
+                        if let Some(s) = link_start.take() {
+                            spans.push((s, chars.len()));
+                        }
+                    }
+                }
+                i = end + 1;
+            } else {
+                // malformed — skip rest
+                break;
+            }
+        } else {
+            // Regular char (UTF-8 safe: collect from str iterator).
+            let ch = line[i..].chars().next().unwrap();
+            chars.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    // Unclosed link → span to end.
+    if let Some(s) = link_start {
+        spans.push((s, chars.len()));
+    }
+    (chars, spans)
 }
 
 #[cfg(test)]
@@ -290,5 +363,38 @@ mod tests {
             m_g.ymin,
             m_e.ymin
         );
+    }
+
+    // ---- M30: ANSI link parsing ----
+
+    #[test]
+    fn strip_ansi_plain_text() {
+        let (chars, spans) = strip_ansi_and_track_links("hello");
+        assert_eq!(chars, vec!['h', 'e', 'l', 'l', 'o']);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn strip_ansi_link_span() {
+        let (chars, spans) = strip_ansi_and_track_links("\x1b[4;34mgo\x1b[0m");
+        assert_eq!(chars, vec!['g', 'o']);
+        assert_eq!(spans, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn strip_ansi_link_surrounded_by_plain() {
+        let (chars, spans) = strip_ansi_and_track_links("pre \x1b[4;34mMID\x1b[0m post");
+        assert_eq!(
+            chars,
+            vec!['p', 'r', 'e', ' ', 'M', 'I', 'D', ' ', 'p', 'o', 's', 't']
+        );
+        assert_eq!(spans, vec![(4, 7)]);
+    }
+
+    #[test]
+    fn strip_ansi_unclosed_link_spans_to_end() {
+        let (chars, spans) = strip_ansi_and_track_links("x\x1b[4;34mabc");
+        assert_eq!(chars, vec!['x', 'a', 'b', 'c']);
+        assert_eq!(spans, vec![(1, 4)]);
     }
 }

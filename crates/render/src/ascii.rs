@@ -4,8 +4,6 @@
 //! character buffer, then collapses the buffer into a `String` for
 //! printing. Coordinate system matches layout: y grows downward.
 
-use std::fmt::Write;
-
 use browser_layout::{BoxType, LayoutBox, LayoutTree};
 
 /// Render a laid-out tree into an ASCII string.
@@ -13,8 +11,22 @@ use browser_layout::{BoxType, LayoutBox, LayoutTree};
 /// `viewport_width` is the number of columns to allocate. Lines that
 /// would exceed the buffer are clipped at the right edge; lines past
 /// the bottom of the content are not emitted.
+///
+/// `colored`: when `true`, hyperlink text is wrapped in ANSI escape
+/// sequences (underline+blue). Used for screenshots (PNG renderer
+/// parses ANSI codes). When `false`, plain ASCII (safe for crawlers).
 #[must_use]
 pub fn render_ascii(tree: &LayoutTree, viewport_width: usize) -> String {
+    render_ascii_inner(tree, viewport_width, false)
+}
+
+/// M30: colored variant — hyperlink text gets ANSI underline+blue.
+#[must_use]
+pub fn render_ascii_colored(tree: &LayoutTree, viewport_width: usize) -> String {
+    render_ascii_inner(tree, viewport_width, true)
+}
+
+fn render_ascii_inner(tree: &LayoutTree, viewport_width: usize, colored: bool) -> String {
     // First pass: compute the maximum y (line index) any text reaches.
     let mut max_y = 0usize;
     collect_text_extent(&tree.root, &mut max_y);
@@ -25,7 +37,7 @@ pub fn render_ascii(tree: &LayoutTree, viewport_width: usize) -> String {
     let mut buf = CharBuffer::new(viewport_width, max_y);
     paint(&tree.root, &mut buf);
 
-    buf.to_string()
+    buf.to_string(colored)
 }
 
 fn collect_text_extent(bx: &LayoutBox, max_y: &mut usize) {
@@ -45,6 +57,10 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
     // anonymous boxes are positioning containers; recurse into their
     // children.
     if bx.box_type == BoxType::Inline {
+        // M30: `bx.link` is set for `<a>` boxes. The mask is always
+        // recorded; whether ANSI codes are emitted is decided later
+        // by `to_string(colored)`.
+        let is_link = bx.link;
         // Prefer laid-out `words` (M6.0a fix) when present — this is
         // what the inline word-wrap pass produced and accurately
         // reflects where each wrapped word starts. The old code
@@ -58,7 +74,7 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
                     if ch == '\n' || ch == '\r' {
                         continue;
                     }
-                    buf.put(y, x, ch);
+                    buf.put(y, x, ch, is_link);
                     x += 1;
                 }
             }
@@ -73,10 +89,10 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
                     continue;
                 }
                 if ch.is_whitespace() {
-                    buf.put(y, x, ' ');
+                    buf.put(y, x, ' ', is_link);
                     x += 1;
                 } else {
-                    buf.put(y, x, ch);
+                    buf.put(y, x, ch, is_link);
                     x += 1;
                 }
             }
@@ -91,30 +107,58 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
 struct CharBuffer {
     width: usize,
     rows: Vec<Vec<char>>,
-}
-
-impl std::fmt::Display for CharBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for row in &self.rows {
-            let s: String = row.iter().collect();
-            let trimmed = s.trim_end();
-            f.write_str(trimmed)?;
-            f.write_char('\n')?;
-        }
-        Ok(())
-    }
+    /// M30: parallel grid marking link cells (for ANSI blue/underline).
+    links: Vec<Vec<bool>>,
 }
 
 impl CharBuffer {
     fn new(width: usize, height: usize) -> Self {
         let rows = (0..height).map(|_| vec![' '; width]).collect();
-        Self { width, rows }
+        let links = (0..height).map(|_| vec![false; width]).collect();
+        Self { width, rows, links }
     }
 
-    fn put(&mut self, y: usize, x: usize, c: char) {
+    fn put(&mut self, y: usize, x: usize, c: char, link: bool) {
         if y < self.rows.len() && x < self.width {
             self.rows[y][x] = c;
+            if link {
+                self.links[y][x] = true;
+            }
         }
+    }
+
+    /// M30: Render to string. When `colored=true`, runs of link cells
+    /// are wrapped in ANSI underline+blue escape sequences. Trailing
+    /// whitespace on each line is trimmed (links are never whitespace).
+    fn to_string(&self, colored: bool) -> String {
+        let mut out = String::new();
+        for y in 0..self.rows.len() {
+            let row = &self.rows[y];
+            // Find last non-space column (trim_end).
+            let mut last = 0usize;
+            for x in (0..self.width).rev() {
+                if row[x] != ' ' {
+                    last = x + 1;
+                    break;
+                }
+            }
+            let mut x = 0;
+            while x < last {
+                if colored && self.links[y][x] {
+                    out.push_str("\x1b[4;34m");
+                    while x < last && self.links[y][x] {
+                        out.push(row[x]);
+                        x += 1;
+                    }
+                    out.push_str("\x1b[0m");
+                } else {
+                    out.push(row[x]);
+                    x += 1;
+                }
+            }
+            out.push('\n');
+        }
+        out
     }
 }
 
@@ -233,5 +277,60 @@ mod tests {
     #[test]
     fn block_with_helper_compiles() {
         let _ = block_with(vec![]);
+    }
+
+    // ---- M30: colored link rendering ----
+
+    #[test]
+    fn plain_render_no_ansi_for_link() {
+        // `<a>` link text rendered in plain mode (default `render_ascii`)
+        // must NOT contain ANSI escape codes — crawlers need clean ASCII.
+        let mut link_box = LayoutBox::new(BoxType::Inline)
+            .with_text("click".into())
+            .with_link();
+        link_box.dimensions = Dimensions::new(0.0, 0.0, 5.0, 1.0);
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.children.push(link_box);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        let tree = LayoutTree { root };
+        let out = render_ascii(&tree, 80);
+        assert_eq!(out, "click\n");
+        assert!(!out.contains("\x1b["));
+    }
+
+    #[test]
+    fn colored_render_wraps_link_in_ansi() {
+        let mut link_box = LayoutBox::new(BoxType::Inline)
+            .with_text("go".into())
+            .with_link();
+        link_box.dimensions = Dimensions::new(0.0, 0.0, 2.0, 1.0);
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.children.push(link_box);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        let tree = LayoutTree { root };
+        let out = render_ascii_colored(&tree, 80);
+        // Expected: underline+blue ANSI + "go" + reset + newline.
+        assert_eq!(out, "\x1b[4;34mgo\x1b[0m\n");
+    }
+
+    #[test]
+    fn colored_render_link_surrounded_by_plain() {
+        // "pre" then link "MID" then plain "post" on same line.
+        let mut pre = text_box("pre ", 0.0, 0.0);
+        pre.dimensions = Dimensions::new(0.0, 0.0, 4.0, 1.0);
+        let mut mid = LayoutBox::new(BoxType::Inline)
+            .with_text("MID".into())
+            .with_link();
+        mid.dimensions = Dimensions::new(4.0, 0.0, 3.0, 1.0);
+        let mut post = text_box(" post", 7.0, 0.0);
+        post.dimensions = Dimensions::new(7.0, 0.0, 5.0, 1.0);
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.children = vec![pre, mid, post];
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        let tree = LayoutTree { root };
+        let plain = render_ascii(&tree, 80);
+        assert_eq!(plain, "pre MID post\n");
+        let colored = render_ascii_colored(&tree, 80);
+        assert_eq!(colored, "pre \x1b[4;34mMID\x1b[0m post\n");
     }
 }
