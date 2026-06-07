@@ -9,9 +9,12 @@
 pub mod block;
 pub mod boxes;
 pub mod construct;
+pub mod flex;
 pub mod inline;
 
 pub use block::{layout, LayoutConfig};
-pub use boxes::{BoxType, Dimensions, LayoutBox, LayoutTree};
+pub use boxes::{
+    BoxType, Dimensions, FlexDirection, FlexProps, JustifyContent, LayoutBox, LayoutTree,
+};
 pub use construct::construct_layout_tree;
 pub use inline::layout_inline_run;

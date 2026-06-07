@@ -11,10 +11,10 @@
 
 use std::collections::HashMap;
 
-use browser_css_engine::{parse_box_lengths, BoxEdges, Declaration, Length};
+use browser_css_engine::{parse_box_lengths, parse_length, BoxEdges, Declaration, Length};
 use browser_dom::{NodeData, NodeId, Tree};
 
-use crate::boxes::{BoxType, LayoutBox, LayoutTree};
+use crate::boxes::{BoxType, FlexDirection, JustifyContent, LayoutBox, LayoutTree};
 
 /// Default block-level tag set. Conservative; can grow as fixtures demand.
 const BLOCK_TAGS: &[&str] = &[
@@ -92,8 +92,29 @@ fn build_box(
             if is_non_rendered_tag(tag) {
                 return;
             }
-            let bt = box_type_for_element(tag);
+            let mut bt = box_type_for_element(tag);
+            // M32: CSS `display` 声明覆盖 tag-based 默认值。
+            // 支持 display:flex / display:block / display:inline。
+            if let Some(decls) = styles.get(&id) {
+                for d in decls {
+                    if d.property.eq_ignore_ascii_case("display") {
+                        let v = d.value.trim().to_ascii_lowercase();
+                        match v.as_str() {
+                            "flex" | "inline-flex" => bt = BoxType::Flex,
+                            "block" => bt = BoxType::Block,
+                            "inline" => bt = BoxType::Inline,
+                            _ => {}
+                        }
+                    }
+                }
+            }
             let mut bx = LayoutBox::new(bt).with_element(id);
+            // M32: 如果是 flex 容器，从 CSS 读 flex-direction/justify-content/gap。
+            if bt == BoxType::Flex {
+                apply_flex_props(id, styles, &mut bx);
+            }
+            // M32: 读 flex-grow 属性（flex item）。
+            apply_flex_grow(id, styles, &mut bx);
             bx.children = build_children(tree, id, bt, styles);
             // M7.1.3: fill margin/padding from CSS + UA defaults.
             apply_box_model(tag, id, styles, &mut bx);
@@ -169,6 +190,58 @@ fn apply_box_model(
         }
         if any_padding_decl {
             bx.padding = css_padding;
+        }
+    }
+}
+
+/// M32: 从 CSS 读 flex-direction / justify-content / gap 填充 FlexProps。
+fn apply_flex_props(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &mut LayoutBox) {
+    let Some(decls) = styles.get(&id) else {
+        return;
+    };
+    for d in decls {
+        if d.property.eq_ignore_ascii_case("flex-direction") {
+            let v = d.value.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "row" | "row-reverse" => bx.flex.direction = FlexDirection::Row,
+                "column" | "column-reverse" => bx.flex.direction = FlexDirection::Column,
+                _ => {}
+            }
+        } else if d.property.eq_ignore_ascii_case("justify-content") {
+            let v = d.value.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "flex-start" | "start" | "left" => bx.flex.justify = JustifyContent::FlexStart,
+                "center" => bx.flex.justify = JustifyContent::Center,
+                "flex-end" | "end" | "right" => bx.flex.justify = JustifyContent::FlexEnd,
+                "space-between" => bx.flex.justify = JustifyContent::SpaceBetween,
+                _ => {}
+            }
+        } else if d.property.eq_ignore_ascii_case("gap") {
+            if let Some(Length::Px(v)) = parse_length(&d.value) {
+                bx.flex.gap = v;
+            }
+        }
+    }
+}
+
+/// M32: 从 CSS 读 flex-grow 属性（flex item）。
+/// 支持 `flex-grow: N` 和 shorthand `flex: N`（取第一个值作为 grow）。
+fn apply_flex_grow(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &mut LayoutBox) {
+    let Some(decls) = styles.get(&id) else {
+        return;
+    };
+    for d in decls {
+        if d.property.eq_ignore_ascii_case("flex-grow") {
+            if let Ok(v) = d.value.trim().parse::<f32>() {
+                bx.flex_grow = v;
+            }
+        } else if d.property.eq_ignore_ascii_case("flex") {
+            // `flex: <grow> <shrink> <basis>` — take first token as grow.
+            if let Some(first) = d.value.split_whitespace().next() {
+                if let Ok(v) = first.parse::<f32>() {
+                    bx.flex_grow = v;
+                }
+            }
         }
     }
 }
@@ -263,6 +336,14 @@ fn build_children(
             }
         }
         flush_inline_buf(&mut inline_buf, &mut result);
+        result
+    } else if parent_box == BoxType::Flex {
+        // M32: Flex 容器直接收集 children，不做 anonymous 包装。
+        // Flex items 不管原始 tag 是 block 还是 inline，都直接成为 flex item。
+        let mut result: Vec<LayoutBox> = Vec::new();
+        for &child_id in dom_children {
+            build_box(tree, child_id, styles, &mut result);
+        }
         result
     } else {
         // Inline parent → just collect children inline (no anonymous wrappers).

@@ -38,6 +38,7 @@ fn layout_box(bx: &mut LayoutBox, x: f32, y: f32, containing_width: f32) {
         BoxType::Block => layout_block_children(bx, containing_width),
         BoxType::Anonymous => layout_anonymous_children(bx, containing_width),
         BoxType::Inline => layout_inline_self(bx, containing_width),
+        BoxType::Flex => crate::flex::layout_flex_children(bx, containing_width),
     }
 }
 
