@@ -80,10 +80,17 @@ pub fn render_text_to_png<P: AsRef<Path>>(text: &str, path: P) -> anyhow::Result
             if m.width == 0 || m.height == 0 {
                 continue; // 空白字符或 .notdef
             }
-            // 字形像素位置（fontdue 坐标：bitmap[0]=顶行，ymin=底边相对 baseline）：
-            //   px = col*col_width + xmin + dx
-            //   py = row_top + baseline + ymin + height - 1 - dy
-            //     （底行 dy=height-1 落在 baseline+ymin，符合 ymin 语义）
+            // 字形像素位置（fontdue 坐标，经 M25.2 诊断 + PIL 像素对照确认）：
+            //   - bitmap 正立存储：bitmap[0]=顶行（dy=0=字形顶部）
+            //   - ymin 是数学坐标（向上为正，负=baseline 下方）。
+            //     fontdue 语义：ymin = bitmap **底边**相对 baseline 的偏移
+            //   - 屏幕坐标（y向下）：底边 screen_offset = baseline - ymin
+            //   - 底行 dy=height-1 落在 baseline-ymin，所以
+            //     y_origin = (baseline - ymin) - height + 1
+            // 用 'p'(ymin=-4,h=13,ascent=15) 验证（圆肚子顶 dy=0，竖画底 dy=12）：
+            //   y_origin = 15-(-4)-13+1 = 7（'p' 圆顶在 baseline 上方 8px ✓ x-height）
+            //   底行 py = 7+12 = 19 = baseline+4（竖画末端在 baseline 下 4px ✓ descender）
+            let y_origin = baseline as i32 - m.ymin - m.height as i32 + 1;
             for dy in 0..m.height {
                 for dx in 0..m.width {
                     let alpha = mask[dy * m.width + dx] as u32;
@@ -91,8 +98,7 @@ pub fn render_text_to_png<P: AsRef<Path>>(text: &str, path: P) -> anyhow::Result
                         continue;
                     }
                     let px = (col * col_width) as i32 + m.xmin + dx as i32;
-                    let py =
-                        row_top as i32 + baseline as i32 + m.ymin + m.height as i32 - 1 - dy as i32;
+                    let py = row_top as i32 + y_origin + dy as i32;
                     if px < 0 || py < 0 {
                         continue;
                     }
@@ -178,6 +184,55 @@ mod tests {
             "line_height must fit font + gap: {line_height}"
         );
         assert!(line_height <= 35, "line_height too large: {line_height}");
+    }
+
+    /// M25.2: 锁定字形垂直定位公式（纯数学验证，不依赖 PNG 解码/肉眼）。
+    /// 这是对前 4 次'猜公式导致乱码'失败的防御——公式对错用断言判定。
+    /// 公式：y_origin = baseline - ymin - height + 1；py = y_origin + dy
+    #[test]
+    fn glyph_vertical_position_formula_is_correct() {
+        let font = Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap();
+        let ascent = font
+            .horizontal_line_metrics(FONT_SIZE)
+            .unwrap()
+            .ascent
+            .ceil() as i32;
+        let baseline = ascent;
+
+        // 'b'（上伸到 cap height）：ymin=-1, height=14
+        let mb = font.metrics('b', FONT_SIZE);
+        let y_origin_b = baseline - mb.ymin - mb.height as i32 + 1;
+        let top_b = y_origin_b;
+        let bottom_b = y_origin_b + mb.height as i32 - 1;
+
+        // 'p'（下伸到 descender）：ymin=-4, height=13
+        let mp = font.metrics('p', FONT_SIZE);
+        let y_origin_p = baseline - mp.ymin - mp.height as i32 + 1;
+        let top_p = y_origin_p;
+        let bottom_p = y_origin_p + mp.height as i32 - 1;
+
+        // 1. 'b' 顶部应高于 'p' 顶部（'b' 上伸到 cap height，'p' 只到 x-height）
+        assert!(
+            top_b < top_p,
+            "'b' top ({top_b}) must be above 'p' top ({top_p}) — 否则字形垂直镜像了"
+        );
+        // 2. 'p' 底部应低于 'b' 底部（'p' 有 descender）
+        assert!(
+            bottom_p > bottom_b,
+            "'p' bottom ({bottom_p}) must be below 'b' bottom ({bottom_b}) — 否则 descender 丢失"
+        );
+        // 3. 字形都在 cell 内（不溢出到相邻行）
+        let line_height = (ascent + 4 + LINE_GAP as i32) as i32;
+        assert!(top_b >= 0, "'b' top ({top_b}) 不能为负");
+        assert!(
+            bottom_p < line_height,
+            "'p' bottom ({bottom_p}) 超出行高 {line_height}"
+        );
+        // 4. 公式语义自洽：'b' 底行应落在 baseline 附近（±2px 容差）
+        assert!(
+            (bottom_b - baseline).abs() <= 3,
+            "'b' 底行 ({bottom_b}) 应在 baseline ({baseline}) 附近"
+        );
     }
 
     /// M25.1: 验证 'g'（有下伸）的 ymin 为负（baseline 下方），
