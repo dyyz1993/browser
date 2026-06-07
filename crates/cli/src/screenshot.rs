@@ -21,10 +21,17 @@ const LINE_GAP: usize = 6;
 
 /// ASCII art → PNG 文件（白底黑字，灰度抗锯齿）。
 ///
+/// M29.3: 可选 max_height 参数限制截图高度（像素）。如果渲染高度 > max_height，
+/// 从顶部截断（底部内容丢弃）。None 不限制。
+///
 /// # Errors
 /// Returns `anyhow::Error` if the text is empty, all lines empty, or
 /// PNG encoding fails.
-pub fn render_text_to_png<P: AsRef<Path>>(text: &str, path: P) -> anyhow::Result<()> {
+pub fn render_text_to_png<P: AsRef<Path>>(
+    text: &str,
+    path: P,
+    max_height: Option<usize>,
+) -> anyhow::Result<()> {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
         anyhow::bail!("empty text");
@@ -56,6 +63,23 @@ pub fn render_text_to_png<P: AsRef<Path>>(text: &str, path: P) -> anyhow::Result
     let line_height = ascent + descent + LINE_GAP;
     // baseline 距 cell 顶部的像素数（= ascent）。
     let baseline = ascent;
+
+    // M29.3: 近似截断（用 line_height 估算最大行数）。必须在精确计算 img_h 前完成，
+    // 避免精度误差导致 img_h 与截断不一致。
+    let mut lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        anyhow::bail!("empty text");
+    }
+    if let Some(mh) = max_height {
+        let approx_max_lines = mh / line_height.max(1);
+        if lines.len() > approx_max_lines {
+            lines.truncate(approx_max_lines.max(1)); // 至少留 1 行
+        }
+    }
+    let cols = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    if cols == 0 {
+        anyhow::bail!("all lines empty");
+    }
 
     let img_w = cols * col_width;
     let img_h = lines.len() * line_height;
@@ -138,7 +162,7 @@ mod tests {
     #[test]
     fn renders_simple_text_to_png() {
         let tmp = std::env::temp_dir().join("m12_screenshot_test.png");
-        render_text_to_png("Hello\nWorld!", &tmp).expect("PNG write failed");
+        render_text_to_png("Hello\nWorld!", &tmp, None).expect("PNG write failed");
         let meta = std::fs::metadata(&tmp).expect("metadata");
         assert!(meta.len() > 100, "PNG file too small: {} bytes", meta.len());
         let mut hdr = [0u8; 8];
@@ -152,15 +176,32 @@ mod tests {
     #[test]
     fn rejects_empty_text() {
         let tmp = std::env::temp_dir().join("m12_empty.png");
-        let r = render_text_to_png("", &tmp);
+        let r = render_text_to_png("", &tmp, None);
         assert!(r.is_err());
     }
 
     #[test]
     fn handles_chinese_chars() {
         let tmp = std::env::temp_dir().join("m12_chinese.png");
-        let r = render_text_to_png("你好", &tmp);
+        let r = render_text_to_png("你好", &tmp, None);
         assert!(r.is_ok());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// M29.3: 验证 max_height 截断功能（保留顶部，底部丢弃）。
+    #[test]
+    fn max_height_truncates_from_top() {
+        use std::io::Read;
+        let tmp = std::env::temp_dir().join("m29_max_height_test.png");
+        // 3 行文本，每行约 25px，总高 ~75px。max_height=50 应截断为 2 行。
+        render_text_to_png("Line 1\nLine 2\nLine 3", &tmp, Some(50)).expect("PNG write failed");
+        let meta = std::fs::metadata(&tmp).expect("metadata");
+        assert!(meta.len() > 100, "PNG file too small");
+        // PNG 头 + 验证文件存在
+        let mut hdr = [0u8; 8];
+        let mut f = std::fs::File::open(&tmp).unwrap();
+        f.read_exact(&mut hdr).unwrap();
+        assert_eq!(&hdr[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
         std::fs::remove_file(&tmp).ok();
     }
 

@@ -61,6 +61,10 @@ enum Cmd {
         /// M12.1: write rendered ASCII as a PNG screenshot to this path.
         #[arg(long)]
         screenshot: Option<PathBuf>,
+        /// M29.3: limit screenshot height (pixels). If rendered height > max-height,
+        /// truncate from top (bottom content discarded).
+        #[arg(long)]
+        max_height: Option<usize>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -71,6 +75,10 @@ enum Cmd {
         /// M12.1: write rendered ASCII as a PNG screenshot to this path.
         #[arg(long)]
         screenshot: Option<PathBuf>,
+        /// M29.3: limit screenshot height (pixels). If rendered height > max-height,
+        /// truncate from top (bottom content discarded).
+        #[arg(long)]
+        max_height: Option<usize>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -87,6 +95,10 @@ enum Cmd {
         /// M12.1: write rendered ASCII as a PNG screenshot to this path.
         #[arg(long)]
         screenshot: Option<PathBuf>,
+        /// M29.3: limit screenshot height (pixels). If rendered height > max-height,
+        /// truncate from top (bottom content discarded).
+        #[arg(long)]
+        max_height: Option<usize>,
         /// M18.2: after rendering, assert network is idle (no pending
         /// timers / fetches). Exits non-zero if SPA left work pending.
         /// No-op with --no-js.
@@ -222,13 +234,14 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             file,
             width,
             screenshot,
+            max_height,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
             let text = render_html_to_string(&html, width, false, None)?;
             print!("{text}");
             if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&text, &p)?;
+                screenshot::render_text_to_png(&text, &p, max_height)?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
             Ok(())
@@ -237,6 +250,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             file,
             width,
             screenshot,
+            max_height,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -244,7 +258,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let text = render_html_to_string(&html, width, true, None)?;
             print!("{text}");
             if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&text, &p)
+                screenshot::render_text_to_png(&text, &p, max_height)
                     .map_err(|e| anyhow!("screenshot failed: {e}"))?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
@@ -267,6 +281,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             width,
             no_js,
             screenshot,
+            max_height,
             assert_network_idle,
         } => {
             ensure_cookie_jar();
@@ -275,7 +290,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let text = render_html_to_string(&html, width, !no_js, base)?;
             print!("{text}");
             if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&text, &p)
+                screenshot::render_text_to_png(&text, &p, max_height)
                     .map_err(|e| anyhow!("screenshot failed: {e}"))?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
