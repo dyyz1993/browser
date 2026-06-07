@@ -12,6 +12,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod base64;
+pub mod handshake;
+pub mod sha1;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
