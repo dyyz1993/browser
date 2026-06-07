@@ -5,7 +5,9 @@
 #![forbid(unsafe_code)]
 
 pub mod ascii;
+pub mod font;
 pub mod image;
 
 pub use ascii::{render_ascii, render_ascii_colored};
+pub use font::{FontRenderer, LayoutMetrics};
 pub use image::{image_file_to_ascii, image_to_ascii_from_img, resolve_local_image_src};

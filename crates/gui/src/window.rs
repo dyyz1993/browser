@@ -19,6 +19,7 @@
 
 use std::num::NonZeroU32;
 
+use browser_render::font::FontRenderer;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
@@ -82,6 +83,8 @@ struct RunningState {
     url_buffer: String, // M7.5.1: URL input buffer.
     scroll_y: usize,    // M7.5.4: vertical scroll offset (lines).
     surface: softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>,
+    // M34.3: fontdue renderer for pixel-perfect text (replaces 5x7 bitmap).
+    renderer: FontRenderer,
 }
 
 impl ApplicationHandler for AppState {
@@ -131,6 +134,7 @@ impl ApplicationHandler for AppState {
             url_buffer: String::new(),
             scroll_y: 0,
             surface,
+            renderer: FontRenderer::new(),
         }));
     }
 
@@ -281,17 +285,23 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
         }
     });
 
-    // 3) Text body — paint glyph pixels in black.
-    // M7.5.4: scroll_y offset — skip first N lines.
-    let scrolled_text = st.text.lines().skip(st.scroll_y).collect::<Vec<_>>().join(
-        "
-",
-    );
-    draw_text(margin, text_y0, st.scale, &scrolled_text, |x, y| {
-        if x < w as usize && y < h as usize {
-            buffer[y * w as usize + x] = fg;
-        }
-    });
+    // 3) Text body — M34.3: use FontRenderer (pixel-perfect, replaces
+    //    the buggy 5x7 bitmap_font that drew every char as 'X').
+    //    scroll_y offset — skip first N lines.
+    let scrolled_lines: Vec<&str> = st.text.lines().skip(st.scroll_y).collect();
+    if !scrolled_lines.is_empty() {
+        let scrolled_text = scrolled_lines.join("\n");
+        let (tw, th, tbuf) = st.renderer.render_text_to_rgba(&scrolled_text, &[]);
+        blit_rgba(
+            &tbuf,
+            tw,
+            th,
+            margin,
+            text_y0,
+            (w as usize, h as usize),
+            &mut buffer,
+        );
+    }
 
     // Title-bar text — paint the window's first line as a "page title"
     // surrogate. Real browsers show the <title> here; we'll wire that
@@ -311,4 +321,38 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
 
     buffer.present()?;
     Ok(())
+}
+
+/// M34.3: Blit an RGBA source buffer into the softbuffer ARGB output.
+/// Clipped to window bounds; white-ish pixels (background) skipped.
+fn blit_rgba(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dst_x: usize,
+    dst_y: usize,
+    win_dims: (usize, usize),
+    out: &mut [u32],
+) {
+    let (win_w, win_h) = win_dims;
+    for row in 0..sh {
+        let py = dst_y + row;
+        if py >= win_h {
+            break;
+        }
+        for col in 0..sw {
+            let px = dst_x + col;
+            if px >= win_w {
+                break;
+            }
+            let si = (row * sw + col) * 4;
+            let r = src[si];
+            // Render produces RGBA on white background; only paint
+            // pixels darker than white (text glyph coverage).
+            if r >= 240 {
+                continue; // background, skip
+            }
+            out[py * win_w + px] = pack_argb(r, r, r);
+        }
+    }
 }

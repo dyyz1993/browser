@@ -405,6 +405,7 @@ version = "0.0.1"
 name = "browser-gui"
 version = "0.0.1"
 dependencies = [
+ "browser-render",
  "fontdue",
  "softbuffer",
  "winit",
@@ -473,6 +474,7 @@ name = "browser-render"
 version = "0.0.1"
 dependencies = [
  "browser-layout",
+ "fontdue",
  "image",
 ]
 
