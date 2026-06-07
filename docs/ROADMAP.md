@@ -28,7 +28,8 @@
 | M16 | ✅ | 异步 JS（setTimeout + Promise，boa 自研） | 318 |
 | M17 | ✅ | XMLHttpRequest（老 SPA 依赖） | 325 |
 | M18 | ✅ | networkidle 算法（爬虫渲染完整性信号） | 332 |
-| M19+ | ⚪ | 前瞻（见下） | — |
+| M19 | ✅ | 标准 fetch API（现代 SPA 核心） | 339 |
+| M20+ | ⚪ | 前瞻（见下） | — |
 
 ---
 

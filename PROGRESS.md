@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `8b2b3a5`（M18.2 networkidle flag） |
-| 总 commits | 119 |
-| 测试 | 332 passed, 0 clippy warnings |
+| HEAD | `b9df09c`（M19.2 fetch e2e） |
+| 总 commits | 121 |
+| 测试 | 339 passed, 0 clippy warnings |
 | Crates | 14 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |
@@ -36,6 +36,17 @@
 - `README.md`：重写（快速开始 + SPA 爬虫示例 + 文档导航）
 - 删除根目录 `ROADMAP.md` / `ARCHITECTURE.md`（移入 docs/）
 - `docs/PLAN.md`：加 superseded 标注（历史归档）
+
+### M19 — 标准 fetch API（现代 SPA 核心）✅
+- M19.1 ✅ __fetchSync 桥 + fetch_shim（Response 对象 + .text()/.json()）
+- M19.2 ✅ e2e（fetch.then(text/json/catch)，5 tests）
+- M19.3 ✅ 文档同步 + 真实 SPA 手动验证（res.json 用户列表渲染）
+
+标准 fetch：fetch(url) → Promise<Response> → res.text()/json() → Promise。
+React/Vue/Next.js 等 SPA 核心数据获取模式。复用 M16 Promise + M15 cookie jar +
+M18 networkidle。网络错误 reject TypeError（标准行为）。
+
+---
 
 ### M18 — networkidle 算法（爬虫渲染完整性信号）✅
 - M18.1 ✅ pending_requests 计数器 + is_network_idle（5 e2e）
