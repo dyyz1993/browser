@@ -183,6 +183,7 @@ pub fn install(ctx: &mut Context) {
     register_fn(ctx, "__log", log_fn as NativeFn);
     register_fn(ctx, "__fetchSetBody", fetch_set_body as NativeFn);
     register_fn(ctx, "__fetchAppendBody", fetch_append_body as NativeFn);
+    register_fn(ctx, "__fetchSync", fetch_sync_bridge as NativeFn);
     // M7.2.1: real DOM API bridges.
     register_fn0(ctx, "__createEl", create_el as NativeFn);
     register_fn2(ctx, "__appendChild", append_child as NativeFn);
@@ -323,6 +324,32 @@ fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
         Err(e) => eprintln!("[js-fetch] {raw} failed: {e}"),
     }
     Ok(JsValue::undefined())
+}
+
+/// `__fetchSync(url) -> string`：标准 fetch 的同步后端。
+/// 返回编码 `"status\nbody"`（成功）或 `""`（失败，错误打到 stderr）。
+/// JS fetch shim 用此桥拿原始响应，再用 Promise 包装成异步语义。
+/// (M19.1)
+fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let raw = args
+        .first()
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_std_string_escaped())
+        .unwrap_or_default();
+    if raw.is_empty() {
+        return Ok(JsValue::String(boa_engine::JsString::from("")));
+    }
+    let url = resolve_url(&raw);
+    match fetch_sync(&url) {
+        // 编码：首行 status=200，后续行是 body（body 可能含换行，用 splitn(2) 解）。
+        Ok(body) => Ok(JsValue::String(boa_engine::JsString::from(format!(
+            "200\n{body}"
+        )))),
+        Err(e) => {
+            eprintln!("[js-fetch] {raw} failed: {e}");
+            Ok(JsValue::String(boa_engine::JsString::from("")))
+        }
+    }
 }
 
 /// Synchronously fetch a URL. Spawns a detached thread with its own

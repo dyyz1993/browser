@@ -143,6 +143,8 @@ pub fn run_scripts_with_base(
     crate::bridge::ensure_cookie_jar();
     // M17.2: 安装 XMLHttpRequest 全局构造器。
     let _ = crate::xhr_shim::install_xml_http_request(&mut ctx);
+    // M19.1: 安装全局 fetch（标准 Promise-based API）。
+    let _ = crate::fetch_shim::install_fetch(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
