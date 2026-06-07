@@ -13,6 +13,7 @@ pub mod navigator_shim;
 pub mod runtime;
 pub mod scripts;
 pub mod storage_shim;
+pub mod window_shim;
 pub mod ws_shim;
 pub mod xhr_shim;
 

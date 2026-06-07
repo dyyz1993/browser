@@ -77,8 +77,8 @@ pub fn chrome_user_agent() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boa_engine::JsValue;
     use crate::bridge::install;
+    use boa_engine::JsValue;
 
     fn setup_ctx() -> Context {
         let mut ctx = Context::default();

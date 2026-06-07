@@ -197,6 +197,9 @@ pub fn run_scripts_with_base(
     let _ = crate::ws_shim::install_websocket(&mut ctx);
     // M28.1: 安装 navigator 全局对象（userAgent/platform/language，反爬必需）。
     let _ = crate::navigator_shim::install_navigator(&mut ctx);
+    // M28.2: 安装 window 全局对象（window===globalThis 自引用 + 视口数据属性）。
+    // 必须在 navigator/location 等之后，window.navigator 经 globalThis 自动可见。
+    let _ = crate::window_shim::install_window(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
