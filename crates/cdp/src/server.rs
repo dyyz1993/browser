@@ -321,6 +321,16 @@ impl CdpSession {
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 }
             }
+            // ── M45: Runtime domain (evaluate JS, enable/disable) ──
+            m if m.starts_with("Runtime.") => {
+                match crate::runtime_domain::dispatch(id, m, msg.params.as_ref()) {
+                    Ok(resp) => resp,
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
+                        CdpMessage::error_response(id, -32601, "Method not found")
+                    }
+                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                }
+            }
             _ => CdpMessage::error_response(id, -32601, "Method not found"),
         };
         self.send_text(&resp).await

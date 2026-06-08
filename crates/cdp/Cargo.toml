@@ -15,6 +15,7 @@ browser-html-parser = { path = "../html-parser" }
 browser-css-engine = { path = "../css-engine" }
 browser-layout = { path = "../layout" }
 browser-render = { path = "../render" }
+browser-js-runtime = { path = "../js-runtime" }
 png = "0.17"
 tokio = { workspace = true }
 thiserror = { workspace = true }
