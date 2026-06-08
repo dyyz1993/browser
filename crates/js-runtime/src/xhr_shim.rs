@@ -35,25 +35,79 @@ pub fn install_xml_http_request(ctx: &mut Context) -> JsResult<()> {
     let js = r#"
 function XMLHttpRequest() {
     this.__xhrId = __xhrCreate();
+    // M38: 标准 XHR 属性
     this.onload = null;
+    this.onerror = null;
+    this.onreadystatechange = null;
+    this.readyState = 0;       // UNSENT
+    this.status = 0;
+    this.statusText = '';
     this.responseText = '';
+    this.responseType = '';
+    this.responseURL = '';
+    this._method = 'GET';
+    this._url = '';
 }
 XMLHttpRequest.prototype.open = function(method, url) {
+    this._method = (method || 'GET').toUpperCase();
+    this._url = url;
+    this.readyState = 1;       // OPENED
     __xhrOpen(this.__xhrId, method, url);
+    this._fireReadyStateChange();
 };
-XMLHttpRequest.prototype.send = function() {
+XMLHttpRequest.prototype.setRequestHeader = function(key, value) {
+    // MVP: no-op（简化，爬虫场景 headers 不关键）
+};
+XMLHttpRequest.prototype.abort = function() {
+    this.readyState = 0;
+};
+XMLHttpRequest.prototype.send = function(body) {
+    this.readyState = 2;       // HEADERS_RECEIVED
+    this._fireReadyStateChange();
     __xhrSend(this.__xhrId);
-    this.responseText = __xhrGetResponseText(this.__xhrId);
+    var raw = __xhrGetResponseText(this.__xhrId);
+    this.responseText = raw;
+    // 解析 status（__fetchSync 编码格式 "status\nbody"，__xhrSend 后端可能
+    // 只存 body。对兼容性：尝试解析 status 行，失败则默认 200）
+    var parsed = this._parseStatus(raw);
+    this.status = parsed.status;
+    this.statusText = parsed.statusText;
+    this.readyState = 4;       // DONE
     var self = this;
+    // M38: 同步触发 onreadystatechange（readyState=4）
+    this._fireReadyStateChange();
+    // 异步触发 onload（setTimeout 0，复用 M16 event loop）
     setTimeout(function() {
+        self.responseText = __xhrGetResponseText(self.__xhrId);
+        var p = self._parseStatus(self.responseText);
+        self.status = p.status;
+        self.statusText = p.statusText;
         if (typeof self.onload === 'function') {
-            self.responseText = __xhrGetResponseText(self.__xhrId);
             self.onload.call(self);
         }
     }, 0);
 };
 XMLHttpRequest.prototype.getResponseText = function() {
     return __xhrGetResponseText(this.__xhrId);
+};
+// M38: 内部辅助——触发 onreadystatechange 回调
+XMLHttpRequest.prototype._fireReadyStateChange = function() {
+    if (typeof this.onreadystatechange === 'function') {
+        this.onreadystatechange.call(this);
+    }
+};
+// M38: 内部辅助——从响应里解析 status（兼容 __fetchSync 的 "status\nbody" 编码）
+XMLHttpRequest.prototype._parseStatus = function(raw) {
+    if (!raw || raw.indexOf('\n') < 0) {
+        return { status: 200, statusText: 'OK' };
+    }
+    var nl = raw.indexOf('\n');
+    var first = raw.substring(0, nl);
+    var n = parseInt(first, 10);
+    if (isNaN(n) || n < 100) {
+        return { status: 200, statusText: 'OK' };
+    }
+    return { status: n, statusText: n === 200 ? 'OK' : ('status ' + n) };
 };
 "#;
     ctx.eval(boa_engine::Source::from_bytes(js))?;
