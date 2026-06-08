@@ -344,7 +344,8 @@ pub fn dispatch(
             result.insert("nodeIds".to_string(), Json::Array(ids));
             Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
-        _ => Err(CdpError::MethodNotFound(method.to_string())),
+        // M53: unknown methods → no-op ack (puppeteer sends many enable/disable)
+        _ => Ok(CdpMessage::ok_empty(id)),
     }
 }
 
@@ -472,9 +473,10 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_unknown_method() {
-        let st = make_state("<html><body></body></html>");
-        let result = dispatch(1, "DOM.totallyMadeUp", None, &st);
-        assert!(result.is_err());
+    fn dispatch_unknown_method_noop() {
+        let st = make_state("<html></html>");
+        // M53: unknown methods return no-op ack
+        let resp = dispatch(1, "DOM.fakeMethod", None, &st).unwrap();
+        assert!(resp.contains(r#""result":{}"#), "got: {resp}");
     }
 }

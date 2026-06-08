@@ -354,7 +354,11 @@ pub async fn dispatch(
                 events: vec![],
             })
         }
-        _ => Err(CdpError::MethodNotFound(method.to_string())),
+        // M53: unknown Page.* methods (enable/disable/etc) → no-op ack
+        _ => Ok(DispatchResult {
+            response: CdpMessage::ok_empty(id),
+            events: vec![],
+        }),
     }
 }
 

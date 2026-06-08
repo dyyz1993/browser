@@ -21,8 +21,10 @@ use crate::jsonrpc::{CdpError, CdpMessage, Json};
 /// Evaluate a JS expression with a fresh JsRuntime and return a CDP response.
 pub fn dispatch(id: i64, method: &str, params: Option<&Json>) -> Result<String, CdpError> {
     match method {
-        "Runtime.enable" | "Runtime.disable" => {
+        "Runtime.enable" | "Runtime.disable" | "Runtime.runIfWaitingForDebugger" => {
             // No-op ack — we don't emit console/log events yet.
+            // M53: runIfWaitingForDebugger is sent by puppeteer after auto-attach
+            // (because we set waitingForDebugger=true in attachedToTarget).
             Ok(CdpMessage::ok_empty(id))
         }
         "Runtime.evaluate" => {
@@ -52,7 +54,8 @@ pub fn dispatch(id: i64, method: &str, params: Option<&Json>) -> Result<String, 
                 }
             }
         }
-        _ => Err(CdpError::MethodNotFound(method.to_string())),
+        // M53: unknown methods → no-op ack (puppeteer sends many enable/disable)
+        _ => Ok(CdpMessage::ok_empty(id)),
     }
 }
 
@@ -153,7 +156,9 @@ mod tests {
     }
 
     #[test]
-    fn unknown_method_errors() {
-        assert!(dispatch(1, "Runtime.totallyFake", None).is_err());
+    fn unknown_method_noop() {
+        // M53: unknown methods now return no-op ack instead of error
+        let resp = dispatch(1, "Runtime.totallyFake", None).unwrap();
+        assert_eq!(resp, r#"{"id":1,"result":{}}"#);
     }
 }

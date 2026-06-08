@@ -85,6 +85,7 @@ pub fn target_object(ws_host: &str) -> Json {
     m.insert("id".to_string(), Json::String(TARGET_ID.to_string()));
     m.insert("title".to_string(), Json::String("browser-rs".to_string()));
     m.insert("type".to_string(), Json::String("page".to_string()));
+    m.insert("attached".to_string(), Json::Bool(true)); // M53: puppeteer checks this
     m.insert("url".to_string(), Json::String("about:blank".to_string()));
     m.insert(
         "webSocketDebuggerUrl".to_string(),

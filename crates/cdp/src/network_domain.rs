@@ -23,7 +23,8 @@ pub fn dispatch(id: i64, method: &str, state: &PageState) -> Result<String, CdpE
             result.insert("base64Encoded".to_string(), Json::Bool(false));
             Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
-        _ => Err(CdpError::MethodNotFound(method.to_string())),
+        // M53: unknown methods → no-op ack (puppeteer sends many enable/disable)
+        _ => Ok(CdpMessage::ok_empty(id)),
     }
 }
 
@@ -64,8 +65,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_method_errors() {
-        let st = make_state();
-        assert!(dispatch(1, "Network.totallyFake", &st).is_err());
+    fn unknown_method_noop() {
+        let st = PageState {
+            raw_html: "<html><body>Hello</body></html>".to_string(),
+            ..PageState::default()
+        };
+        // M53: unknown methods return no-op ack
+        let resp = dispatch(1, "Network.totallyFake", &st).unwrap();
+        assert!(resp.contains(r#""result":{}"#), "got: {resp}");
     }
 }

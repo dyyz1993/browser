@@ -142,6 +142,9 @@ pub struct CdpMessage {
     pub result: Option<Json>,
     /// `error` — object `{code, message}` for error responses.
     pub error: Option<Json>,
+    /// `sessionId` — M53: flatten session mode. Present when message is
+    /// routed through a specific CDP session.
+    pub session_id: Option<String>,
 }
 
 impl CdpMessage {
@@ -226,6 +229,13 @@ pub fn parse_message(text: &str) -> Result<CdpMessage, CdpError> {
         params: map.get("params").cloned(),
         result: map.get("result").cloned(),
         error: map.get("error").cloned(),
+        session_id: map.get("sessionId").and_then(|v| {
+            if let Json::String(s) = v {
+                Some(s.clone())
+            } else {
+                None
+            }
+        }),
     })
 }
 

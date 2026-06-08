@@ -271,9 +271,10 @@ impl CdpSession {
         let (Some(id), Some(method)) = (msg.id, msg.method.as_deref()) else {
             return Ok(());
         };
-        // M42: dispatch table is empty — everything is "not found" yet.
-        // M44+ will route "Page.*" to PageHandler, "Runtime.*" to RuntimeHandler, etc.
-        // M50: collect response + post-response events
+        let session_id = msg.session_id.clone(); // M53: flatten session routing
+                                                 // M42: dispatch table is empty — everything is "not found" yet.
+                                                 // M44+ will route "Page.*" to PageHandler, "Runtime.*" to RuntimeHandler, etc.
+                                                 // M50: collect response + post-response events
         let (resp, post_events): (String, Vec<String>) = match method {
             // ── M42 builtin: Discovery/Target probing ──
             // Puppeteer/Playwright probe these on connect; answering them early
@@ -375,17 +376,47 @@ impl CdpSession {
                     }
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 };
-                // M51: emit events at the right time
+                // M53: flatten session mode — emit events at the right time
                 let ws_host = self.ws_host();
                 let events: Vec<String> = match m {
-                    // M52: don't emit events for setDiscoverTargets/setAutoAttach.
-                    // puppeteer's ChromeTargetManager.initialize() awaits
-                    // #initializeDeferred which resolves only when all discovered
-                    // page targets auto-attach. Since we don't support flatten
-                    // sessions, emitting targetCreated would hang pages().
-                    // Instead, connect() works, pages() returns [], and raw CDP
-                    // commands via createCDPSession work perfectly.
-                    "Target.setDiscoverTargets" | "Target.setAutoAttach" => vec![],
+                    // setDiscoverTargets → emit targetCreated so puppeteer discovers our page target
+                    "Target.setDiscoverTargets" => {
+                        vec![CdpMessage::event(
+                            "Target.targetCreated",
+                            Json::Object({
+                                let mut p = BTreeMap::new();
+                                p.insert(
+                                    "targetInfo".to_string(),
+                                    crate::discovery::target_object(&ws_host),
+                                );
+                                p
+                            }),
+                        )]
+                    }
+                    // M53: setAutoAttach → emit attachedToTarget so puppeteer creates a session.
+                    // Only emit for connection-level (no sessionId), not for session-level
+                    // (which would cause infinite recursion).
+                    // waitingForDebugger must be true because puppeteer sends waitForDebuggerOnStart: true.
+                    // After this, puppeteer sends Runtime.runIfWaitingForDebugger to continue.
+                    "Target.setAutoAttach" if session_id.is_none() => {
+                        vec![CdpMessage::event(
+                            "Target.attachedToTarget",
+                            Json::Object({
+                                let mut p = BTreeMap::new();
+                                p.insert(
+                                    "sessionId".to_string(),
+                                    Json::String("browser-rs-session-0".to_string()),
+                                );
+                                p.insert(
+                                    "targetInfo".to_string(),
+                                    crate::discovery::target_object(&ws_host),
+                                );
+                                p.insert("waitingForDebugger".to_string(), Json::Bool(true));
+                                p
+                            }),
+                        )]
+                    }
+                    "Target.setAutoAttach" => vec![], // session-level: no-op
                     "Target.attachToTarget" | "Target.attachToBrowserTarget" => {
                         vec![CdpMessage::event(
                             "Target.attachedToTarget",
@@ -408,11 +439,43 @@ impl CdpSession {
                 };
                 (resp, events)
             }
+            // M53: puppeteer sends many "enable/disable" style methods during
+            // page initialization. For known CDP domains, return no-op ack instead
+            // of error. Only truly unknown domains get -32601.
+            m if m.starts_with("Fetch.")
+                || m.starts_with("Emulation.")
+                || m.starts_with("CSS.")
+                || m.starts_with("DOMSnapshot.")
+                || m.starts_with("Log.")
+                || m.starts_with("Security.")
+                || m.starts_with("Performance.")
+                || m.starts_with("Inspector.")
+                || m.starts_with("Accessibility.") =>
+            {
+                (CdpMessage::ok_empty(id), vec![])
+            }
             _ => (
                 CdpMessage::error_response(id, -32601, "Method not found"),
                 vec![],
             ),
         };
+        // M53: if request had sessionId, inject it into response and events
+        let resp = if let Some(ref sid) = session_id {
+            // Insert sessionId into the JSON response
+            Self::inject_session_id(&resp, sid)
+        } else {
+            resp
+        };
+        let post_events: Vec<String> = post_events
+            .into_iter()
+            .map(|evt| {
+                if let Some(ref sid) = session_id {
+                    Self::inject_session_id(&evt, sid)
+                } else {
+                    evt
+                }
+            })
+            .collect();
         // M50: send pre-response events first (so puppeteer creates sessions before looking them up),
         // then response, then post-response events.
         for evt in &post_events {
@@ -422,6 +485,19 @@ impl CdpSession {
         }
         self.send_text(&resp).await?;
         Ok(())
+    }
+
+    /// M53: inject `sessionId` field into a JSON message string.
+    /// This is needed for flatten session mode where responses and events
+    /// must carry the session ID they belong to.
+    fn inject_session_id(json: &str, session_id: &str) -> String {
+        // Quick approach: find the opening { and insert after it.
+        // All CDP messages start with `{`.
+        if let Some(rest) = json.strip_prefix('{') {
+            format!("{{\"sessionId\":\"{}\",{}", session_id, rest)
+        } else {
+            json.to_string()
+        }
     }
 
     /// Send a text message as a single (unmasked, server→client) frame.
