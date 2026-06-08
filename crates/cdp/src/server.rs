@@ -476,14 +476,31 @@ impl CdpSession {
                 }
             })
             .collect();
-        // M50: send pre-response events first (so puppeteer creates sessions before looking them up),
-        // then response, then post-response events.
+        // M55: Target events (session creation) before response;
+        // Page lifecycle events after response (puppeteer's LifecycleWatcher
+        // is created after receiving the navigate response).
         for evt in &post_events {
-            if let Err(e) = self.send_text(evt).await {
-                eprintln!("[cdp] event send error: {e}");
+            if evt.contains("\"Target.") {
+                if let Err(e) = self.send_text(evt).await {
+                    eprintln!("[cdp] event send error: {e}");
+                }
             }
         }
         self.send_text(&resp).await?;
+        // M55: delay before sending lifecycle events.
+        // Puppeteer's LifecycleWatcher is created in the response callback,
+        // but events in the same TCP batch arrive in the same event-loop tick.
+        // A tiny delay ensures puppeteer processes the response first.
+        if post_events.iter().any(|e| !e.contains("\"Target.")) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        for evt in &post_events {
+            if !evt.contains("\"Target.") {
+                if let Err(e) = self.send_text(evt).await {
+                    eprintln!("[cdp] event send error: {e}");
+                }
+            }
+        }
         Ok(())
     }
 

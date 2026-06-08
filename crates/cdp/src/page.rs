@@ -271,10 +271,13 @@ pub async fn dispatch(
                 "frameId".to_string(),
                 Json::String(crate::discovery::TARGET_ID.to_string()),
             );
+            // M55: loaderId is required — puppeteer uses it to match lifecycle events
+            result.insert("loaderId".to_string(), Json::String("1".to_string()));
             // M50: emit Page lifecycle events after navigate
             let frame_id = crate::discovery::TARGET_ID.to_string();
             let nav_url = url.to_string();
             let events = vec![
+                // 1. frameNavigated — tells FrameManager the frame URL changed
                 CdpMessage::event(
                     "Page.frameNavigated",
                     Json::Object({
@@ -282,11 +285,48 @@ pub async fn dispatch(
                         let mut frame = BTreeMap::new();
                         frame.insert("id".to_string(), Json::String(frame_id.clone()));
                         frame.insert("url".to_string(), Json::String(nav_url.clone()));
-                        frame.insert("loaderId".to_string(), Json::String("0".to_string()));
+                        frame.insert("loaderId".to_string(), Json::String("1".to_string()));
                         p.insert("frame".to_string(), Json::Object(frame));
                         p
                     }),
                 ),
+                // 2. lifecycleEvent: DOMContentLoaded — LifecycleWatcher checks this
+                CdpMessage::event(
+                    "Page.lifecycleEvent",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
+                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
+                        p.insert(
+                            "name".to_string(),
+                            Json::String("DOMContentLoaded".to_string()),
+                        );
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p
+                    }),
+                ),
+                // 3. lifecycleEvent: load — LifecycleWatcher checks this
+                CdpMessage::event(
+                    "Page.lifecycleEvent",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
+                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
+                        p.insert("name".to_string(), Json::String("load".to_string()));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p
+                    }),
+                ),
+                // 4. domContentEventFired
+                CdpMessage::event(
+                    "Page.domContentEventFired",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p
+                    }),
+                ),
+                // 5. loadEventFired
                 CdpMessage::event(
                     "Page.loadEventFired",
                     Json::Object({
@@ -295,19 +335,12 @@ pub async fn dispatch(
                         p
                     }),
                 ),
+                // 6. frameStoppedLoading
                 CdpMessage::event(
                     "Page.frameStoppedLoading",
                     Json::Object({
                         let mut p = BTreeMap::new();
                         p.insert("frameId".to_string(), Json::String(frame_id.clone()));
-                        p
-                    }),
-                ),
-                CdpMessage::event(
-                    "Page.domContentEventFired",
-                    Json::Object({
-                        let mut p = BTreeMap::new();
-                        p.insert("timestamp".to_string(), Json::Number(0.0));
                         p
                     }),
                 ),
