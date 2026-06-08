@@ -224,6 +224,9 @@ pub fn run_scripts_with_base(
     // M28.4: 安装 screen 全局对象（width/height/colorDepth/orientation，响应式布局
     // 特性检测常用）。静态默认值（无显示器环境）。
     let _ = crate::screen_shim::install_screen(&mut ctx);
+    // M41: Image 构造器（爬虫友好——设 src 后 setTimeout(0) 假触发 onload，不 fetch）。
+    // 消除 baidu SPA 实测的 `Image is not defined` 错误。
+    let _ = crate::image_shim::install_image(&mut ctx);
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }

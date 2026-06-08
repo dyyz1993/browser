@@ -10,6 +10,7 @@ pub mod bridge;
 pub mod document_shim;
 pub mod element_shim;
 pub mod fetch_shim;
+pub mod image_shim;
 pub mod navigation_shim;
 pub mod navigator_shim;
 pub mod runtime;
@@ -26,6 +27,7 @@ pub use bridge::{
     install_shared_with_base, install_storage, is_network_idle, pending_requests, pending_timers,
     resolve_url, SharedTree, TreeGuard,
 };
+pub use image_shim::install_image;
 pub use navigation_shim::install_navigation_globals;
 pub use runtime::JsRuntime;
 pub use scripts::{
