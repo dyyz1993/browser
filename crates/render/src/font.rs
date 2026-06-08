@@ -26,6 +26,11 @@ use std::collections::HashMap;
 
 use fontdue::Font;
 
+/// M39: per-line background span = `(start_col, end_col, (r, g, b))` half-open range.
+pub type BgSpan = (usize, usize, (u8, u8, u8));
+/// M39: per-line background spans.
+pub type BgSpans = Vec<BgSpan>;
+
 const FONT_BYTES: &[u8] = include_bytes!("../assets/font.ttf");
 /// M36: CJK fallback font (NotoSansSC GB2312 subset, ~1.6MB).
 /// Covers 6763 most common Chinese chars + CJK punctuation.
@@ -89,6 +94,8 @@ impl FontRenderer {
     ///
     /// - `link_spans`: per-line list of `(start_col, end_col)` half-open
     ///   ranges to paint blue. Pass empty for plain black text.
+    /// - `bg_spans`: M39 per-line list of `(start_col, end_col, (r,g,b))`
+    ///   half-open ranges to fill background color.
     ///
     /// Returns `(width, height, rgba_buffer)`. Buffer length is
     /// `width * height * 4`.
@@ -100,6 +107,7 @@ impl FontRenderer {
         &mut self,
         text: &str,
         link_spans_per_line: &[Vec<(usize, usize)>],
+        bg_spans_per_line: &[BgSpans],
     ) -> (usize, usize, Vec<u8>) {
         let lines: Vec<&str> = text.lines().collect();
         assert!(!lines.is_empty(), "render_text_to_rgba: empty text");
@@ -113,6 +121,28 @@ impl FontRenderer {
         let img_h = lines.len() * line_height;
 
         let mut buf = vec![255u8; img_w * img_h * 4];
+
+        // M39: 先填充背景色（在画文字之前，文字会覆盖在背景之上）。
+        for (row, _line) in lines.iter().enumerate() {
+            let bgs = bg_spans_per_line.get(row).map(Vec::as_slice).unwrap_or(&[]);
+            let row_top = row * line_height;
+            for &(start, end, (br, bg, bb)) in bgs {
+                let x0 = start * col_width;
+                let x1 = end * col_width;
+                for py in row_top..row_top + line_height {
+                    for px in x0..x1 {
+                        if px >= img_w || py >= img_h {
+                            continue;
+                        }
+                        let idx = (py * img_w + px) * 4;
+                        buf[idx] = br;
+                        buf[idx + 1] = bg;
+                        buf[idx + 2] = bb;
+                        buf[idx + 3] = 255;
+                    }
+                }
+            }
+        }
 
         for (row, raw_line) in lines.iter().enumerate() {
             let spans = link_spans_per_line
@@ -274,7 +304,7 @@ mod tests {
     #[test]
     fn render_simple_text_returns_nonempty_buffer() {
         let mut r = FontRenderer::new();
-        let (w, h, buf) = r.render_text_to_rgba("Hi", &[]);
+        let (w, h, buf) = r.render_text_to_rgba("Hi", &[], &[]);
         assert!(w > 0);
         assert!(h > 0);
         assert_eq!(buf.len(), w * h * 4);
@@ -292,14 +322,14 @@ mod tests {
     fn render_multiline_text_has_correct_height() {
         let mut r = FontRenderer::new();
         let m = r.metrics();
-        let (_w, h, _buf) = r.render_text_to_rgba("A\nB\nC", &[]);
+        let (_w, h, _buf) = r.render_text_to_rgba("A\nB\nC", &[], &[]);
         assert_eq!(h, m.line_height * 3);
     }
 
     #[test]
     fn render_chinese_chars_does_not_panic() {
         let mut r = FontRenderer::new();
-        let (w, h, _buf) = r.render_text_to_rgba("你好", &[]);
+        let (w, h, _buf) = r.render_text_to_rgba("你好", &[], &[]);
         assert!(w > 0);
         assert!(h > 0);
     }
@@ -361,7 +391,7 @@ mod tests {
     fn link_spans_paint_blue() {
         let mut r = FontRenderer::new();
         // 2 chars "go", link span covers col 0..2 → all blue.
-        let (w, h, buf) = r.render_text_to_rgba("go", &[vec![(0, 2)]]);
+        let (w, h, buf) = r.render_text_to_rgba("go", &[vec![(0, 2)]], &[]);
         // Find a non-white pixel and check its blue channel dominates.
         let blue_pixel = buf
             .chunks_exact(4)
@@ -392,7 +422,7 @@ mod tests {
     #[test]
     fn cjk_and_ascii_render_in_same_line() {
         let mut r = FontRenderer::new();
-        let (w, h, buf) = r.render_text_to_rgba("A你B", &[]);
+        let (w, h, buf) = r.render_text_to_rgba("A你B", &[], &[]);
         assert!(w > 0 && h > 0);
         assert_eq!(buf.len(), w * h * 4);
         // Both ASCII 'A' and CJK '你' should produce dark pixels
@@ -403,7 +433,7 @@ mod tests {
     #[test]
     fn pure_chinese_text_renders() {
         let mut r = FontRenderer::new();
-        let (w, h, buf) = r.render_text_to_rgba("你好世界", &[]);
+        let (w, h, buf) = r.render_text_to_rgba("你好世界", &[], &[]);
         assert!(w > 0 && h > 0);
         // 4 Chinese chars → at least some dark pixels per char
         let dark = buf.chunks_exact(4).filter(|px| px[0] < 200).count();

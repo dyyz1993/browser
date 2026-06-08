@@ -291,7 +291,7 @@ fn render_frame(st: &mut RunningState) -> Result<(), Box<dyn std::error::Error>>
     let scrolled_lines: Vec<&str> = st.text.lines().skip(st.scroll_y).collect();
     if !scrolled_lines.is_empty() {
         let scrolled_text = scrolled_lines.join("\n");
-        let (tw, th, tbuf) = st.renderer.render_text_to_rgba(&scrolled_text, &[]);
+        let (tw, th, tbuf) = st.renderer.render_text_to_rgba(&scrolled_text, &[], &[]);
         blit_rgba(
             &tbuf,
             tw,
