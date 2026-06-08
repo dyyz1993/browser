@@ -378,39 +378,14 @@ impl CdpSession {
                 // M51: emit events at the right time
                 let ws_host = self.ws_host();
                 let events: Vec<String> = match m {
-                    "Target.setDiscoverTargets" => {
-                        // puppeteer registers listener before calling this
-                        vec![CdpMessage::event(
-                            "Target.targetCreated",
-                            Json::Object({
-                                let mut p = BTreeMap::new();
-                                p.insert(
-                                    "targetInfo".to_string(),
-                                    crate::discovery::target_object(&ws_host),
-                                );
-                                p
-                            }),
-                        )]
-                    }
-                    "Target.setAutoAttach" => {
-                        // emit attachedToTarget so puppeteer creates a session
-                        vec![CdpMessage::event(
-                            "Target.attachedToTarget",
-                            Json::Object({
-                                let mut p = BTreeMap::new();
-                                p.insert(
-                                    "sessionId".to_string(),
-                                    Json::String("browser-rs-session-0".to_string()),
-                                );
-                                p.insert(
-                                    "targetInfo".to_string(),
-                                    crate::discovery::target_object(&ws_host),
-                                );
-                                p.insert("waitingForDebugger".to_string(), Json::Bool(false));
-                                p
-                            }),
-                        )]
-                    }
+                    // M52: don't emit events for setDiscoverTargets/setAutoAttach.
+                    // puppeteer's ChromeTargetManager.initialize() awaits
+                    // #initializeDeferred which resolves only when all discovered
+                    // page targets auto-attach. Since we don't support flatten
+                    // sessions, emitting targetCreated would hang pages().
+                    // Instead, connect() works, pages() returns [], and raw CDP
+                    // commands via createCDPSession work perfectly.
+                    "Target.setDiscoverTargets" | "Target.setAutoAttach" => vec![],
                     "Target.attachToTarget" | "Target.attachToBrowserTarget" => {
                         vec![CdpMessage::event(
                             "Target.attachedToTarget",
