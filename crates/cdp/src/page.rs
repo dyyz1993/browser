@@ -39,6 +39,8 @@ pub struct PageState {
     pub url: String,
     /// The parsed DOM tree (for DOM domain queries, M46).
     pub tree: Tree,
+    /// The raw fetched HTML body (for Network.getResponseBody, M47).
+    pub raw_html: String,
     /// The rendered plain text (for future Runtime/eval that needs it).
     pub rendered_text: String,
     /// The colored ANSI text (parsed by the PNG renderer for link colors).
@@ -52,6 +54,7 @@ impl Default for PageState {
         Self {
             url: String::new(),
             tree: Tree::new(),
+            raw_html: String::new(),
             rendered_text: String::new(),
             rendered_colored: String::new(),
             width: 80,
@@ -255,6 +258,7 @@ pub async fn dispatch(
                     .lock()
                     .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
                 st.render(&html, url, 80);
+                st.raw_html = html.clone();
             }
             let mut result = BTreeMap::new();
             result.insert(

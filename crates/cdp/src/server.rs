@@ -331,6 +331,19 @@ impl CdpSession {
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 }
             }
+            // ── M47: Network domain (getResponseBody, enable/disable) ──
+            m if m.starts_with("Network.") => {
+                let Ok(st) = self.page.lock() else {
+                    return Ok(());
+                };
+                match crate::network_domain::dispatch(id, m, &st) {
+                    Ok(resp) => resp,
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
+                        CdpMessage::error_response(id, -32601, "Method not found")
+                    }
+                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                }
+            }
             _ => CdpMessage::error_response(id, -32601, "Method not found"),
         };
         self.send_text(&resp).await

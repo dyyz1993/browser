@@ -103,7 +103,7 @@ mod tests {
             Json::String("\"hello\".toUpperCase()".to_string()),
         );
         let resp = dispatch(1, "Runtime.evaluate", Some(&Json::Object(p))).unwrap();
-        assert!(resp.contains("\"value\":\"HELLO\""), "got: {resp}");  // boa quotes; classify strips
+        assert!(resp.contains("\"value\":\"HELLO\""), "got: {resp}"); // boa quotes; classify strips
     }
 
     #[test]

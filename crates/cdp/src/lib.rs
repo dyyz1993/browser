@@ -41,6 +41,7 @@
 pub mod discovery;
 pub mod dom_domain;
 pub mod jsonrpc;
+pub mod network_domain;
 pub mod page;
 pub mod runtime_domain;
 pub mod server;
