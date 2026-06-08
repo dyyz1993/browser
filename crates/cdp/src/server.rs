@@ -307,6 +307,20 @@ impl CdpSession {
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 }
             }
+            // ── M46: DOM domain (getDocument, getOuterHTML, querySelector) ──
+            // Synchronous: lock the page state and dispatch directly.
+            m if m.starts_with("DOM.") => {
+                let Ok(st) = self.page.lock() else {
+                    return Ok(()); // lock poisoned — drop silently
+                };
+                match crate::dom_domain::dispatch(id, m, msg.params.as_ref(), &st) {
+                    Ok(resp) => resp,
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
+                        CdpMessage::error_response(id, -32601, "Method not found")
+                    }
+                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                }
+            }
             _ => CdpMessage::error_response(id, -32601, "Method not found"),
         };
         self.send_text(&resp).await

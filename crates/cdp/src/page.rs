@@ -34,16 +34,29 @@ use crate::jsonrpc::{CdpError, CdpMessage, Json};
 ///
 /// Stored in an `Arc<Mutex>` so the async session loop can share it between
 /// the navigate and captureScreenshot handlers.
-#[derive(Default)]
 pub struct PageState {
     /// The URL last navigated to (empty before first navigate).
     pub url: String,
+    /// The parsed DOM tree (for DOM domain queries, M46).
+    pub tree: Tree,
     /// The rendered plain text (for future Runtime/eval that needs it).
     pub rendered_text: String,
     /// The colored ANSI text (parsed by the PNG renderer for link colors).
     pub rendered_colored: String,
     /// Render width in chars.
     pub width: usize,
+}
+
+impl Default for PageState {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            tree: Tree::new(),
+            rendered_text: String::new(),
+            rendered_colored: String::new(),
+            width: 80,
+        }
+    }
 }
 
 impl PageState {
@@ -64,6 +77,7 @@ impl PageState {
         self.rendered_colored = browser_render::render_ascii_colored(&layout, width);
         self.url = url.to_string();
         self.width = width;
+        self.tree = tree;
     }
 
     /// Render the current page to a PNG screenshot, returning base64 data.

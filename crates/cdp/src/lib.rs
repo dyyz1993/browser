@@ -39,6 +39,7 @@
 #![forbid(unsafe_code)]
 
 pub mod discovery;
+pub mod dom_domain;
 pub mod jsonrpc;
 pub mod page;
 pub mod server;
