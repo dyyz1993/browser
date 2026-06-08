@@ -355,11 +355,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-cdp"
+version = "0.0.1"
+dependencies = [
+ "browser-ws",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "browser-cli"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "browser-cdp",
  "browser-cookie",
  "browser-css-engine",
  "browser-dom",

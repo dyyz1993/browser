@@ -126,6 +126,14 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// **M42**: Start a CDP (Chrome DevTools Protocol) server. Lets external
+    /// tools like Puppeteer/Playwright drive the browser over WebSocket.
+    /// Run `browser cdp`, then connect a CDP client to ws://127.0.0.1:9222.
+    Cdp {
+        /// Port to listen on (Chrome default: 9222).
+        #[arg(long, default_value_t = browser_cdp::server::DEFAULT_CDP_PORT)]
+        port: u16,
+    },
 }
 
 async fn run() -> Result<()> {
@@ -338,6 +346,13 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 text,
             };
             browser_gui::run_window(config).map_err(|e| anyhow!("GUI error: {e}"))?;
+            Ok(())
+        }
+        Cmd::Cdp { port } => {
+            // M42: start the CDP server. Blocks forever (listen loop).
+            browser_cdp::server::CdpServer::listen(port)
+                .await
+                .map_err(|e| anyhow!("CDP server error: {e}"))?;
             Ok(())
         }
     }

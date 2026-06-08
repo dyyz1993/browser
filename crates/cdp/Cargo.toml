@@ -1,0 +1,16 @@
+[package]
+name = "browser-cdp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Chrome DevTools Protocol (CDP) server — exposes browser to Puppeteer/Playwright."
+
+[dependencies]
+browser-ws = { path = "../ws" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

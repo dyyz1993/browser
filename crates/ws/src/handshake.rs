@@ -84,6 +84,37 @@ pub fn parse_status_code(response: &str) -> Option<u16> {
     parts.next()?.parse().ok()
 }
 
+/// **M42**: Parse a client's HTTP upgrade **request** and extract the
+/// `Sec-WebSocket-Key` header value. Returns `None` if the header is absent
+/// or the request is not a valid WebSocket upgrade.
+///
+/// Header matching is case-insensitive (RFC 7230 §3.2).
+pub fn parse_key_from_request(request: &str) -> Option<&str> {
+    for line in request.split("\r\n") {
+        if let Some(colon) = line.find(':') {
+            let name = line[..colon].trim().to_ascii_lowercase();
+            if name == "sec-websocket-key" {
+                return Some(line[colon + 1..].trim());
+            }
+        }
+    }
+    None
+}
+
+/// **M42**: Build the server→client 101 Switching Protocols response.
+/// Uses [`compute_accept`] to compute `Sec-WebSocket-Accept` from the
+/// client's `Sec-WebSocket-Key`.
+pub fn build_server_response(key: &str) -> String {
+    let accept = compute_accept(key);
+    format!(
+        "HTTP/1.1 101 Switching Protocols\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Accept: {accept}\r\n\
+         \r\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +228,59 @@ mod tests {
             parse_accept_from_response(&server_resp),
             Some(accept.as_str())
         );
+    }
+
+    // ── M42: server handshake helpers ──
+
+    #[test]
+    fn parse_key_from_request_extracts_key() {
+        let req = build_client_request("localhost", "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+        assert_eq!(
+            parse_key_from_request(&req),
+            Some("dGhlIHNhbXBsZSBub25jZQ==")
+        );
+    }
+
+    #[test]
+    fn parse_key_from_request_case_insensitive() {
+        // Some clients send lowercase header names.
+        let req = "GET / HTTP/1.1\r\nsec-websocket-key: abc123==\r\n\r\n";
+        assert_eq!(parse_key_from_request(req), Some("abc123=="));
+    }
+
+    #[test]
+    fn parse_key_from_request_missing() {
+        let req = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        assert_eq!(parse_key_from_request(req), None);
+    }
+
+    #[test]
+    fn build_server_response_contains_accept() {
+        let resp = build_server_response("dGhlIHNhbXBsZSBub25jZQ==");
+        assert!(resp.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
+        assert!(resp.contains("Upgrade: websocket\r\n"));
+        assert!(resp.contains("Connection: Upgrade\r\n"));
+        // RFC 6455 §4.2.2 canonical accept value.
+        assert!(resp.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
+        assert!(resp.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn server_response_accept_varies_with_key() {
+        let r1 = build_server_response("dGhlIHNhbXBsZSBub25jZQ==");
+        let r2 = build_server_response("AAAAAAAAAAAAAAAAAAAAAA==");
+        assert_ne!(r1, r2);
+    }
+
+    #[test]
+    fn full_server_handshake_round_trip() {
+        // Client builds request with a key; server parses key + builds response.
+        let key = key_from_random([0xAB; 16]);
+        let req = build_client_request("localhost", "/cdp", &key);
+        let parsed_key = parse_key_from_request(&req).expect("key parsed");
+        let resp = build_server_response(parsed_key);
+        // The accept in the response must match compute_accept(original key).
+        let expected_accept = compute_accept(&key);
+        assert!(resp.contains(&format!("Sec-WebSocket-Accept: {expected_accept}\r\n")));
     }
 }

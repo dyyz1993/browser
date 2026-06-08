@@ -25,6 +25,7 @@ png = "0.17"
 # M12.3: image decoding for ASCII art rendering (~30k lines, <10w threshold).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 browser-js-runtime = { path = "../js-runtime" }
+browser-cdp = { path = "../cdp" }
 browser-gui = { path = "../gui" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 clap = { version = "4.5", features = ["derive"] }
