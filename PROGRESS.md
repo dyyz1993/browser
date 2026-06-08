@@ -11,7 +11,7 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `195a0fc`（M34 GUI 像素级渲染） |
+| HEAD | `f908ad5`（M35.4 ADR-0004） |
 | 总 commits | 164 |
 | 测试 | 508 passed, 0 clippy warnings |
 | Crates | 15 |

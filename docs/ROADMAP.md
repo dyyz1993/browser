@@ -44,7 +44,8 @@
 | M32 | ✅ | CSS flexbox 子集（row/column + grow + justify + gap） | 498 |
 | M33 | ✅ | CSS grid 子集（grid-template-columns + gap + auto-placement） | 508 |
 | M34 | ✅ | GUI 像素级渲染（render::font 共享，修复 'X' bug） | 508 |
-| M35+ | ⚪ | 前瞻（更多 flex 属性 / 性能优化） | — |
+| M35 | ✅ | flex-wrap/align-items/grid-col-row + ADR-0004 | 494 |
+| M36+ | ⚪ | 前瞻（性能优化 / 更多 CSS 属性） | — |
 
 ---
 
