@@ -167,6 +167,20 @@ impl Default for GridProps {
     }
 }
 
+/// M35.3: Explicit grid item placement from `grid-column` / `grid-row`.
+/// `None` = auto-placement (default). CSS line numbers are 1-based.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct GridItemPlacement {
+    /// Column start line (1-based). None = auto.
+    pub col_start: Option<usize>,
+    /// Column span (default 1). e.g. `grid-column: span 2` → span=2.
+    pub col_span: usize,
+    /// Row start line (1-based). None = auto.
+    pub row_start: Option<usize>,
+    /// Row span (default 1).
+    pub row_span: usize,
+}
+
 /// A single layout box. Owns its children recursively.
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
@@ -202,6 +216,9 @@ pub struct LayoutBox {
     /// M33: grid container properties (only meaningful when
     /// `box_type == BoxType::Grid`).
     pub grid: GridProps,
+    /// M35.3: explicit grid item placement from grid-column/grid-row.
+    /// None = auto-placement (default). Only meaningful when parent is Grid.
+    pub grid_placement: Option<GridItemPlacement>,
     pub children: Vec<LayoutBox>,
 }
 
@@ -220,6 +237,7 @@ impl LayoutBox {
             flex: FlexProps::default(),
             flex_grow: 0.0,
             grid: GridProps::default(),
+            grid_placement: None,
             children: Vec::new(),
         }
     }

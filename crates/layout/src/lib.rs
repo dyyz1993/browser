@@ -11,8 +11,8 @@ pub mod inline;
 
 pub use block::{layout, LayoutConfig};
 pub use boxes::{
-    AlignItems, BoxType, Dimensions, FlexDirection, FlexProps, FlexWrap, GridProps, GridTrack,
-    JustifyContent, LayoutBox, LayoutTree,
+    AlignItems, BoxType, Dimensions, FlexDirection, FlexProps, FlexWrap, GridItemPlacement,
+    GridProps, GridTrack, JustifyContent, LayoutBox, LayoutTree,
 };
 pub use construct::construct_layout_tree;
 pub use inline::layout_inline_run;

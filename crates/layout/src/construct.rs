@@ -122,6 +122,8 @@ fn build_box(
             }
             // M32: 读 flex-grow 属性（flex item）。
             apply_flex_grow(id, styles, &mut bx);
+            // M35.3: 读 grid-column/grid-row 显式定位（grid item）。
+            apply_grid_placement(id, styles, &mut bx);
             bx.children = build_children(tree, id, bt, styles);
             // M7.1.3: fill margin/padding from CSS + UA defaults.
             apply_box_model(tag, id, styles, &mut bx);
@@ -285,6 +287,43 @@ fn apply_grid_props(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: 
                 bx.grid.gap = v;
             }
         }
+    }
+}
+
+/// M35.3: 从 CSS 读 grid-column / grid-row 显式定位，填充 grid_placement。
+fn apply_grid_placement(
+    id: NodeId,
+    styles: &HashMap<NodeId, Vec<Declaration>>,
+    bx: &mut LayoutBox,
+) {
+    let Some(decls) = styles.get(&id) else {
+        return;
+    };
+    let mut col_start = None;
+    let mut col_span = 1usize;
+    let mut row_start = None;
+    let mut row_span = 1usize;
+    let mut has_grid = false;
+    for d in decls {
+        if d.property.eq_ignore_ascii_case("grid-column") {
+            has_grid = true;
+            let (s, span) = crate::grid::parse_grid_placement(&d.value);
+            col_start = s;
+            col_span = span;
+        } else if d.property.eq_ignore_ascii_case("grid-row") {
+            has_grid = true;
+            let (s, span) = crate::grid::parse_grid_placement(&d.value);
+            row_start = s;
+            row_span = span;
+        }
+    }
+    if has_grid {
+        bx.grid_placement = Some(crate::boxes::GridItemPlacement {
+            col_start,
+            col_span,
+            row_start,
+            row_span,
+        });
     }
 }
 
