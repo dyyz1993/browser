@@ -320,6 +320,20 @@ pub fn dispatch(
             result.insert("nodeId".to_string(), Json::Number(node_id));
             Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
+        "DOM.describeNode" => {
+            let node_id = params
+                .and_then(|p| p.get("nodeId"))
+                .and_then(|p| match p {
+                    Json::Number(n) => Some(*n as usize),
+                    _ => None,
+                })
+                .ok_or_else(|| CdpError::InvalidJson("missing nodeId or not number".to_string()))?;
+            let mut next_id = 0;
+            let (_, node) = build_cdp_node(&state.tree, node_id, 0, &mut next_id);
+            let mut result = BTreeMap::new();
+            result.insert("node".to_string(), node);
+            Ok(CdpMessage::ok_response(id, Json::Object(result)))
+        }
         "DOM.querySelectorAll" => {
             let selector = params
                 .and_then(|p| p.get_str("selector"))
