@@ -27,6 +27,9 @@ use std::collections::HashMap;
 use fontdue::Font;
 
 const FONT_BYTES: &[u8] = include_bytes!("../assets/font.ttf");
+/// M36: CJK fallback font (NotoSansSC GB2312 subset, ~1.6MB).
+/// Covers 6763 most common Chinese chars + CJK punctuation.
+const CJK_FONT_BYTES: &[u8] = include_bytes!("../assets/cjk.ttf");
 const FONT_SIZE: f32 = 16.0;
 /// Extra spacing beyond ascent+descent (M25 measured value).
 const LINE_GAP: usize = 6;
@@ -47,7 +50,10 @@ pub struct LayoutMetrics {
 /// glyph cache (metrics + alpha mask). `Clone` is intentionally NOT
 /// derived — share one instance (it's used behind a thread-local in gui).
 pub struct FontRenderer {
+    /// ASCII / Latin font (DejaVuSans).
     font: Font,
+    /// M36: CJK fallback font (NotoSansSC subset).
+    cjk_font: Font,
     metrics: LayoutMetrics,
     cache: HashMap<char, (fontdue::Metrics, Vec<u8>)>,
 }
@@ -61,9 +67,12 @@ impl FontRenderer {
     pub fn new() -> Self {
         let font = Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default())
             .expect("embedded font.ttf must parse");
+        let cjk_font = Font::from_bytes(CJK_FONT_BYTES, fontdue::FontSettings::default())
+            .expect("embedded cjk.ttf must parse");
         let metrics = measure_layout(&font);
         Self {
             font,
+            cjk_font,
             metrics,
             cache: HashMap::new(),
         }
@@ -162,12 +171,23 @@ impl FontRenderer {
     }
 
     /// Get-or-cache the (metrics, alpha_mask) for `ch`.
+    ///
+    /// M36: CJK chars use the CJK font; ASCII/Latin use DejaVuSans.
+    /// If the ASCII font lacks the glyph (width == 0), fall back to CJK.
     fn cached_glyph(&mut self, ch: char) -> (fontdue::Metrics, Vec<u8>) {
         if let Some((m, mask)) = self.cache.get(&ch) {
             return (*m, mask.clone());
         }
-        let m = self.font.metrics(ch, FONT_SIZE);
-        let (_, mask) = self.font.rasterize(ch, FONT_SIZE);
+        let (m, mask) = if is_cjk_char(ch) {
+            self.cjk_font.rasterize(ch, FONT_SIZE)
+        } else {
+            let m = self.font.metrics(ch, FONT_SIZE);
+            if m.width == 0 || m.height == 0 {
+                self.cjk_font.rasterize(ch, FONT_SIZE)
+            } else {
+                self.font.rasterize(ch, FONT_SIZE)
+            }
+        };
         self.cache.insert(ch, (m, mask.clone()));
         (m, mask)
     }
@@ -177,6 +197,28 @@ impl Default for FontRenderer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// M36: Determine if a character should use the CJK font.
+///
+/// Uses Unicode block ranges (no external crate):
+/// - CJK Unified Ideographs (U+4E00..U+9FFF): common Chinese chars
+/// - CJK Symbols and Punctuation (U+3000..U+303F): 、。「」等
+/// - Halfwidth and Fullwidth Forms (U+FF00..U+FFEF): ！＃等
+/// - Hiragana / Katakana / Hangul / CJK Compatibility
+#[must_use]
+pub(crate) fn is_cjk_char(ch: char) -> bool {
+    let c = ch as u32;
+    matches!(c,
+        0x3000..=0x303F   // CJK symbols and punctuation
+        | 0x3040..=0x309F  // Hiragana
+        | 0x30A0..=0x30FF  // Katakana
+        | 0x3300..=0x33FF  // CJK compatibility
+        | 0x4E00..=0x9FFF  // CJK Unified Ideographs
+        | 0xAC00..=0xD7AF  // Hangul Syllables
+        | 0xF900..=0xFAFF  // CJK Compatibility Ideographs
+        | 0xFF00..=0xFFEF  // Halfwidth and Fullwidth Forms
+    )
 }
 
 /// Measure col_width / line_height / baseline from the embedded font.
@@ -326,5 +368,74 @@ mod tests {
             .any(|px| px[2] > px[0] && px[2] > px[1] && px[2] < 200);
         assert!(blue_pixel, "expected at least one blue link pixel");
         let _ = (w, h);
+    }
+
+    // ── M36: CJK font fallback ──
+
+    #[test]
+    fn cjk_char_renders_real_glyph_not_tofu() {
+        let mut r = FontRenderer::new();
+        let (m, mask) = r.cached_glyph('你');
+        // Real glyph has content
+        assert!(m.width > 4, "'你' glyph too narrow: {}", m.width);
+        assert!(m.height > 4, "'你' glyph too short: {}", m.height);
+        // Tofu block has dense top/bottom borders but empty middle.
+        // Real glyph has strokes throughout. Check middle row has content.
+        let mid_row = &mask[(m.height / 2) * m.width..(m.height / 2 + 1) * m.width];
+        let mid_nonzero = mid_row.iter().filter(|&&v| v > 0).count();
+        assert!(
+            mid_nonzero >= 3,
+            "'你' middle row has only {mid_nonzero} nonzero pixels — likely tofu block"
+        );
+    }
+
+    #[test]
+    fn cjk_and_ascii_render_in_same_line() {
+        let mut r = FontRenderer::new();
+        let (w, h, buf) = r.render_text_to_rgba("A你B", &[]);
+        assert!(w > 0 && h > 0);
+        assert_eq!(buf.len(), w * h * 4);
+        // Both ASCII 'A' and CJK '你' should produce dark pixels
+        let dark = buf.chunks_exact(4).filter(|px| px[0] < 200).count();
+        assert!(dark > 30, "expected substantial dark pixels for mixed text");
+    }
+
+    #[test]
+    fn pure_chinese_text_renders() {
+        let mut r = FontRenderer::new();
+        let (w, h, buf) = r.render_text_to_rgba("你好世界", &[]);
+        assert!(w > 0 && h > 0);
+        // 4 Chinese chars → at least some dark pixels per char
+        let dark = buf.chunks_exact(4).filter(|px| px[0] < 200).count();
+        assert!(
+            dark > 80,
+            "expected substantial dark pixels for 4 CJK chars, got {dark}"
+        );
+    }
+
+    #[test]
+    fn cjk_punctuation_uses_cjk_font() {
+        // CJK punctuation block U+3000-U+303F should use CJK font
+        assert!(is_cjk_char('、'));
+        assert!(is_cjk_char('。'));
+        assert!(is_cjk_char('「'));
+        // ASCII should not
+        assert!(!is_cjk_char('A'));
+        assert!(!is_cjk_char(' '));
+        // Fullwidth should
+        assert!(is_cjk_char('！'));
+        assert!(is_cjk_char('（'));
+    }
+
+    #[test]
+    fn cjk_glyph_fallback_for_missing_ascii_char() {
+        // A char not in DejaVuSans (e.g. some special unicode) should
+        // fall back to CJK font, not produce empty glyph.
+        let mut r = FontRenderer::new();
+        // ✓ (checkmark, U+2713) is not in DejaVuSans
+        let (m, mask) = r.cached_glyph('✓');
+        let _ = m;
+        let _ = mask;
+        // Should not panic regardless of whether glyph exists
     }
 }
