@@ -38,6 +38,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod discovery;
 pub mod jsonrpc;
 pub mod server;
 

@@ -59,6 +59,25 @@ impl CdpServer {
             }
         }
     }
+
+    /// Accept and handle exactly one connection, then return. Used by tests.
+    #[cfg(test)]
+    pub(crate) async fn accept_one(listener: TcpListener) -> std::io::Result<()> {
+        let (stream, _) = listener.accept().await?;
+        let _ = CdpSession::handle(stream).await;
+        Ok(())
+    }
+}
+
+/// Parse the request path from an HTTP request line.
+/// e.g. `GET /json/version HTTP/1.1\r\n...` → `/json/version`.
+fn parse_request_path(request: &str) -> String {
+    request
+        .split("\r\n")
+        .next() // request line
+        .and_then(|line| line.split_whitespace().nth(1)) // method PATH version
+        .unwrap_or("/")
+        .to_string()
 }
 
 /// A single CDP client session (one WebSocket connection).
@@ -76,13 +95,55 @@ impl CdpSession {
     /// Returns an error string on handshake or I/O failure.
     pub async fn handle(stream: TcpStream) -> Result<(), String> {
         let mut session = CdpSession { stream };
-        session.do_handshake().await?;
-        session.message_loop().await
+        session.route().await
     }
 
-    /// Read the HTTP upgrade request and send the 101 response.
-    async fn do_handshake(&mut self) -> Result<(), String> {
-        // Read until \r\n\r\n (end of HTTP headers). Cap at 8KB to avoid abuse.
+    /// Read the initial HTTP request and route it: either HTTP discovery
+    /// (GET /json*) or WebSocket upgrade (everything else).
+    async fn route(&mut self) -> Result<(), String> {
+        let request = self.read_http_headers().await?;
+        let path = parse_request_path(&request);
+        let is_ws_upgrade = request.to_ascii_lowercase().contains("upgrade: websocket");
+        // M43: /json* paths are HTTP discovery (no WS upgrade).
+        if path.starts_with("/json") && !is_ws_upgrade {
+            self.serve_discovery(&path).await?;
+            return Ok(()); // discovery is a one-shot HTTP response
+        }
+        // Non-JSON plain HTTP (no WS upgrade) → 404 instead of a broken
+        // WS handshake that drops the connection.
+        if !is_ws_upgrade {
+            let resp = crate::discovery::http_404();
+            self.stream
+                .write_all(resp.as_bytes())
+                .await
+                .map_err(|e| format!("write 404: {e}"))?;
+            return Ok(());
+        }
+        // Otherwise: treat as WebSocket upgrade.
+        self.do_ws_handshake(&request).await?;
+        self.message_loop().await
+    }
+
+    /// Serve an HTTP discovery response then close.
+    async fn serve_discovery(&mut self, path: &str) -> Result<(), String> {
+        let ws_host = self.ws_host();
+        let resp = crate::discovery::handle_discovery(path, &ws_host);
+        self.stream
+            .write_all(resp.as_bytes())
+            .await
+            .map_err(|e| format!("write discovery: {e}"))
+    }
+
+    /// Get the local address as "host:port" for constructing URLs.
+    fn ws_host(&self) -> String {
+        self.stream
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "127.0.0.1:9222".to_string())
+    }
+
+    /// Read until \r\n\r\n (end of HTTP headers). Cap at 8KB to avoid abuse.
+    async fn read_http_headers(&mut self) -> Result<String, String> {
         let mut buf = vec![0u8; 8192];
         let mut filled = 0;
         loop {
@@ -103,8 +164,16 @@ impl CdpSession {
                 break;
             }
         }
-        let request = String::from_utf8_lossy(&buf[..filled]).to_string();
-        let key = parse_key_from_request(&request)
+        Ok(String::from_utf8_lossy(&buf[..filled]).to_string())
+    }
+
+    /// Parse the request path from an HTTP request line (e.g.
+    /// `GET /json/version HTTP/1.1`).
+    fn _placeholder_do_ws_handshake_unused(&self) {}
+
+    /// Do the WebSocket upgrade handshake using an already-read request.
+    async fn do_ws_handshake(&mut self, request: &str) -> Result<(), String> {
+        let key = parse_key_from_request(request)
             .ok_or_else(|| "no Sec-WebSocket-Key header".to_string())?;
         let response = build_server_response(key);
         self.stream
@@ -326,6 +395,118 @@ mod tests {
         let text = String::from_utf8_lossy(&resp_frame.payload);
         assert!(text.contains("-32601"), "got: {text}");
         assert!(text.contains("Method not found"), "got: {text}");
+
+        drop(client);
+        let _ = server.await;
+    }
+
+    /// M43: HTTP discovery endpoint /json/version works end-to-end.
+    #[tokio::test]
+    async fn http_discovery_version_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(CdpServer::accept_one(listener));
+
+        // Plain HTTP GET /json/version (no WebSocket upgrade).
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        client
+            .write_all(b"GET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.contains("application/json"), "got: {resp}");
+        assert!(
+            resp.contains("\"Browser\":\"browser-rs/0.0.1\""),
+            "got: {resp}"
+        );
+        assert!(resp.contains("webSocketDebuggerUrl"), "got: {resp}");
+        // Must include the dynamically-detected host:port.
+        assert!(resp.contains(&format!("127.0.0.1:{port}")), "got: {resp}");
+
+        drop(client);
+        let _ = server.await;
+    }
+
+    /// M43: /json/list returns an array.
+    #[tokio::test]
+    async fn http_discovery_list_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(CdpServer::accept_one(listener));
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        client
+            .write_all(b"GET /json/list HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mut buf = vec![0u8; 4096];
+        let n = client.read(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.starts_with("HTTP/1.1 200 OK"));
+        // Body should contain a JSON array with one target.
+        let body_start = resp.find("\r\n\r\n").unwrap() + 4;
+        let body = &resp[body_start..];
+        assert!(body.starts_with('['), "got: {body}");
+        assert!(
+            body.contains("\"id\":\"browser-rs-target-0\""),
+            "got: {body}"
+        );
+
+        drop(client);
+        let _ = server.await;
+    }
+
+    /// M43: WebSocket upgrade still works when path is NOT /json*.
+    /// Ensures the routing doesn't break existing WS clients.
+    #[tokio::test]
+    async fn routing_ws_still_works_alongside_discovery() {
+        use browser_ws::handshake::build_client_request;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(CdpServer::accept_one(listener));
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let key = browser_ws::handshake::key_from_random([0x99; 16]);
+        let req = build_client_request("127.0.0.1", "/devtools/page/0", &key);
+        client.write_all(req.as_bytes()).await.unwrap();
+
+        let mut buf = vec![0u8; 1024];
+        let n = client.read(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            resp.starts_with("HTTP/1.1 101"),
+            "ws upgrade broken: {resp}"
+        );
+
+        drop(client);
+        let _ = server.await;
+    }
+
+    /// M43: Non-JSON plain HTTP returns 404 (not a broken WS drop).
+    #[tokio::test]
+    async fn non_json_plain_http_returns_404() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(CdpServer::accept_one(listener));
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        client
+            .write_all(b"GET /random/path HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mut buf = vec![0u8; 1024];
+        let n = client.read(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        assert!(resp.starts_with("HTTP/1.1 404"), "got: {resp}");
 
         drop(client);
         let _ = server.await;
