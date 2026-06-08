@@ -51,16 +51,15 @@ fn render_script_logs_execution_count_to_stderr() {
 }
 
 #[test]
-fn render_script_does_not_run_js_when_using_render_file() {
-    // Sanity: the plain `render-file` subcommand must NOT execute
-    // scripts — we should still see "Static placeholder" and NOT
-    // "Welcome to my blog".
+fn render_file_now_executes_js_and_waits_for_async() {
+    // M37: render-file now executes JS and waits for async (setTimeout/fetch).
+    // Previously JS was disabled (always returned "Static placeholder").
+    // Now SPA rendering works: we should see JS-generated content.
     bin()
         .args(["render-file", SPA_FIXTURE, "--width", "120"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Static placeholder"))
-        .stdout(predicate::str::contains("Welcome to my blog").not());
+        .stdout(predicate::str::contains("Welcome to my blog"));
 }
 
 #[test]

@@ -204,7 +204,11 @@ pub fn install(ctx: &mut Context) {
     register_fn1(ctx, "__getElById", get_el_by_id as NativeFn);
     register_fn1(ctx, "__qs", qs as NativeFn);
     register_fn2(ctx, "__setText", set_text as NativeFn);
+    register_fn1(ctx, "__getText", get_text as NativeFn);
     register_fn1(ctx, "__getTag", get_tag as NativeFn);
+    register_fn1(ctx, "__getTagName", get_tag as NativeFn);
+    register_fn2(ctx, "__getAttr", get_attr as NativeFn);
+    register_fn2(ctx, "__findChild", find_child as NativeFn);
     register_fn1(ctx, "__getBody", get_body as NativeFn);
     // M8.1: form value bridges.
     register_fn1(ctx, "__getValue", get_value as NativeFn);
@@ -798,6 +802,34 @@ fn set_text_inner(tree: &mut Tree, id: NodeId, text: &str) {
     tree.insert(Some(id), NodeData::Text(text.into()));
 }
 
+/// M37: `__getText(id) -> string` — 读元素文本内容（拼接所有子文本节点）。
+/// Element 对象的 textContent getter 需要此桥。
+fn get_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let text = with_tree(|t| collect_text(t, id));
+    Ok(JsValue::String(text.into()))
+}
+
+/// 递归收集元素的所有子文本节点内容（textContent 语义）。
+fn collect_text(tree: &Tree, id: NodeId) -> String {
+    let mut out = String::new();
+    collect_text_inner(tree, id, &mut out);
+    out
+}
+
+fn collect_text_inner(tree: &Tree, id: NodeId, out: &mut String) {
+    for &child in tree.children_of(id) {
+        if let NodeData::Text(s) = tree.data(child) {
+            out.push_str(s);
+        } else {
+            collect_text_inner(tree, child, out);
+        }
+    }
+}
+
 fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -808,16 +840,69 @@ fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<Js
         _ => None,
     });
     match tag {
-        // M7.2.4 will return a real JsString once we sort out the boa 0.20
-        // JsString::from lifetime story. For M7.2.1 the placeholder logs
-        // to stderr and returns undefined — keeps the bridge callable
-        // for parity with other reader bridges.
-        Some(t) => {
-            eprintln!("[dom-getTag] #{id} = {t}");
-            Ok(JsValue::undefined())
-        }
+        // M37: 返回真实标签名（之前是 placeholder 返回 undefined）
+        Some(t) => Ok(JsValue::String(t.into())),
         None => Ok(JsValue::undefined()),
     }
+}
+
+/// M37: `__getAttr(id, key) -> string` — 读元素属性（Element 对象的 getter 用）。
+fn get_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let key = arg_string(args, 1).unwrap_or_default();
+    if key.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    let val = with_tree(|t| match t.data(id) {
+        NodeData::Element { attrs, .. } => attrs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&key))
+            .map(|(_, v)| v.clone()),
+        _ => None,
+    });
+    match val {
+        Some(v) => Ok(JsValue::String(v.into())),
+        None => Ok(JsValue::null()),
+    }
+}
+
+/// M37: `__findChild(parentId, id) -> number | undefined` —
+/// 在 parent 后代中查找指定 id 的元素（Element.getElementById 用）。
+fn find_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let parent_id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let target = arg_string(args, 1).unwrap_or_default();
+    if target.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    let found = with_tree(|t| find_by_id_in_subtree(t, parent_id, &target));
+    match found {
+        Some(id) => Ok(JsValue::new(id as f64)),
+        None => Ok(JsValue::undefined()),
+    }
+}
+
+/// 在指定节点的后代中按 id 查找（get_el_by_id 的全树版的子树限定变体）。
+fn find_by_id_in_subtree(tree: &Tree, root: NodeId, target: &str) -> Option<NodeId> {
+    let mut found = None;
+    tree.traverse(root, |id, node| {
+        if let NodeData::Element { attrs, .. } = &node.data {
+            if attrs
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == target)
+            {
+                found = Some(id);
+                return false;
+            }
+        }
+        true
+    });
+    found
 }
 
 fn get_body(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
@@ -1121,6 +1206,13 @@ pub fn drain_due_timer_callbacks() -> Vec<JsObject> {
 /// Pending timer count（M18 networkidle 信号源）。0 = idle。
 pub fn pending_timers() -> usize {
     TIMER_WHEEL.with(|slot| slot.borrow().as_ref().map(|w| w.pending()).unwrap_or(0))
+}
+
+/// M37: 最近未取消 timer 的 deadline，用于 pump_event_loop sleep。
+/// 没有 pending timer 时返回 None。
+#[must_use]
+pub fn next_timer_deadline() -> Option<std::time::Instant> {
+    TIMER_WHEEL.with(|slot| slot.borrow().as_ref().and_then(|w| w.next_deadline()))
 }
 
 // ===== M18.1: networkidle 信号 =====

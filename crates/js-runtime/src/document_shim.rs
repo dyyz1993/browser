@@ -61,17 +61,23 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
             get contentType() { return 'text/html'; },
             get characterSet() { return 'UTF-8'; },
             // 方法（包装 __* 桥）
-            getElementById: function(id) { return __getElById(id); },
-            querySelector: function(sel) { return __qs(sel); },
-            createElement: function(tag) { return __createEl(tag); },
+            // M37: 返回 Element 对象（包装 NodeId），而非裸数字
+            getElementById: function(id) {
+                return __makeElement(__getElById(id));
+            },
+            querySelector: function(sel) {
+                return __makeElement(__qs(sel));
+            },
+            createElement: function(tag) {
+                return __makeElement(__createEl(tag));
+            },
             getElementsByTagName: function(tag) {
-                // MVP: 返回数组，含第一个匹配的 NodeId 或空数组
-                var n = __getTag(tag);
-                return (typeof n === 'number') ? [n] : [];
+                // MVP: 返回数组，含第一个匹配的 Element 或空数组
+                return __makeElement(__getTag(tag)) ? [__makeElement(__getTag(tag))] : [];
             },
             createTextNode: function(text) {
-                // MVP: 近似为创建一个文本节点（用 __createEl 占位，无 DOM 文本节点桥）
-                return __createEl('__text__');
+                // MVP: 近似为创建一个文本节点（用 __createEl 占位）
+                return __makeElement(__createEl('__text__'));
             },
             addEventListener: function() { /* no-op */ },
             removeEventListener: function() { /* no-op */ },
@@ -122,14 +128,14 @@ mod tests {
         let mut ctx = Context::default();
         install(&mut ctx);
         install_document(&mut ctx).expect("install document");
-
+        crate::element_shim::install_element(&mut ctx).expect("install element");
+        // M37: document.getElementById 现在返回 Element 对象（不是裸数字 NodeId）
         let r = ctx
             .eval(boa_engine::Source::from_bytes(
                 "typeof document.getElementById('x')",
             ))
             .unwrap();
-        // __getElById 返回 NodeId as f64，所以是 number
-        assert_eq!(str_result(r), "number");
+        assert_eq!(str_result(r), "object");
     }
 
     #[test]
@@ -142,14 +148,14 @@ mod tests {
         let mut ctx = Context::default();
         install(&mut ctx);
         install_document(&mut ctx).expect("install document");
-
+        crate::element_shim::install_element(&mut ctx).expect("install element");
+        // M37: document.createElement 现在返回 Element 对象
         let r = ctx
             .eval(boa_engine::Source::from_bytes(
                 "typeof document.createElement('div')",
             ))
             .unwrap();
-        // __createEl 返回 NodeId as f64，所以是 number
-        assert_eq!(str_result(r), "number");
+        assert_eq!(str_result(r), "object");
     }
 
     #[test]
@@ -161,14 +167,15 @@ mod tests {
         let mut ctx = Context::default();
         install(&mut ctx);
         install_document(&mut ctx).expect("install document");
+        crate::element_shim::install_element(&mut ctx).expect("install element");
 
         let r = ctx
             .eval(boa_engine::Source::from_bytes(
                 "typeof document.querySelector('div')",
             ))
             .unwrap();
-        // __qs 返回 NodeId as f64 或 undefined
-        assert!(r.is_undefined() || str_result(r) == "number");
+        // M37: querySelector 现在返回 Element 对象（非裸数字）
+        assert_eq!(str_result(r), "object");
     }
 
     #[test]

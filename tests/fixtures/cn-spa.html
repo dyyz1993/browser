@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>中文渲染测试 SPA</title>
+<style>
+  nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #333;
+    color: white;
+    padding: 10px;
+  }
+  .nav-links {
+    display: flex;
+    gap: 20px;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    padding: 20px;
+  }
+  .card {
+    border: 1px solid #ddd;
+    padding: 10px;
+  }
+  h1 { color: #1a73e8; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">首页</div>
+  <div class="nav-links">
+    <a href="/news">新闻</a>
+    <a href="/weather">天气</a>
+    <a href="/stock">股票</a>
+  </div>
+</nav>
+
+<h1>你好世界 中文渲染测试</h1>
+
+<p>这是一段中文段落。DejaVuSans 不含 CJK 字形，
+之前的版本会把所有中文字符渲染成空心方框（豆腐块）。
+M36 引入双字体回退后，中文应该能正确显示。</p>
+
+<div class="cards">
+  <div class="card">
+    <h3>天气预报</h3>
+    <p>北京 晴 25°C</p>
+    <p>上海 多云 28°C</p>
+    <p id="dynamic-weather"></p>
+  </div>
+  <div class="card">
+    <h3>股票行情</h3>
+    <p>上证指数 涨</p>
+    <p>深圳成指 跌</p>
+    <p id="dynamic-stock"></p>
+  </div>
+  <div class="card">
+    <h3>最新动态</h3>
+    <p id="dynamic-list">加载中...</p>
+  </div>
+</div>
+
+<div id="spa-content">
+  <p>下方内容由 JavaScript 动态生成（SPA 行为）：</p>
+</div>
+
+<a href="https://www.baidu.com">点击访问百度首页</a>
+
+<script>
+  // SPA 动态内容：模拟异步加载
+  setTimeout(function() {
+    document.getElementById('dynamic-weather').textContent = '广州 雷阵雨 31°C';
+    document.getElementById('dynamic-stock').textContent = '创业板指 涨 2.3%';
+    document.getElementById('dynamic-list').textContent = '已加载 3 条动态';
+
+    var container = document.getElementById('spa-content');
+    var items = ['第一条动态：天气预报已更新', '第二条动态：股票数据同步完成', '第三条动态：系统运行正常'];
+    for (var i = 0; i < items.length; i++) {
+      var p = document.createElement('p');
+      p.textContent = items[i];
+      container.appendChild(p);
+    }
+  }, 500);
+</script>
+</body>
+</html>

@@ -124,7 +124,21 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
             ws_idle_polls = 0;
             continue;
         }
-        // 没事件。判断是否还有活跃 WS 连接。
+        // M37: 没事件。但可能有 pending timer 尚未到期。
+        // 此时必须 sleep 到最近 deadline 再 drain，否则永远 break
+        // 而不会触发 setTimeout 回调（之前的 bug：直接 break）。
+        if let Some(deadline) = crate::bridge::next_timer_deadline() {
+            let now = std::time::Instant::now();
+            if deadline > now {
+                let wait = deadline - now;
+                // 单个 timer 等待上限 2s，防恶意页面无限 setTimeout 卡死爬虫
+                let capped = wait.min(std::time::Duration::from_secs(2));
+                std::thread::sleep(capped);
+            }
+            ws_idle_polls = 0;
+            continue; // sleep 后回到循环顶部 drain 到期 timer
+        }
+        // 没有 pending timer。判断是否还有活跃 WS 连接。
         if crate::bridge::ws_connection_count() == 0 {
             break; // timer + WS 都 idle，结束
         }
@@ -204,6 +218,9 @@ pub fn run_scripts_with_base(
     // 包装 __* 桥 + body/head/cookie/title/location 数据属性）。必须在 window
     // 之后（document.location 指向 location 全局对象）。
     let _ = crate::document_shim::install_document(&mut ctx);
+    // M37: 安装 Element 对象（包装 NodeId + textContent/id/tagName getter/setter
+    // 反射到 bridge）。必须在 document 之后（document.getElementById 返回 Element）。
+    let _ = crate::element_shim::install_element(&mut ctx);
     // M28.4: 安装 screen 全局对象（width/height/colorDepth/orientation，响应式布局
     // 特性检测常用）。静态默认值（无显示器环境）。
     let _ = crate::screen_shim::install_screen(&mut ctx);

@@ -130,6 +130,19 @@ impl TimerWheel {
     pub fn is_idle(&self) -> bool {
         self.pending() == 0
     }
+
+    /// M37: 返回最近未取消 timer 的 deadline（用于 pump_event_loop sleep）。
+    ///
+    /// 当有 pending timer 但尚未到期时，调用方需 sleep 到此 deadline 再 drain。
+    /// 没有任何活跃 timer 时返回 `None`。
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.timers
+            .iter()
+            .filter(|(id, _)| !self.cancelled.contains(id))
+            .map(|(_, e)| e.deadline)
+            .min()
+    }
 }
 
 #[cfg(test)]

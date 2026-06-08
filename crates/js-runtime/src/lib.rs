@@ -8,6 +8,7 @@
 
 pub mod bridge;
 pub mod document_shim;
+pub mod element_shim;
 pub mod fetch_shim;
 pub mod navigation_shim;
 pub mod navigator_shim;

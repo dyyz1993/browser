@@ -238,10 +238,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            let text = render_html_to_string(&html, width, false, None)?;
+            // M37: render-file 现在执行 JS + 等待异步（setTimeout/fetch/XHR/WS）。
+            // 之前 run_js=false 导致 SPA 动态内容永远不渲染。
+            let text = render_html_to_string(&html, width, true, None)?;
             print!("{text}");
             if let Some(p) = screenshot {
-                let colored = render_html_to_string_colored(&html, width, false, None)?;
+                let colored = render_html_to_string_colored(&html, width, true, None)?;
                 screenshot::render_text_to_png(&colored, &p, max_height)?;
                 eprintln!("[screenshot] wrote {}", p.display());
             }
