@@ -181,6 +181,26 @@ pub struct GridItemPlacement {
     pub row_span: usize,
 }
 
+/// M39: RGB 颜色（background-color / border-color 用）。
+/// 由 construct.rs 从 CSS `rgb()`/hex/命名颜色解析。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RgbColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+/// M39: 元素的视觉样式（border + background-color）。
+/// 由 construct.rs 从 CSS computed styles 解析，由 ascii.rs 渲染。
+/// border 为简化版（四边相同宽度=1 字符），background 为 None=透明。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BoxStyle {
+    /// 四边是否有边框（M39.2）。
+    pub border: BoxEdges<bool>,
+    /// 背景色。None = 透明（继承父背景）。
+    pub background: Option<RgbColor>,
+}
+
 /// A single layout box. Owns its children recursively.
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
@@ -219,6 +239,8 @@ pub struct LayoutBox {
     /// M35.3: explicit grid item placement from grid-column/grid-row.
     /// None = auto-placement (default). Only meaningful when parent is Grid.
     pub grid_placement: Option<GridItemPlacement>,
+    /// M39: 视觉样式（border + background-color）。
+    pub style: BoxStyle,
     pub children: Vec<LayoutBox>,
 }
 
@@ -238,6 +260,7 @@ impl LayoutBox {
             flex_grow: 0.0,
             grid: GridProps::default(),
             grid_placement: None,
+            style: BoxStyle::default(),
             children: Vec::new(),
         }
     }

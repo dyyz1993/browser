@@ -300,6 +300,104 @@ pub fn parse_box_lengths(decls: &[Declaration], prefix: &str) -> BoxEdges<Length
     edges.unwrap_or_default()
 }
 
+/// M39: 解析 CSS 颜色值为 (r, g, b)。
+///
+/// 支持：
+///
+/// - hex：`#rgb` / `#rrggbb` / `#rrggbbaa`
+/// - `rgb(r, g, b)` / `rgba(r, g, b, a)`
+/// - 命名颜色（black/white/red/green/blue/... 常用子集）
+///
+/// 不支持的格式返回 None。
+#[must_use]
+pub fn parse_color(s: &str) -> Option<(u8, u8, u8)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+
+    // hex: #rgb / #rrggbb / #rrggbbaa
+    if let Some(rest) = lower.strip_prefix('#') {
+        return parse_hex_color(rest);
+    }
+
+    // rgb(r, g, b) / rgba(r, g, b, a)
+    if let Some(rest) = lower.strip_prefix("rgb(") {
+        let inner = rest.trim_end_matches(')');
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() >= 3 {
+            let r = parts[0].parse::<u8>().ok()?;
+            let g = parts[1].parse::<u8>().ok()?;
+            let b = parts[2].parse::<u8>().ok()?;
+            return Some((r, g, b));
+        }
+        return None;
+    }
+    if let Some(rest) = lower.strip_prefix("rgba(") {
+        let inner = rest.trim_end_matches(')');
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() >= 3 {
+            let r = parts[0].parse::<u8>().ok()?;
+            let g = parts[1].parse::<u8>().ok()?;
+            let b = parts[2].parse::<u8>().ok()?;
+            return Some((r, g, b));
+        }
+        return None;
+    }
+
+    // 命名颜色（常用子集）
+    named_color(&lower)
+}
+
+/// 解析 hex 颜色（不含 # 前缀）。
+fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
+    match s.len() {
+        3 => {
+            // #rgb → #rrggbb
+            let r = u8::from_str_radix(&format!("{}{}", &s[0..1], &s[0..1]), 16).ok()?;
+            let g = u8::from_str_radix(&format!("{}{}", &s[1..2], &s[1..2]), 16).ok()?;
+            let b = u8::from_str_radix(&format!("{}{}", &s[2..3], &s[2..3]), 16).ok()?;
+            Some((r, g, b))
+        }
+        6 | 8 => {
+            let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+            Some((r, g, b))
+        }
+        _ => None,
+    }
+}
+
+/// 常用 CSS 命名颜色子集。
+#[must_use]
+fn named_color(name: &str) -> Option<(u8, u8, u8)> {
+    match name {
+        "black" => Some((0, 0, 0)),
+        "white" => Some((255, 255, 255)),
+        "red" => Some((255, 0, 0)),
+        "green" => Some((0, 128, 0)),
+        "blue" => Some((0, 0, 255)),
+        "yellow" => Some((255, 255, 0)),
+        "cyan" | "aqua" => Some((0, 255, 255)),
+        "magenta" | "fuchsia" => Some((255, 0, 255)),
+        "gray" | "grey" => Some((128, 128, 128)),
+        "silver" => Some((192, 192, 192)),
+        "maroon" => Some((128, 0, 0)),
+        "olive" => Some((128, 128, 0)),
+        "lime" => Some((0, 255, 0)),
+        "purple" => Some((128, 0, 128)),
+        "teal" => Some((0, 128, 128)),
+        "navy" => Some((0, 0, 128)),
+        "orange" => Some((255, 165, 0)),
+        "pink" => Some((255, 192, 203)),
+        "brown" => Some((165, 42, 42)),
+        "transparent" => None,
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +409,46 @@ mod tests {
             value: val.into(),
             important: false,
         }
+    }
+
+    // ── M39: parse_color ──
+
+    #[test]
+    fn parse_color_hex_short() {
+        assert_eq!(parse_color("#fff"), Some((255, 255, 255)));
+        assert_eq!(parse_color("#000"), Some((0, 0, 0)));
+        assert_eq!(parse_color("#f00"), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn parse_color_hex_long() {
+        assert_eq!(parse_color("#ff5733"), Some((255, 87, 51)));
+        assert_eq!(parse_color("#1a73e8"), Some((26, 115, 232)));
+    }
+
+    #[test]
+    fn parse_color_rgb() {
+        assert_eq!(parse_color("rgb(26, 115, 232)"), Some((26, 115, 232)));
+        assert_eq!(parse_color("rgba(255, 0, 0, 0.5)"), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn parse_color_named() {
+        assert_eq!(parse_color("red"), Some((255, 0, 0)));
+        assert_eq!(parse_color("blue"), Some((0, 0, 255)));
+        assert_eq!(parse_color("WHITE"), Some((255, 255, 255)));
+    }
+
+    #[test]
+    fn parse_color_transparent_returns_none() {
+        assert_eq!(parse_color("transparent"), None);
+    }
+
+    #[test]
+    fn parse_color_invalid_returns_none() {
+        assert_eq!(parse_color("notacolor"), None);
+        assert_eq!(parse_color("#zzz"), None);
+        assert_eq!(parse_color(""), None);
     }
 
     // ── parse_length ────────────────────────────────────────────

@@ -53,6 +53,24 @@ fn collect_text_extent(bx: &LayoutBox, max_y: &mut usize) {
 }
 
 fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
+    // M39: 先画 background-color（填充矩形）+ border（box-drawing），
+    // 再画文字（文字会覆盖 border/background 的空格位置）。
+    // 注意：background/border 只画有明确尺寸的 box（width>0 && height>0）。
+    if bx.dimensions.width > 0.0 && bx.dimensions.height > 0.0 {
+        let x0 = bx.dimensions.x.round() as usize;
+        let y0 = bx.dimensions.y.round() as usize;
+        let w = bx.dimensions.width.round() as usize;
+        let h = bx.dimensions.height.round() as usize;
+        // background-color（填充矩形背景）
+        if let Some(bg_color) = &bx.style.background {
+            buf.fill_background(x0, y0, w, h, (bg_color.r, bg_color.g, bg_color.b));
+        }
+        // border（box-drawing 字符）
+        let b = &bx.style.border;
+        if b.top || b.bottom || b.left || b.right {
+            buf.draw_box_border(x0, y0, w, h, b);
+        }
+    }
     // Only Inline boxes with text actually emit characters. Block /
     // anonymous boxes are positioning containers; recurse into their
     // children.
@@ -109,13 +127,21 @@ struct CharBuffer {
     rows: Vec<Vec<char>>,
     /// M30: parallel grid marking link cells (for ANSI blue/underline).
     links: Vec<Vec<bool>>,
+    /// M39: parallel grid marking background color per cell.
+    bg: Vec<Vec<Option<(u8, u8, u8)>>>,
 }
 
 impl CharBuffer {
     fn new(width: usize, height: usize) -> Self {
         let rows = (0..height).map(|_| vec![' '; width]).collect();
         let links = (0..height).map(|_| vec![false; width]).collect();
-        Self { width, rows, links }
+        let bg = (0..height).map(|_| vec![None; width]).collect();
+        Self {
+            width,
+            rows,
+            links,
+            bg,
+        }
     }
 
     fn put(&mut self, y: usize, x: usize, c: char, link: bool) {
@@ -127,39 +153,144 @@ impl CharBuffer {
         }
     }
 
-    /// M30: Render to string. When `colored=true`, runs of link cells
-    /// are wrapped in ANSI underline+blue escape sequences. Trailing
-    /// whitespace on each line is trimmed (links are never whitespace).
+    /// M39: 填充矩形区域的背景色（不会覆盖已有字符，只设 bg 网格）。
+    fn fill_background(&mut self, x0: usize, y0: usize, w: usize, h: usize, color: (u8, u8, u8)) {
+        let x_end = (x0 + w).min(self.width);
+        let y_end = (y0 + h).min(self.rows.len());
+        for y in y0..y_end {
+            for x in x0..x_end {
+                self.bg[y][x] = Some(color);
+            }
+        }
+    }
+
+    /// M39: 画一个字符到指定位置，尊重已有背景（不覆盖 bg）。
+    fn put_border(&mut self, y: usize, x: usize, c: char) {
+        if y < self.rows.len() && x < self.width {
+            self.rows[y][x] = c;
+            // border 字符保留已有背景色
+        }
+    }
+
+    /// M39: 画矩形的四条边（box-drawing 字符）。
+    /// 角落用 ┌┐└┘，水平用 ─，垂直用 │。
+    fn draw_box_border(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        w: usize,
+        h: usize,
+        border: &browser_css_engine::BoxEdges<bool>,
+    ) {
+        if w < 2 || h < 2 {
+            return;
+        }
+        let x1 = x0 + w - 1;
+        let y1 = y0 + h - 1;
+        // 水平线（top/bottom）
+        if border.top {
+            for x in x0 + 1..x1 {
+                self.put_border(y0, x, '─');
+            }
+        }
+        if border.bottom {
+            for x in x0 + 1..x1 {
+                self.put_border(y1, x, '─');
+            }
+        }
+        // 垂直线（left/right）
+        if border.left {
+            for y in y0 + 1..y1 {
+                self.put_border(y, x0, '│');
+            }
+        }
+        if border.right {
+            for y in y0 + 1..y1 {
+                self.put_border(y, x1, '│');
+            }
+        }
+        // 角落（仅当相邻两边都有 border）
+        if border.top && border.left {
+            self.put_border(y0, x0, '┌');
+        }
+        if border.top && border.right {
+            self.put_border(y0, x1, '┐');
+        }
+        if border.bottom && border.left {
+            self.put_border(y1, x0, '└');
+        }
+        if border.bottom && border.right {
+            self.put_border(y1, x1, '┘');
+        }
+    }
+
+    /// M30/M39: Render to string.
+    /// - `colored=true`: link cells → ANSI underline+blue foreground;
+    ///   background cells → ANSI truecolor background (`\x1b[48;2;R;G;Bm`).
+    ///   Link + background 叠加时合并为一个 SGR 序列。
+    /// - Trailing whitespace is trimmed, BUT background cells extend the
+    ///   trim boundary (so colored background blocks aren't truncated).
     fn to_string(&self, colored: bool) -> String {
         let mut out = String::new();
         for y in 0..self.rows.len() {
             let row = &self.rows[y];
-            // Find last non-space column (trim_end).
+            // Find last significant column: non-space char OR cell with background.
             let mut last = 0usize;
             for x in (0..self.width).rev() {
-                if row[x] != ' ' {
+                if row[x] != ' ' || self.bg[y][x].is_some() {
                     last = x + 1;
                     break;
                 }
             }
             let mut x = 0;
             while x < last {
-                if colored && self.links[y][x] {
-                    out.push_str("\x1b[4;34m");
-                    while x < last && self.links[y][x] {
-                        out.push(row[x]);
-                        x += 1;
-                    }
-                    out.push_str("\x1b[0m");
-                } else {
+                let is_link = self.links[y][x];
+                let bg = self.bg[y][x];
+
+                if !colored || (!is_link && bg.is_none()) {
+                    // Plain cell — no ANSI.
+                    out.push(row[x]);
+                    x += 1;
+                    continue;
+                }
+
+                // Build the SGR prefix for this cell's style.
+                let prefix = build_sgr_prefix(is_link, bg);
+                out.push_str(&prefix);
+
+                // Consume run of cells with identical (link, bg) style.
+                while x < last && self.links[y][x] == is_link && self.bg[y][x] == bg {
                     out.push(row[x]);
                     x += 1;
                 }
+                out.push_str("\x1b[0m");
             }
             out.push('\n');
         }
         out
     }
+}
+
+/// M39: Build ANSI SGR prefix for a cell style.
+///
+/// - link: underline + W3C link blue (#0000EE) foreground
+/// - background: truecolor background (`48;2;R;G;B`)
+///
+/// Both can combine in a single SGR sequence.
+fn build_sgr_prefix(is_link: bool, bg: Option<(u8, u8, u8)>) -> String {
+    // M30 link color: #0000EE = (0, 0, 238) + underline (4)
+    let mut codes: Vec<String> = Vec::new();
+    if is_link {
+        codes.push("4".into()); // underline
+        codes.push("38;2;0;0;238".into()); // link blue foreground
+    }
+    if let Some((r, g, b)) = bg {
+        codes.push(format!("48;2;{r};{g};{b}"));
+    }
+    if codes.is_empty() {
+        return String::new();
+    }
+    format!("\x1b[{}m", codes.join(";"))
 }
 
 #[cfg(test)]
@@ -310,7 +441,7 @@ mod tests {
         let tree = LayoutTree { root };
         let out = render_ascii_colored(&tree, 80);
         // Expected: underline+blue ANSI + "go" + reset + newline.
-        assert_eq!(out, "\x1b[4;34mgo\x1b[0m\n");
+        assert_eq!(out, "\x1b[4;38;2;0;0;238mgo\x1b[0m\n");
     }
 
     #[test]
@@ -331,6 +462,6 @@ mod tests {
         let plain = render_ascii(&tree, 80);
         assert_eq!(plain, "pre MID post\n");
         let colored = render_ascii_colored(&tree, 80);
-        assert_eq!(colored, "pre \x1b[4;34mMID\x1b[0m post\n");
+        assert_eq!(colored, "pre \x1b[4;38;2;0;0;238mMID\x1b[0m post\n");
     }
 }

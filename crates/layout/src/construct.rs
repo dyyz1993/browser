@@ -15,7 +15,7 @@ use browser_css_engine::{parse_box_lengths, parse_length, BoxEdges, Declaration,
 use browser_dom::{NodeData, NodeId, Tree};
 
 use crate::boxes::{
-    AlignItems, BoxType, FlexDirection, FlexWrap, JustifyContent, LayoutBox, LayoutTree,
+    AlignItems, BoxType, FlexDirection, FlexWrap, JustifyContent, LayoutBox, LayoutTree, RgbColor,
 };
 
 /// Default block-level tag set. Conservative; can grow as fixtures demand.
@@ -124,6 +124,8 @@ fn build_box(
             apply_flex_grow(id, styles, &mut bx);
             // M35.3: 读 grid-column/grid-row 显式定位（grid item）。
             apply_grid_placement(id, styles, &mut bx);
+            // M39: 读 background-color/border（视觉样式）。
+            apply_box_style(id, styles, &mut bx);
             bx.children = build_children(tree, id, bt, styles);
             // M7.1.3: fill margin/padding from CSS + UA defaults.
             apply_box_model(tag, id, styles, &mut bx);
@@ -324,6 +326,53 @@ fn apply_grid_placement(
             row_start,
             row_span,
         });
+    }
+}
+
+/// M39: 从 CSS 读 background-color / border 填充 BoxStyle。
+/// border 简化为 1 字符宽四边相同，background 解析颜色填 RgbColor。
+fn apply_box_style(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &mut LayoutBox) {
+    let Some(decls) = styles.get(&id) else {
+        return;
+    };
+    for d in decls {
+        let prop = d.property.to_ascii_lowercase();
+        if prop == "background-color" || prop == "background" {
+            // background shorthand 可能含多个值（如 "red url(x)"），
+            // 只取第一个 color token 尝试解析。
+            if let Some((r, g, b)) = browser_css_engine::parse_color(&d.value) {
+                bx.style.background = Some(RgbColor { r, g, b });
+            }
+        } else if prop == "border" || prop.starts_with("border-") {
+            // border shorthand: "Npx solid color" 或 longhand border-top/right/bottom/left
+            // 简化：只要有 border 声明且有宽度值，标记对应边为 true。
+            let v = d.value.to_ascii_lowercase();
+            if v == "none" || v == "hidden" {
+                continue;
+            }
+            // 检测宽度：含 Npx 或 named thin/medium/thick
+            let has_width = v.split_whitespace().any(|tok| {
+                tok.ends_with("px")
+                    && tok
+                        .trim_end_matches("px")
+                        .parse::<f32>()
+                        .is_ok_and(|n| n > 0.0)
+                    || matches!(tok, "thin" | "medium" | "thick")
+            });
+            if !has_width {
+                continue;
+            }
+            match prop.as_str() {
+                "border" => {
+                    bx.style.border = BoxEdges::all(true);
+                }
+                "border-top" => bx.style.border.top = true,
+                "border-right" => bx.style.border.right = true,
+                "border-bottom" => bx.style.border.bottom = true,
+                "border-left" => bx.style.border.left = true,
+                _ => {}
+            }
+        }
     }
 }
 
