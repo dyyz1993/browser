@@ -45,6 +45,7 @@ pub mod network_domain;
 pub mod page;
 pub mod runtime_domain;
 pub mod server;
+pub mod target_domain;
 
 pub use jsonrpc::{CdpError, CdpMessage, CdpRequest, CdpResponse};
 pub use server::{CdpServer, CdpSession};

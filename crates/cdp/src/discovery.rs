@@ -54,7 +54,10 @@ pub fn version_body(ws_host: &str) -> String {
     );
     m.insert(
         "webSocketDebuggerUrl".to_string(),
-        Json::String(format!("ws://{ws_host}/devtools/page/{TARGET_ID}")),
+        // M48: browser-level endpoint (/devtools/browser/) — required by
+        // puppeteer.connect({browserWSEndpoint}). /json/list provides the
+        // page-level endpoint (/devtools/page/) separately.
+        Json::String(format!("ws://{ws_host}/devtools/browser/{TARGET_ID}")),
     );
     Json::Object(m).to_json_string()
 }
@@ -175,7 +178,7 @@ mod tests {
         assert!(body.contains("\"Protocol-Version\":\"1.3\""), "got: {body}");
         assert!(body.contains("\"V8-Version\":\"boa\""), "got: {body}");
         assert!(
-            body.contains("\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9222/devtools/page/browser-rs-target-0\""),
+            body.contains("\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9222/devtools/browser/browser-rs-target-0\""),
             "got: {body}"
         );
     }
@@ -197,6 +200,7 @@ mod tests {
     #[test]
     fn new_target_has_websocket_url() {
         let body = new_target_body("127.0.0.1:9222");
+        // new_target_body uses target_object → page-level endpoint.
         assert!(body.contains("ws://127.0.0.1:9222/devtools/page/browser-rs-target-0"));
     }
 

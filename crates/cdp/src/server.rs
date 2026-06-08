@@ -344,6 +344,14 @@ impl CdpSession {
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 }
             }
+            // ── M48: Target domain (Puppeteer connect flow: getBrowserContexts, etc) ──
+            m if m.starts_with("Target.") => match crate::target_domain::dispatch(id, m) {
+                Ok(resp) => resp,
+                Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
+                    CdpMessage::error_response(id, -32601, "Method not found")
+                }
+                Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+            },
             _ => CdpMessage::error_response(id, -32601, "Method not found"),
         };
         self.send_text(&resp).await
