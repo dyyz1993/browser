@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use browser_css_engine::{parse_box_lengths, parse_length, BoxEdges, Declaration, Length};
 use browser_dom::{NodeData, NodeId, Tree};
 
-use crate::boxes::{BoxType, FlexDirection, JustifyContent, LayoutBox, LayoutTree};
+use crate::boxes::{
+    AlignItems, BoxType, FlexDirection, FlexWrap, JustifyContent, LayoutBox, LayoutTree,
+};
 
 /// Default block-level tag set. Conservative; can grow as fixtures demand.
 const BLOCK_TAGS: &[&str] = &[
@@ -224,6 +226,22 @@ fn apply_flex_props(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: 
         } else if d.property.eq_ignore_ascii_case("gap") {
             if let Some(Length::Px(v)) = parse_length(&d.value) {
                 bx.flex.gap = v;
+            }
+        } else if d.property.eq_ignore_ascii_case("flex-wrap") {
+            let v = d.value.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "nowrap" => bx.flex.wrap = FlexWrap::Nowrap,
+                "wrap" | "wrap-reverse" => bx.flex.wrap = FlexWrap::Wrap,
+                _ => {}
+            }
+        } else if d.property.eq_ignore_ascii_case("align-items") {
+            let v = d.value.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "stretch" | "normal" => bx.flex.align = AlignItems::Stretch,
+                "flex-start" | "start" => bx.flex.align = AlignItems::FlexStart,
+                "center" => bx.flex.align = AlignItems::Center,
+                "flex-end" | "end" => bx.flex.align = AlignItems::FlexEnd,
+                _ => {}
             }
         }
     }

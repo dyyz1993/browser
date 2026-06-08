@@ -1,8 +1,4 @@
-//! `browser-layout` — block / inline / anonymous layout engine.
-//!
-//! M2.4 scope: tree construction.
-//! M2.5 scope: block layout (dimensions assignment).
-//! M2.6 scope: inline layout + word-wrap.
+//! `browser-layout` — block / inline / anonymous / flex / grid layout engine.
 
 #![forbid(unsafe_code)]
 
@@ -15,8 +11,8 @@ pub mod inline;
 
 pub use block::{layout, LayoutConfig};
 pub use boxes::{
-    BoxType, Dimensions, FlexDirection, FlexProps, GridProps, GridTrack, JustifyContent, LayoutBox,
-    LayoutTree,
+    AlignItems, BoxType, Dimensions, FlexDirection, FlexProps, FlexWrap, GridProps, GridTrack,
+    JustifyContent, LayoutBox, LayoutTree,
 };
 pub use construct::construct_layout_tree;
 pub use inline::layout_inline_run;

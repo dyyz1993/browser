@@ -89,6 +89,26 @@ pub enum JustifyContent {
     SpaceBetween,
 }
 
+/// M35.1: flex-wrap property — whether items wrap to next line when
+/// they overflow the container's main axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlexWrap {
+    #[default]
+    Nowrap,
+    Wrap,
+}
+
+/// M35.2: align-items property — how items are aligned along the
+/// cross axis (perpendicular to flex-direction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlignItems {
+    #[default]
+    Stretch,
+    FlexStart,
+    Center,
+    FlexEnd,
+}
+
 /// M32: flex container properties (only meaningful when
 /// `box_type == BoxType::Flex`). Defaults model the CSS defaults:
 /// `flex-direction:row; justify-content:flex-start; gap:0`.
@@ -98,6 +118,10 @@ pub struct FlexProps {
     pub justify: JustifyContent,
     /// Gap between items in character units (0 = no gap).
     pub gap: f32,
+    /// M35.1: flex-wrap (default nowrap).
+    pub wrap: FlexWrap,
+    /// M35.2: align-items (default stretch).
+    pub align: AlignItems,
 }
 
 impl Default for FlexProps {
@@ -106,6 +130,8 @@ impl Default for FlexProps {
             direction: FlexDirection::Row,
             justify: JustifyContent::FlexStart,
             gap: 0.0,
+            wrap: FlexWrap::Nowrap,
+            align: AlignItems::Stretch,
         }
     }
 }
