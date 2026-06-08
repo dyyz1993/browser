@@ -35,12 +35,18 @@ impl Default for HttpClient {
 
 impl HttpClient {
     /// Create a new client with default settings.
+    ///
+    /// M40: 强制 timeout（connect 10s + overall 30s）。之前无 timeout 导致
+    /// 慢响应/挂起服务器（如某些 CDN）让整个爬虫永久 hang——对 G1 爬虫
+    /// 场景是致命可靠性缺陷。
     #[must_use]
     pub fn new() -> Self {
         // 跟随 redirect（浏览器标准行为，最多 10 次防死循环）。
         let inner = reqwest::Client::builder()
             .user_agent(UA)
             .redirect(reqwest::redirect::Policy::limited(10))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self { inner }
