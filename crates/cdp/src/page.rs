@@ -354,6 +354,41 @@ pub async fn dispatch(
                 events: vec![],
             })
         }
+        // M54: Page.getFrameTree — puppeteer's FrameManager requires this on page init.
+        // Returns a single main frame with our target id and current url.
+        "Page.getFrameTree" => {
+            let st = state
+                .lock()
+                .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
+            let mut frame = BTreeMap::new();
+            frame.insert(
+                "id".to_string(),
+                Json::String(crate::discovery::TARGET_ID.to_string()),
+            );
+            frame.insert(
+                "url".to_string(),
+                Json::String(if st.url.is_empty() {
+                    "about:blank".to_string()
+                } else {
+                    st.url.clone()
+                }),
+            );
+            frame.insert("loaderId".to_string(), Json::String("0".to_string()));
+            frame.insert("securityOrigin".to_string(), Json::String(String::new()));
+            frame.insert(
+                "mimeType".to_string(),
+                Json::String("text/html".to_string()),
+            );
+            let mut frame_tree = BTreeMap::new();
+            frame_tree.insert("frame".to_string(), Json::Object(frame));
+            frame_tree.insert("childFrames".to_string(), Json::Array(vec![]));
+            let mut result = BTreeMap::new();
+            result.insert("frameTree".to_string(), Json::Object(frame_tree));
+            Ok(DispatchResult {
+                response: CdpMessage::ok_response(id, Json::Object(result)),
+                events: vec![],
+            })
+        }
         // M53: unknown Page.* methods (enable/disable/etc) → no-op ack
         _ => Ok(DispatchResult {
             response: CdpMessage::ok_empty(id),
