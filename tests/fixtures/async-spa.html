@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>异步 SPA 综合测试</title>
+<style>
+  .list { display: flex; flex-direction: column; gap: 4px; }
+  .item { padding: 4px; }
+</style>
+</head>
+<body>
+<h1>异步数据加载测试</h1>
+
+<!-- fetch 异步加载区 -->
+<h2>fetch 加载结果</h2>
+<p id="fetch-result">等待 fetch...</p>
+
+<!-- XHR 异步加载区 -->
+<h2>XHR 加载结果</h2>
+<p id="xhr-result">等待 XHR...</p>
+
+<!-- 动态列表（fetch + createElement + appendChild） -->
+<h2>动态新闻列表</h2>
+<div class="list" id="news-list">
+  <p class="item">加载中...</p>
+</div>
+
+<script>
+// 1. fetch 异步：加载后修改 DOM
+fetch('http://httpbin.org/json')
+  .then(function(res) { return res.text(); })
+  .then(function(body) {
+    document.getElementById('fetch-result').textContent =
+      'fetch 完成，数据长度=' + body.length;
+  })
+  .catch(function(e) {
+    document.getElementById('fetch-result').textContent = 'fetch 失败: ' + e;
+  });
+
+// 2. XHR 异步：onreadystatechange 模式
+var xhr = new XMLHttpRequest();
+xhr.open('GET', 'http://httpbin.org/get', true);
+xhr.onreadystatechange = function() {
+  if (xhr.readyState === 4 && xhr.status === 200) {
+    document.getElementById('xhr-result').textContent =
+      'XHR 完成，状态=' + xhr.status + '，长度=' + xhr.responseText.length;
+  }
+};
+xhr.send();
+
+// 3. setTimeout + createElement + appendChild：动态列表
+setTimeout(function() {
+  var news = [
+    '第一条：百度发布最新财报',
+    '第二条：天气预报显示明日有雨',
+    '第三条：股市收盘上涨 2.3%'
+  ];
+  var container = document.getElementById('news-list');
+  // 清空"加载中..."
+  container.textContent = '';
+  for (var i = 0; i < news.length; i++) {
+    var p = document.createElement('p');
+    p.textContent = news[i];
+    p.setAttribute('class', 'item');
+    container.appendChild(p);
+  }
+}, 300);
+</script>
+</body>
+</html>

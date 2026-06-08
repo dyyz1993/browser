@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `f908ad5`（M35.4 ADR-0004） |
-| 总 commits | 164 |
-| 测试 | 508 passed, 0 clippy warnings |
+| HEAD | `c193486`（M38 XHR status/readyState/onreadystatechange） |
+| 总 commits | 168 |
+| 测试 | 538 passed, 0 clippy warnings |
 | Crates | 15 |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4） |

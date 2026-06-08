@@ -45,7 +45,10 @@
 | M33 | ✅ | CSS grid 子集（grid-template-columns + gap + auto-placement） | 508 |
 | M34 | ✅ | GUI 像素级渲染（render::font 共享，修复 'X' bug） | 508 |
 | M35 | ✅ | flex-wrap/align-items/grid-col-row + ADR-0004 | 494 |
-| M36+ | ⚪ | 前瞻（性能优化 / 更多 CSS 属性） | — |
+| M36 | ✅ | 中文字体渲染（双字体回退，NotoSansSC GB2312 1.6MB） | 538 |
+| M37 | ✅ | render-file 异步 JS + 完整 Element 对象 | 538 |
+| M38 | ✅ | XHR status/readyState/onreadystatechange 补齐 | 538 |
+| M39+ | ⚪ | 前瞻（性能优化 / 更多 CSS 属性） | — |
 
 ---
 
