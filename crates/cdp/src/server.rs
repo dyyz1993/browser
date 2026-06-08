@@ -129,8 +129,7 @@ impl CdpSession {
         }
         // Otherwise: treat as WebSocket upgrade.
         self.do_ws_handshake(&request).await?;
-        // M50: emit Target events immediately after WS handshake
-        self.emit_target_events().await?;
+        // M51: Target events moved to per-method dispatch (setDiscoverTargets/setAutoAttach)
         self.message_loop().await
     }
 
@@ -367,7 +366,7 @@ impl CdpSession {
                     ),
                 }
             }
-            // ── M48+M50: Target domain (Puppeteer connect flow + events) ──
+            // ── M48+M51: Target domain (Puppeteer connect flow + events) ──
             m if m.starts_with("Target.") => {
                 let resp = match crate::target_domain::dispatch(id, m) {
                     Ok(resp) => resp,
@@ -376,28 +375,61 @@ impl CdpSession {
                     }
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 };
-                // M50: collect post-response event for attachToTarget
-                let events = if m == "Target.attachToTarget" || m == "Target.attachToBrowserTarget"
-                {
-                    let ws_host = self.ws_host();
-                    vec![CdpMessage::event(
-                        "Target.attachedToTarget",
-                        Json::Object({
-                            let mut p = BTreeMap::new();
-                            p.insert(
-                                "sessionId".to_string(),
-                                Json::String("browser-rs-session-0".to_string()),
-                            );
-                            p.insert(
-                                "targetInfo".to_string(),
-                                crate::discovery::target_object(&ws_host),
-                            );
-                            p.insert("waitingForDebugger".to_string(), Json::Bool(false));
-                            p
-                        }),
-                    )]
-                } else {
-                    vec![]
+                // M51: emit events at the right time
+                let ws_host = self.ws_host();
+                let events: Vec<String> = match m {
+                    "Target.setDiscoverTargets" => {
+                        // puppeteer registers listener before calling this
+                        vec![CdpMessage::event(
+                            "Target.targetCreated",
+                            Json::Object({
+                                let mut p = BTreeMap::new();
+                                p.insert(
+                                    "targetInfo".to_string(),
+                                    crate::discovery::target_object(&ws_host),
+                                );
+                                p
+                            }),
+                        )]
+                    }
+                    "Target.setAutoAttach" => {
+                        // emit attachedToTarget so puppeteer creates a session
+                        vec![CdpMessage::event(
+                            "Target.attachedToTarget",
+                            Json::Object({
+                                let mut p = BTreeMap::new();
+                                p.insert(
+                                    "sessionId".to_string(),
+                                    Json::String("browser-rs-session-0".to_string()),
+                                );
+                                p.insert(
+                                    "targetInfo".to_string(),
+                                    crate::discovery::target_object(&ws_host),
+                                );
+                                p.insert("waitingForDebugger".to_string(), Json::Bool(false));
+                                p
+                            }),
+                        )]
+                    }
+                    "Target.attachToTarget" | "Target.attachToBrowserTarget" => {
+                        vec![CdpMessage::event(
+                            "Target.attachedToTarget",
+                            Json::Object({
+                                let mut p = BTreeMap::new();
+                                p.insert(
+                                    "sessionId".to_string(),
+                                    Json::String("browser-rs-session-0".to_string()),
+                                );
+                                p.insert(
+                                    "targetInfo".to_string(),
+                                    crate::discovery::target_object(&ws_host),
+                                );
+                                p.insert("waitingForDebugger".to_string(), Json::Bool(false));
+                                p
+                            }),
+                        )]
+                    }
+                    _ => vec![],
                 };
                 (resp, events)
             }
@@ -414,44 +446,6 @@ impl CdpSession {
             }
         }
         self.send_text(&resp).await?;
-        Ok(())
-    }
-
-    /// M50: emit Target lifecycle events after WS handshake.
-    ///
-    /// Puppeteer's `connect()` flow requires these to consider the connection
-    /// fully established.
-    async fn emit_target_events(&mut self) -> Result<(), String> {
-        let ws_host = self.ws_host();
-        let target = crate::discovery::target_object(&ws_host);
-        // Target.targetCreated
-        let evt = CdpMessage::event(
-            "Target.targetCreated",
-            Json::Object({
-                let mut p = BTreeMap::new();
-                p.insert("targetInfo".to_string(), target);
-                p
-            }),
-        );
-        self.send_text(&evt).await?;
-        // Target.attachedToTarget
-        let evt = CdpMessage::event(
-            "Target.attachedToTarget",
-            Json::Object({
-                let mut p = BTreeMap::new();
-                p.insert(
-                    "sessionId".to_string(),
-                    Json::String("browser-rs-session-0".to_string()),
-                );
-                p.insert(
-                    "targetInfo".to_string(),
-                    crate::discovery::target_object(&ws_host),
-                );
-                p.insert("waitingForDebugger".to_string(), Json::Bool(false));
-                p
-            }),
-        );
-        self.send_text(&evt).await?;
         Ok(())
     }
 
