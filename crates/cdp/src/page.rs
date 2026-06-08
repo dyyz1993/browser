@@ -290,7 +290,21 @@ pub async fn dispatch(
                         p
                     }),
                 ),
-                // 2. lifecycleEvent: DOMContentLoaded — LifecycleWatcher checks this
+                // 2. lifecycleEvent: init — Chrome sends this when a new document starts loading.
+                // Puppeteer uses it to set frame._loaderId. Without this,
+                // newDocumentNavigationPromise never resolves → page.goto() hangs.
+                CdpMessage::event(
+                    "Page.lifecycleEvent",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
+                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
+                        p.insert("name".to_string(), Json::String("init".to_string()));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p
+                    }),
+                ),
+                // 3. lifecycleEvent: DOMContentLoaded — LifecycleWatcher checks this
                 CdpMessage::event(
                     "Page.lifecycleEvent",
                     Json::Object({
