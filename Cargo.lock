@@ -358,7 +358,14 @@ dependencies = [
 name = "browser-cdp"
 version = "0.0.1"
 dependencies = [
+ "browser-css-engine",
+ "browser-dom",
+ "browser-html-parser",
+ "browser-layout",
+ "browser-net",
+ "browser-render",
  "browser-ws",
+ "png 0.17.16",
  "thiserror 1.0.69",
  "tokio",
 ]

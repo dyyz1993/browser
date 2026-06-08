@@ -40,6 +40,7 @@
 
 pub mod discovery;
 pub mod jsonrpc;
+pub mod page;
 pub mod server;
 
 pub use jsonrpc::{CdpError, CdpMessage, CdpRequest, CdpResponse};

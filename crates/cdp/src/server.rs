@@ -21,6 +21,8 @@
 //!   be masked (RFC 6455 §5.3).
 //! - Server must validate the mask bit and unmask the payload.
 
+use std::sync::{Arc, Mutex};
+
 use browser_ws::handshake::{build_server_response, parse_key_from_request};
 use browser_ws::{decode_frame, encode_frame, Frame, OpCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -86,6 +88,8 @@ fn parse_request_path(request: &str) -> String {
 /// `-32601 Method not found` error response. M44+ adds real domain handlers.
 pub struct CdpSession {
     stream: TcpStream,
+    /// M44: per-session page state (single-tab model).
+    page: Arc<Mutex<crate::page::PageState>>,
 }
 
 impl CdpSession {
@@ -94,7 +98,10 @@ impl CdpSession {
     /// # Errors
     /// Returns an error string on handshake or I/O failure.
     pub async fn handle(stream: TcpStream) -> Result<(), String> {
-        let mut session = CdpSession { stream };
+        let mut session = CdpSession {
+            stream,
+            page: Arc::new(Mutex::new(crate::page::PageState::default())),
+        };
         session.route().await
     }
 
@@ -289,6 +296,16 @@ impl CdpSession {
                     crate::jsonrpc::Json::String("boa".to_string()),
                 );
                 CdpMessage::ok_response(id, crate::jsonrpc::Json::Object(result))
+            }
+            // ── M44: Page domain (navigate, captureScreenshot) ──
+            m if m.starts_with("Page.") => {
+                match crate::page::dispatch(id, m, msg.params.as_ref(), self.page.clone()).await {
+                    Ok(resp) => resp,
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
+                        CdpMessage::error_response(id, -32601, "Method not found")
+                    }
+                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                }
             }
             _ => CdpMessage::error_response(id, -32601, "Method not found"),
         };
