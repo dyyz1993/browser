@@ -232,7 +232,13 @@ fn base64_encode(input: &[u8]) -> String {
     out
 }
 
-/// Dispatch a `Page.*` CDP method. Returns the JSON response string.
+/// M50: dispatch 结果包含 response + 待发送的 CDP 事件列表.
+pub struct DispatchResult {
+    pub response: String,
+    pub events: Vec<String>,
+}
+
+/// Dispatch a `Page.*` CDP method. Returns the JSON response string + events.
 ///
 /// `state` is the session's shared page state. `params` is the raw params JSON.
 /// `id` is the request id.
@@ -241,7 +247,7 @@ pub async fn dispatch(
     method: &str,
     params: Option<&Json>,
     state: Arc<Mutex<PageState>>,
-) -> Result<String, CdpError> {
+) -> Result<DispatchResult, CdpError> {
     match method {
         "Page.navigate" => {
             let url = params
@@ -265,7 +271,51 @@ pub async fn dispatch(
                 "frameId".to_string(),
                 Json::String(crate::discovery::TARGET_ID.to_string()),
             );
-            Ok(CdpMessage::ok_response(id, Json::Object(result)))
+            // M50: emit Page lifecycle events after navigate
+            let frame_id = crate::discovery::TARGET_ID.to_string();
+            let nav_url = url.to_string();
+            let events = vec![
+                CdpMessage::event(
+                    "Page.frameNavigated",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        let mut frame = BTreeMap::new();
+                        frame.insert("id".to_string(), Json::String(frame_id.clone()));
+                        frame.insert("url".to_string(), Json::String(nav_url.clone()));
+                        frame.insert("loaderId".to_string(), Json::String("0".to_string()));
+                        p.insert("frame".to_string(), Json::Object(frame));
+                        p
+                    }),
+                ),
+                CdpMessage::event(
+                    "Page.loadEventFired",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p
+                    }),
+                ),
+                CdpMessage::event(
+                    "Page.frameStoppedLoading",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
+                        p
+                    }),
+                ),
+                CdpMessage::event(
+                    "Page.domContentEventFired",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p
+                    }),
+                ),
+            ];
+            Ok(DispatchResult {
+                response: CdpMessage::ok_response(id, Json::Object(result)),
+                events,
+            })
         }
         "Page.captureScreenshot" => {
             let st = state
@@ -274,7 +324,10 @@ pub async fn dispatch(
             let data = st.capture_png_base64()?;
             let mut result = BTreeMap::new();
             result.insert("data".to_string(), Json::String(data));
-            Ok(CdpMessage::ok_response(id, Json::Object(result)))
+            Ok(DispatchResult {
+                response: CdpMessage::ok_response(id, Json::Object(result)),
+                events: vec![],
+            })
         }
         "Page.getNavigationHistory" => {
             let st = state
@@ -296,7 +349,10 @@ pub async fn dispatch(
                 "entries".to_string(),
                 Json::Array(vec![Json::Object(entry)]),
             );
-            Ok(CdpMessage::ok_response(id, Json::Object(result)))
+            Ok(DispatchResult {
+                response: CdpMessage::ok_response(id, Json::Object(result)),
+                events: vec![],
+            })
         }
         _ => Err(CdpError::MethodNotFound(method.to_string())),
     }

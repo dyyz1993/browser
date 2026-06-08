@@ -28,7 +28,8 @@ use browser_ws::{decode_frame, encode_frame, Frame, OpCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::jsonrpc::{parse_message, CdpMessage};
+use crate::jsonrpc::{parse_message, CdpMessage, Json};
+use std::collections::BTreeMap;
 
 #[cfg(test)]
 use std::time::Duration;
@@ -128,6 +129,8 @@ impl CdpSession {
         }
         // Otherwise: treat as WebSocket upgrade.
         self.do_ws_handshake(&request).await?;
+        // M50: emit Target events immediately after WS handshake
+        self.emit_target_events().await?;
         self.message_loop().await
     }
 
@@ -271,7 +274,8 @@ impl CdpSession {
         };
         // M42: dispatch table is empty — everything is "not found" yet.
         // M44+ will route "Page.*" to PageHandler, "Runtime.*" to RuntimeHandler, etc.
-        let resp = match method {
+        // M50: collect response + post-response events
+        let (resp, post_events): (String, Vec<String>) = match method {
             // ── M42 builtin: Discovery/Target probing ──
             // Puppeteer/Playwright probe these on connect; answering them early
             // avoids a flood of -32601 noise in logs.
@@ -295,16 +299,23 @@ impl CdpSession {
                     "jsVersion".to_string(),
                     crate::jsonrpc::Json::String("boa".to_string()),
                 );
-                CdpMessage::ok_response(id, crate::jsonrpc::Json::Object(result))
+                (
+                    CdpMessage::ok_response(id, crate::jsonrpc::Json::Object(result)),
+                    vec![],
+                )
             }
-            // ── M44: Page domain (navigate, captureScreenshot) ──
+            // ── M44+M50: Page domain (navigate, captureScreenshot + events) ──
             m if m.starts_with("Page.") => {
                 match crate::page::dispatch(id, m, msg.params.as_ref(), self.page.clone()).await {
-                    Ok(resp) => resp,
-                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
-                        CdpMessage::error_response(id, -32601, "Method not found")
-                    }
-                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                    Ok(dr) => (dr.response, dr.events),
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                        CdpMessage::error_response(id, -32601, "Method not found"),
+                        vec![],
+                    ),
+                    Err(e) => (
+                        CdpMessage::error_response(id, -32000, &e.to_string()),
+                        vec![],
+                    ),
                 }
             }
             // ── M46: DOM domain (getDocument, getOuterHTML, querySelector) ──
@@ -314,21 +325,29 @@ impl CdpSession {
                     return Ok(()); // lock poisoned — drop silently
                 };
                 match crate::dom_domain::dispatch(id, m, msg.params.as_ref(), &st) {
-                    Ok(resp) => resp,
-                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
-                        CdpMessage::error_response(id, -32601, "Method not found")
-                    }
-                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                    Ok(resp) => (resp, vec![]),
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                        CdpMessage::error_response(id, -32601, "Method not found"),
+                        vec![],
+                    ),
+                    Err(e) => (
+                        CdpMessage::error_response(id, -32000, &e.to_string()),
+                        vec![],
+                    ),
                 }
             }
             // ── M45: Runtime domain (evaluate JS, enable/disable) ──
             m if m.starts_with("Runtime.") => {
                 match crate::runtime_domain::dispatch(id, m, msg.params.as_ref()) {
-                    Ok(resp) => resp,
-                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
-                        CdpMessage::error_response(id, -32601, "Method not found")
-                    }
-                    Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
+                    Ok(resp) => (resp, vec![]),
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                        CdpMessage::error_response(id, -32601, "Method not found"),
+                        vec![],
+                    ),
+                    Err(e) => (
+                        CdpMessage::error_response(id, -32000, &e.to_string()),
+                        vec![],
+                    ),
                 }
             }
             // ── M47: Network domain (getResponseBody, enable/disable) ──
@@ -337,24 +356,103 @@ impl CdpSession {
                     return Ok(());
                 };
                 match crate::network_domain::dispatch(id, m, &st) {
+                    Ok(resp) => (resp, vec![]),
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                        CdpMessage::error_response(id, -32601, "Method not found"),
+                        vec![],
+                    ),
+                    Err(e) => (
+                        CdpMessage::error_response(id, -32000, &e.to_string()),
+                        vec![],
+                    ),
+                }
+            }
+            // ── M48+M50: Target domain (Puppeteer connect flow + events) ──
+            m if m.starts_with("Target.") => {
+                let resp = match crate::target_domain::dispatch(id, m) {
                     Ok(resp) => resp,
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
                         CdpMessage::error_response(id, -32601, "Method not found")
                     }
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
-                }
+                };
+                // M50: collect post-response event for attachToTarget
+                let events = if m == "Target.attachToTarget" || m == "Target.attachToBrowserTarget"
+                {
+                    let ws_host = self.ws_host();
+                    vec![CdpMessage::event(
+                        "Target.attachedToTarget",
+                        Json::Object({
+                            let mut p = BTreeMap::new();
+                            p.insert(
+                                "sessionId".to_string(),
+                                Json::String("browser-rs-session-0".to_string()),
+                            );
+                            p.insert(
+                                "targetInfo".to_string(),
+                                crate::discovery::target_object(&ws_host),
+                            );
+                            p.insert("waitingForDebugger".to_string(), Json::Bool(false));
+                            p
+                        }),
+                    )]
+                } else {
+                    vec![]
+                };
+                (resp, events)
             }
-            // ── M48: Target domain (Puppeteer connect flow: getBrowserContexts, etc) ──
-            m if m.starts_with("Target.") => match crate::target_domain::dispatch(id, m) {
-                Ok(resp) => resp,
-                Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
-                    CdpMessage::error_response(id, -32601, "Method not found")
-                }
-                Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
-            },
-            _ => CdpMessage::error_response(id, -32601, "Method not found"),
+            _ => (
+                CdpMessage::error_response(id, -32601, "Method not found"),
+                vec![],
+            ),
         };
-        self.send_text(&resp).await
+        // M50: send pre-response events first (so puppeteer creates sessions before looking them up),
+        // then response, then post-response events.
+        for evt in &post_events {
+            if let Err(e) = self.send_text(evt).await {
+                eprintln!("[cdp] event send error: {e}");
+            }
+        }
+        self.send_text(&resp).await?;
+        Ok(())
+    }
+
+    /// M50: emit Target lifecycle events after WS handshake.
+    ///
+    /// Puppeteer's `connect()` flow requires these to consider the connection
+    /// fully established.
+    async fn emit_target_events(&mut self) -> Result<(), String> {
+        let ws_host = self.ws_host();
+        let target = crate::discovery::target_object(&ws_host);
+        // Target.targetCreated
+        let evt = CdpMessage::event(
+            "Target.targetCreated",
+            Json::Object({
+                let mut p = BTreeMap::new();
+                p.insert("targetInfo".to_string(), target);
+                p
+            }),
+        );
+        self.send_text(&evt).await?;
+        // Target.attachedToTarget
+        let evt = CdpMessage::event(
+            "Target.attachedToTarget",
+            Json::Object({
+                let mut p = BTreeMap::new();
+                p.insert(
+                    "sessionId".to_string(),
+                    Json::String("browser-rs-session-0".to_string()),
+                );
+                p.insert(
+                    "targetInfo".to_string(),
+                    crate::discovery::target_object(&ws_host),
+                );
+                p.insert("waitingForDebugger".to_string(), Json::Bool(false));
+                p
+            }),
+        );
+        self.send_text(&evt).await?;
+        Ok(())
     }
 
     /// Send a text message as a single (unmasked, server→client) frame.
