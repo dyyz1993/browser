@@ -10,11 +10,13 @@
 #![forbid(unsafe_code)]
 
 pub mod document;
+pub mod html_ser;
 pub mod node;
 pub mod print;
 pub mod tree;
 
 pub use document::Document;
+pub use html_ser::serialize_html;
 pub use node::NodeData;
 pub use print::pretty_print;
 pub use tree::{Node, NodeId, Tree};

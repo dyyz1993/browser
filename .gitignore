@@ -8,3 +8,7 @@
 .env
 .env.local
 tests/snapshots/*.actual
+metadata/
+objects/
+target/
+*.log
