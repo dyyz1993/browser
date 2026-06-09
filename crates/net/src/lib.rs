@@ -9,9 +9,14 @@
 
 pub mod client;
 pub mod error;
+pub mod interceptor;
 
 pub use client::{get, HttpClient};
 pub use error::NetError;
+pub use interceptor::{
+    Interceptor, NoopInterceptor, LoggingInterceptor, BlockInterceptor,
+    RequestContext, ResponseContext, MockResponse
+};
 
 #[cfg(test)]
 mod tests {
