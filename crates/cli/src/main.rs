@@ -126,6 +126,20 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// **M60**: Fetch a URL, parse, execute scripts, and output the rendered HTML to stdout.
+    /// This is useful for crawling SPAs and capturing the fully rendered DOM.
+    /// Supports different wait strategies: dom-ready (default), load, or timeout.
+    /// Example: `browser fetch https://example.com > rendered.html`
+    ///          `browser fetch --wait-strategy load --timeout 5000 https://spa.com > out.html`
+    Fetch {
+        url: String,
+        /// Wait strategy for page readiness.
+        #[arg(long, default_value = "dom-ready")]
+        wait_strategy: String,
+        /// Timeout in milliseconds (for timeout strategy).
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
     /// **M42**: Start a CDP (Chrome DevTools Protocol) server. Lets external
     /// tools like Puppeteer/Playwright drive the browser over WebSocket.
     /// Run `browser cdp`, then connect a CDP client to ws://127.0.0.1:9222.
@@ -348,7 +362,11 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             browser_gui::run_window(config).map_err(|e| anyhow!("GUI error: {e}"))?;
             Ok(())
         }
-        Cmd::Cdp { port } => {
+        Cmd::Fetch { url, wait_strategy, timeout } => {
+            run_fetch(url, wait_strategy, timeout)?;
+        }
+
+                Cmd::Cdp { port } => {
             // M42: start the CDP server. Blocks forever (listen loop).
             browser_cdp::server::CdpServer::listen(port)
                 .await

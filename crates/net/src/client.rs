@@ -118,7 +118,10 @@ impl HttpClient {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        Self { inner }
+        Self {
+            inner,
+            interceptor: Arc::new(NoopInterceptor),
+        }
     }
 
     /// Issue a GET request and return the response body.
