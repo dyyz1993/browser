@@ -104,6 +104,39 @@ fn build_cdp_node(tree: &Tree, id: NodeId, parent: NodeId, next_id: &mut u32) ->
     (my_id, Json::Object(m))
 }
 
+/// Get CDP nodeId (1-based) for an internal NodeId.
+/// Helper for querySelector to return consistent nodeId with getDocument.
+pub fn get_cdp_node_id(tree: &Tree, internal_id: NodeId) -> Option<u32> {
+    let mut next_id = 1u32;
+    let mut target_id = None;
+
+    fn find_id(
+        tree: &Tree,
+        node_id: NodeId,
+        internal_id: NodeId,
+        next_id: &mut u32,
+        target_id: &mut Option<u32>,
+    ) {
+        if target_id.is_some() {
+            return;
+        }
+
+        if node_id == internal_id {
+            *target_id = Some(*next_id);
+            return;
+        }
+
+        *next_id += 1;
+
+        for child in tree.children_of(node_id) {
+            find_id(tree, *child, internal_id, next_id, target_id);
+        }
+    }
+
+    find_id(tree, tree.root(), internal_id, &mut next_id, &mut target_id);
+    target_id
+}
+
 /// Serialize a DOM subtree to an HTML string (for `DOM.getOuterHTML`).
 fn serialize_html(tree: &Tree, id: NodeId) -> String {
     let mut out = String::new();
@@ -315,9 +348,11 @@ pub fn dispatch(
                 .and_then(|p| p.get_str("selector"))
                 .ok_or_else(|| CdpError::InvalidJson("missing selector".to_string()))?;
             let found = query_first(&state.tree, state.tree.root(), selector);
-            let node_id = found.map(|nid| nid as f64).unwrap_or(0.0);
+            let cdp_id = found
+                .and_then(|nid| get_cdp_node_id(&state.tree, nid))
+                .unwrap_or(0);
             let mut result = BTreeMap::new();
-            result.insert("nodeId".to_string(), Json::Number(node_id));
+            result.insert("nodeId".to_string(), Json::Number(cdp_id as f64));
             Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
         "DOM.describeNode" => {
@@ -339,7 +374,11 @@ pub fn dispatch(
                 .and_then(|p| p.get_str("selector"))
                 .ok_or_else(|| CdpError::InvalidJson("missing selector".to_string()))?;
             let found = query_all(&state.tree, state.tree.root(), selector);
-            let ids: Vec<Json> = found.iter().map(|nid| Json::Number(*nid as f64)).collect();
+            let ids: Vec<Json> = found
+                .iter()
+                .filter_map(|nid| get_cdp_node_id(&state.tree, *nid))
+                .map(|cdp_id| Json::Number(cdp_id as f64))
+                .collect();
             let mut result = BTreeMap::new();
             result.insert("nodeIds".to_string(), Json::Array(ids));
             Ok(CdpMessage::ok_response(id, Json::Object(result)))

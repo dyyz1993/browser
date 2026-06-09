@@ -20,13 +20,16 @@ use crate::error::NetError;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::interceptor::{Interceptor, NoopInterceptor, RequestContext, ResponseContext};
+use crate::interceptor::{Interceptor, NoopInterceptor};
+#[allow(unused_imports)]
+use crate::interceptor::{RequestContext, ResponseContext};
 
 /// 真实 Chrome UA（解决反爬 + 模拟浏览器行为）。
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 /// HTTP client. Cheap to clone (reqwest internally `Arc`-wrapped).
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct HttpClient {
     inner: reqwest::Client,
     interceptor: Arc<dyn Interceptor + Send + Sync>,
@@ -44,6 +47,7 @@ pub struct ClientBuilder {
 
 impl ClientBuilder {
     /// Create a new builder with default settings.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -109,6 +113,7 @@ impl HttpClient {
     /// 慢响应/挂起服务器（如某些 CDN）让整个爬虫永久 hang——对 G1 爬虫
     /// 场景是致命可靠性缺陷。
     #[must_use]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         // 跟随 redirect（浏览器标准行为，最多 10 次防死循环）。
         let inner = reqwest::Client::builder()

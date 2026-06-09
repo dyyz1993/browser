@@ -91,6 +91,8 @@ pub struct CdpSession {
     stream: TcpStream,
     /// M44: per-session page state (single-tab model).
     page: Arc<Mutex<crate::page::PageState>>,
+    /// M49: emulation state (device metrics, user agent).
+    emulation: Arc<Mutex<crate::emulation_domain::EmulationState>>,
 }
 
 impl CdpSession {
@@ -102,6 +104,7 @@ impl CdpSession {
         let mut session = CdpSession {
             stream,
             page: Arc::new(Mutex::new(crate::page::PageState::default())),
+            emulation: Arc::new(Mutex::new(crate::emulation_domain::EmulationState::new())),
         };
         session.route().await
     }
@@ -356,6 +359,21 @@ impl CdpSession {
                     return Ok(());
                 };
                 match crate::network_domain::dispatch(id, m, &st) {
+                    Ok(resp) => (resp, vec![]),
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                        CdpMessage::error_response(id, -32601, "Method not found"),
+                        vec![],
+                    ),
+                    Err(e) => (
+                        CdpMessage::error_response(id, -32000, &e.to_string()),
+                        vec![],
+                    ),
+                }
+            }
+            // ── M49: Emulation domain (device metrics, user agent) ──
+            m if m.starts_with("Emulation.") => {
+                let mut st = self.emulation.lock().map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
+                match crate::emulation_domain::dispatch(id, m, msg.params.as_ref(), &mut st) {
                     Ok(resp) => (resp, vec![]),
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                         CdpMessage::error_response(id, -32601, "Method not found"),

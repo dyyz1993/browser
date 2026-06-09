@@ -151,6 +151,7 @@ pub struct BlockInterceptor {
 }
 
 impl BlockInterceptor {
+    #[allow(clippy::new_without_default)]
     /// Create new block interceptor
     pub fn new() -> Self {
         Self {
