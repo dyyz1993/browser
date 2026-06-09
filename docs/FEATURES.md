@@ -5,7 +5,7 @@
 
 ---
 
-## CLI 子命令（8 个）
+## CLI 子命令（11 个）
 
 | 子命令 | 功能 | 来源 |
 |--------|------|------|
@@ -16,6 +16,9 @@
 | `render-url <url>` | fetch + parse + 执行 JS + 渲染（端到端 SPA） | M4 |
 | `open <url>` | fetch + 渲染 + GUI 窗口显示 | M5 |
 | `image-ascii <file>` | PNG/JPG → ASCII art | M12.3 |
+| `screenshot <url>` | fetch + JS + 布局 + 网页 PNG 截图（支持 --max-height） | M12 | 
+| `cdp --port N` | 启动 Chrome DevTools Protocol server（Puppeteer/Playwright 兼容） | M42 |
+| `spa <url>` | fetch + JS + 等待策略 + 输出完整 HTML（爬虫友好） | M57 | 
 
 通用 flag：`--width N`（终端宽度，默认 80）、`--screenshot <path>`（输出 PNG）。
 
@@ -118,9 +121,46 @@
 - ✅ `localStorage` + `sessionStorage`（共享后端，MVP）
 - ✅ `history`（pushState/replaceState/back/forward/go）
 - ✅ `location`（href/replace/assign/pathname/host/...）
+- ✅ `Image`（构造器，爬虫友好不 fetch）
+- ✅ `setTimeout`/`Promise`（异步执行）
 
 > **注意**：`length`/`state`/`href` 等用**方法**形式（`localStorage.length()`）
 > 而非属性，因为 boa getter API 复杂。爬虫 JS 兼容时需注意。
+
+---
+
+## Chrome DevTools Protocol（CDP）支持
+
+| 域 | 方法 | 里程碑 | 说明 |
+|----|------|--------|------|
+| **Browser** | `getVersion` | M42 | 浏览器版本信息 |
+| **Page** | `navigate` | M44 | 导航到 URL |
+| | `captureScreenshot` | M44 | PNG base64 截图 |
+| | `getNavigationHistory` | M44 | 导航历史 |
+| **Runtime** | `evaluate` | M45 | 执行 JS 表达式 |
+| | `enable/disable` | M45 | 生命周期管理 |
+| **DOM** | `getDocument` | M46 | 获取文档树 |
+| | `getOuterHTML` | M46 | 获取节点 HTML |
+| | `querySelector` | M46 | 查询单个节点 |
+| | `querySelectorAll` | M46 | 查询多个节点 |
+| **Network** | `getResponseBody` | M47 | 获取响应体 |
+| | `enable/disable` | M47 | 生命周期管理 |
+| **Target** | `createTarget` | M49 | 创建页面目标 |
+| | `activateTarget` | M49 | 激活目标 |
+| | `closeTarget` | M49 | 关闭目标 |
+| | `setDiscoverTargets` | M49 | 自动发现 |
+| **Fetch** | `enable/disable` | M51 | 拦截启用 |
+| | `continueRequest` | M51 | 继续请求 |
+| | `fulfillRequest` | M51 | 模拟响应 |
+| **Log** | `entryAdded` | M52 | console.log 事件 |
+| | `enable/disable` | M52 | 生命周期管理 |
+| **Emulation** | `setUserAgentOverride` | M53 | 覆盖 UA |
+| | `setDeviceMetricsOverride` | M53 | 视口尺寸 |
+| **Input** | `dispatchMouseEvent` | M54 | 鼠标点击 |
+| | `dispatchKeyEvent` | M55 | 键盘输入 |
+| **Page** | `addScriptToEvaluateOnNewDocument` | M56 | 早期 JS 注入 |
+
+**服务端实现**：`browser-cdp` crate（M42），支持 HTTP discovery endpoints + WebSocket server。
 
 ---
 
@@ -132,20 +172,20 @@
 | `fetch`（同步） | ✅ | M4 |
 | `localStorage`/`sessionStorage` | ✅ | M13 |
 | `history`/`location` | ✅ | M14 |
-| `XMLHttpRequest` | ❌ | 未实现 |
-| `setTimeout`/`Promise` | ❌ defer | M7.3（切 deno_core 后） |
-| WebSocket | ❌ | 未实现 |
+| `XMLHttpRequest` | ✅ | M17 |
+| `WebSocket` | ✅ | M18 |
+| `setTimeout`/`Promise` | ✅ | M30 |
+| `setInterval` | ✅ | M30 |
+| `Image` | ✅ | M41 |
 | 表单提交（GET/POST） | ⚠️ 部分 | M8（仅本地交互，不发网络） |
 
 ---
 
 ## 已知局限（明示，避免误用）
 
-1. **异步 JS**：`setTimeout(fn, 0)` / `Promise.then` 会抛 ReferenceError。
-   SPA 必须在主 JS 流中完成 DOM 操作。
-2. **强反爬站点**：百度等返回 `location.replace` JS 反爬页，需 location 支持
-   + Cookie jar（location 已支持 M14，Cookie 未实现）。
-3. **GUI 需要显示器**：`open` 子命令在 headless/SSH 无 X 转发时会失败。
-   用 `--check` flag 或 `render-url` 代替。
-4. **真实图像渲染**：GUI 只显示 `[IMG: src]` 占位符（CLI 用 image-ascii）。
-5. **JS 对象属性**：`length`/`state`/`href` 是方法形式。
+1. **异步 JS（M30+ 已修复）**：`setTimeout(fn, 0)` / `Promise.then` 已支持，爬虫 CLI 使用 networkidle 策略等待异步操作完成。
+2. **强反爬站点**：百度等返回 `location.replace` JS 反爬页，已支持 location（M14）但 Cookie 部分实现（M32持久化）。
+3. **GUI 需要显示器**：`open` 子命令在 headless/SSH 无 X 转发时会失败。用 `screenshot` 代替或使用 CDP server 模式。
+4. **真实图像渲染**：GUI 只显示 `[IMG: src]` 占位符（CLI 用 image-ascii），CDP captureScreenshot 生成 PNG base64（M44）。
+5. **JS 对象属性**：`length`/`state`/`href` 是方法形式（`localStorage.length()`），因为 boa getter API 复杂。爬虫 JS 兼容时需注意。
+6. **JS 引擎兼容性**：boa 0.20 不支持 ES6 shorthand（`{ fn() {} }`），部分复杂 bundle 可能报错。

@@ -62,6 +62,30 @@ html5ever、hyper+rustls、tokio、clap、boa_engine、winit+softbuffer、url、
 **定义**：真实网站（example.com、本地 SPA）能抓能渲染。强反爬站点（百度）
 和需要异步 JS 的站点（React/Vue 复杂 bundle）是**已知局限**，逐步改进。
 
+### G6. SPA CLI 爬虫命令（M57 中 🔄）
+
+**定义**：提供 `browser spa <url>` 命令行工具，自动完成 fetch → JS 执行 → 等待策略 → 输出完整 HTML。爬虫友好（无 head、无截图）。
+
+**验收标准**：
+```bash
+browser spa http://localhost:8765/async-spa.html --wait networkidle
+# stdout 输出完整 HTML（包含 JS 动态插入内容），退出码 0
+# 支持 --wait {domcontentloaded|load|networkidle|none}（默认 load）
+# 支持 --timeout <ms>（默认 30000）
+```
+
+**SPA 覆盖率标准（90% 目标）**：支持常见 SPA 模式：
+- Async data loading（fetch + DOM 插入）
+- Route switching（hash 路由 + 动态内容切换）
+- Lazy loading（延迟加载组件）
+- Dynamic form（表单动态生成）
+- Redirect（location.href 跳转）
+- XHR + WebSocket + Cookie
+- localStorage/sessionStorage
+- setTimeout/setInterval
+
+**当前支持状态**：CDP 爬虫（M42-M56）已支持全部模式，CLI 命令正在接入中。
+
 ---
 
 ## 非目标（明确不做什么）

@@ -139,15 +139,48 @@
 
 ## 前瞻（M17+，已排序）
 
-> 用户已确认推进顺序：A（M16 deno_core）→ C（M17 XMLHttpRequest）→ D（M18 networkidle）。
+> **M16-M56 已全部完成** ✅（2025-06）
+> M57 计划：`browser fetch <url>` CLI 爬虫命令（networkidle 等待 + HTML 序列化输出）
 
-| 候选 | 价值 | 工作量 | 备注 |
-|------|------|--------|------|
-| **M16 deno_core** | ⭐⭐⭐⭐⭐ | 大 | 进行中：解锁 setTimeout/Promise/async-await |
-| **M17 XMLHttpRequest** | ⭐⭐⭐ | 中 | 老 SPA（jQuery 时代）依赖，fetch 的补充 |
-| **M18 networkidle** | ⭐⭐⭐ | 中 | 自动判断 SPA 何时渲染完，爬虫体验提升 |
-| 真实图像渲染进 GUI | ⭐⭐ | 中 | PNG/JPG 解码显示（非占位符） |
-| WebSocket | ⭐⭐ | 大 | 实时 SPA（聊天/推送） |
+| 里程碑 | 内容 | 状态 |
+|--------|------|------|
+| M15 | Cookie jar（RFC 6265 子集） | ✅ |
+| M16 | 异步 JS（setTimeout/Promise/setInterval，自研） | ✅ |
+| M17 | XMLHttpRequest（纯 JS 原型） | ✅ |
+| M18 | WebSocket（client + TLS native-tls） | ✅ |
+| M42 | CDP WebSocket server + JSON-RPC framework | ✅ |
+| M43 | CDP HTTP discovery endpoints | ✅ |
+| M44 | CDP Page domain（navigate + captureScreenshot） | ✅ |
+| M45 | CDP Runtime domain（evaluate） | ✅ |
+| M46 | CDP DOM domain（querySelector + getOuterHTML） | ✅ |
+| M47 | CDP Network domain（getResponseBody） | ✅ |
+| M48 | Puppeteer e2e 联调 | ✅ |
+| M49-M51 | CDP Target + Fetch 域 | ✅ |
+| M52 | CDP Log domain（console.log） | ✅ |
+| M53 | CDP Emulation domain（UA + viewport） | ✅ |
+| M54 | CDP Input domain（鼠标点击） | ✅ |
+| M55 | CDP Input domain（键盘输入） | ✅ |
+| M56 | CDP Page domain（早期 JS 注入） | ✅ |
+| **M57** | **CLI 爬虫命令**（`browser fetch <url>`） | 🚧 进行中 |
 
-**决策原则**：见 [GOALS.md](./GOALS.md) §决策原则。每次只推进一个模块，
-"先实现后完善"（MVP → 测试 → e2e → 文档）。
+---
+
+### M57 计划：CLI 爬虫命令（G6）
+
+| Sub | 任务 |
+|-----|------|
+| M57.1 | 更新 GOALS.md — 新增 G6 + 90% 覆盖率标准 + 状态快照更新到 M56 |
+| M57.2 | 更新 FEATURES.md — CLI 子命令表 + 能力清单 + CDP 域更新到 M56 |
+| M57.3 | 更新 ROADMAP.md — M15-M56 全部补齐 + M57 计划 |
+| M57.4 | 更新 ARCHITECTURE.md — crate 依赖图 + 数据流 + 新增 crate（cdp/ws/cookie/eventloop） |
+| M57.5 | 实现 `browser fetch <url>` 子命令 — fetch+parse+JS+wait+serialize HTML+stdout |
+| M57.6 | 添加 `--wait/--timeout` flags — domcontentloaded/load/networkidle/none |
+| M57.7 | 端到端验证 — example.com + baidu + fixture SPA |
+
+**实现要点**：
+- 复用 CLI 现有管线（fetch → parse → JS → networkidle → serialize）
+- 模块化等待策略（`wait.rs`）：4 种模式（none/domcontentloaded/load/networkidle）
+- HTML 序列化器（`serializer.rs`）：`Tree → String`（CDP `DOM.getOuterHTML` 的非 CDP 版本）
+- 测试覆盖：3 个 e2e（example.com + baidu + fixture SPA）+ 5 个 unit tests
+
+---
