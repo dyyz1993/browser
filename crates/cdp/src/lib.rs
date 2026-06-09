@@ -43,9 +43,15 @@ pub mod dom_domain;
 pub mod jsonrpc;
 pub mod network_domain;
 pub mod page;
+pub mod emulation_domain;
+pub mod input_domain;
+pub mod performance_domain;
 pub mod runtime_domain;
 pub mod server;
 pub mod target_domain;
 
 pub use jsonrpc::{CdpError, CdpMessage, CdpRequest, CdpResponse};
 pub use server::{CdpServer, CdpSession};
+pub use performance_domain::dispatch as performance_dispatch;
+pub use input_domain::dispatch as input_dispatch;
+pub use emulation_domain::dispatch as emulation_dispatch;
