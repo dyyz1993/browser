@@ -6,7 +6,6 @@
 //! - Emulation.clearDeviceMetricsOverride: reset to defaults
 
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
-use std::collections::BTreeMap;
 
 /// Device metrics emulation state
 #[derive(Debug, Clone, Default)]
@@ -98,6 +97,8 @@ fn clear_device_metrics(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn make_state() -> EmulationState {
