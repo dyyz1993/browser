@@ -17,6 +17,10 @@ use reqwest::Method;
 use url::Url;
 
 use crate::error::NetError;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::interceptor::{Interceptor, NoopInterceptor, RequestContext, ResponseContext};
 
 /// 真实 Chrome UA（解决反爬 + 模拟浏览器行为）。
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -25,13 +29,78 @@ const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/53
 #[derive(Clone)]
 pub struct HttpClient {
     inner: reqwest::Client,
+    interceptor: Arc<dyn Interceptor + Send + Sync>,
 }
 
-impl Default for HttpClient {
-    fn default() -> Self {
-        Self::new()
+/// Builder pattern for configuring HttpClient.
+#[derive(Default)]
+pub struct ClientBuilder {
+    user_agent: Option<String>,
+    connect_timeout: Duration,
+    timeout: Duration,
+    redirect_limit: usize,
+    interceptor: Option<Arc<dyn Interceptor + Send + Sync>>,
+}
+
+impl ClientBuilder {
+    /// Create a new builder with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set custom user agent.
+    pub fn user_agent<S: Into<String>>(mut self, ua: S) -> Self {
+        self.user_agent = Some(ua.into());
+        self
+    }
+
+    /// Set connect timeout (default 10s).
+    pub fn connect_timeout(mut self, dur: Duration) -> Self {
+        self.connect_timeout = dur;
+        self
+    }
+
+    /// Set overall request timeout (default 30s).
+    pub fn timeout(mut self, dur: Duration) -> Self {
+        self.timeout = dur;
+        self
+    }
+
+    /// Set redirect limit (default 10).
+    pub fn redirect_limit(mut self, limit: usize) -> Self {
+        self.redirect_limit = limit;
+        self
+    }
+
+    /// Set network interceptor (for request/response modification).
+    pub fn interceptor(mut self, interceptor: Arc<dyn Interceptor + Send + Sync>) -> Self {
+        self.interceptor = Some(interceptor);
+        self
+    }
+
+    /// Build the HttpClient.
+    ///
+    /// # Errors
+    /// Returns error if reqwest client building fails.
+    pub fn build(self) -> Result<HttpClient, reqwest::Error> {
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(self.connect_timeout)
+            .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::limited(self.redirect_limit));
+
+        if let Some(ua) = self.user_agent {
+            builder = builder.user_agent(&ua);
+        } else {
+            builder = builder.user_agent(UA);
+        }
+
+        let interceptor = self.interceptor.unwrap_or_else(|| Arc::new(NoopInterceptor));
+        let inner = builder.build()?;
+        Ok(HttpClient { inner, interceptor })
     }
 }
+
+
 
 impl HttpClient {
     /// Create a new client with default settings.

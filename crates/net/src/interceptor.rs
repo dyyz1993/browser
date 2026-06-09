@@ -1,7 +1,7 @@
 // Request/response interception framework for browser-net crate
 // M58.1: Define Interceptor trait and contexts
 
-use std::sync::Arc;
+
 use async_trait::async_trait;
 use reqwest::{StatusCode, header::HeaderMap};
 use url::Url;
