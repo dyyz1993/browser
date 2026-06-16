@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+mod compat_shim;
 pub mod document_shim;
 pub mod element_shim;
 pub mod fetch_shim;
@@ -16,6 +17,8 @@ pub mod navigator_shim;
 pub mod runtime;
 pub mod screen_shim;
 pub mod scripts;
+// M-cls.3: CSR 数据兜底（JS 跑空时直接拉 SSR 数据页注入正文）。
+pub mod spa_fallback;
 pub mod storage_shim;
 pub mod window_shim;
 pub mod ws_shim;
@@ -33,6 +36,7 @@ pub use runtime::JsRuntime;
 pub use scripts::{
     execute_scripts, execute_scripts_with_base, extract_scripts, run_scripts, run_scripts_with_base,
 };
+pub use spa_fallback::try_csr_fallback;
 pub use storage_shim::install_storage_globals;
 pub use ws_shim::install_websocket;
 pub use xhr_shim::install_xml_http_request;

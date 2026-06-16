@@ -10,16 +10,50 @@ use browser_dom::{NodeData, NodeId, Tree};
 
 use crate::bridge::install;
 
+/// M-cls.2: 收紧 JS 运行时限制（纵深防御第二层）。
+///
+/// 历史 `main.js`(Next.js bundle) 在 boa 0.20 下 eval 时把循环迭代吃到
+/// 250_000 上限仍未抛错，但期间分配了数 GB 内存触发 OOM。把上限降到 40_000
+/// 既足够跑常见 SPA 的内联脚本（秒级几百次迭代的渲染逻辑），又能在 runaway
+/// 循环早期抛 `loop iteration limit reached`，配合子进程内存护栏（M-cls.1）
+/// 双保险。stack/recursion 也从 boa 默认(10240/512)收紧到 4096/256。
+const JS_LOOP_ITERATION_LIMIT: u64 = 40_000;
+const JS_STACK_SIZE_LIMIT: usize = 4096;
+const JS_RECURSION_LIMIT: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScriptEntry {
+    Inline(String),
+    External(String),
+}
+
 /// Collect the text content of every `<script>` element in `tree`,
 /// in document order. Empty scripts are filtered out.
 #[must_use]
 pub fn extract_scripts(tree: &Tree) -> Vec<String> {
+    extract_script_entries(tree)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            ScriptEntry::Inline(script) => Some(script),
+            ScriptEntry::External(_) => None,
+        })
+        .collect()
+}
+
+fn extract_script_entries(tree: &Tree) -> Vec<ScriptEntry> {
     let mut scripts = Vec::new();
     let mut stack: Vec<NodeId> = vec![tree.root()];
     while let Some(id) = stack.pop() {
         let node = tree.get(id);
-        if let NodeData::Element { tag, .. } = &node.data {
+        if let NodeData::Element { tag, attrs } = &node.data {
             if tag.eq_ignore_ascii_case("script") {
+                if !script_tag_has_executable_type(attrs) {
+                    continue;
+                }
+                if let Some(src) = script_src(attrs) {
+                    scripts.push(ScriptEntry::External(src));
+                    continue;
+                }
                 let mut text = String::new();
                 for &child_id in &node.children {
                     if let NodeData::Text(s) = tree.data(child_id) {
@@ -27,7 +61,7 @@ pub fn extract_scripts(tree: &Tree) -> Vec<String> {
                     }
                 }
                 if !text.trim().is_empty() {
-                    scripts.push(text);
+                    scripts.push(ScriptEntry::Inline(text));
                 }
                 // Don't recurse into scripts (no nested scripts allowed by HTML5).
                 continue;
@@ -40,6 +74,64 @@ pub fn extract_scripts(tree: &Tree) -> Vec<String> {
         }
     }
     scripts
+}
+
+fn script_src(attrs: &[(String, String)]) -> Option<String> {
+    attrs
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("src"))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn script_tag_has_executable_type(attrs: &[(String, String)]) -> bool {
+    if attrs
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("nomodule"))
+    {
+        return false;
+    }
+    let mut script_type: Option<&str> = None;
+    let mut language: Option<&str> = None;
+    for (name, value) in attrs {
+        if name.eq_ignore_ascii_case("type") {
+            script_type = Some(value);
+        } else if language.is_none() && name.eq_ignore_ascii_case("language") {
+            language = Some(value);
+        }
+    }
+    if let Some(ty) = script_type {
+        is_js_script_type(ty)
+    } else if let Some(lang) = language {
+        is_js_script_type(lang)
+    } else {
+        true
+    }
+}
+
+fn is_js_script_type(raw: &str) -> bool {
+    let mut token = raw.trim();
+    if token.is_empty() {
+        return true;
+    }
+    if let Some((head, _)) = token.split_once(';') {
+        token = head;
+    }
+    let token = token.trim();
+    if token.eq_ignore_ascii_case("module") {
+        return true;
+    }
+    if token.eq_ignore_ascii_case("text/javascript")
+        || token.eq_ignore_ascii_case("application/javascript")
+        || token.eq_ignore_ascii_case("text/ecmascript")
+        || token.eq_ignore_ascii_case("application/ecmascript")
+        || token.eq_ignore_ascii_case("application/x-javascript")
+        || token.eq_ignore_ascii_case("text/jscript")
+    {
+        return true;
+    }
+    let token = token.to_ascii_lowercase();
+    token.contains("javascript") || token.contains("ecmascript")
 }
 
 /// Run all `<script>` bodies in `tree` against `ctx`, with the bridge
@@ -60,18 +152,96 @@ pub fn execute_scripts_with_base(
     ctx: &mut Context,
     base_url: Option<String>,
 ) -> usize {
-    let scripts: Vec<String> = {
+    let limits = ctx.runtime_limits_mut();
+    limits.set_loop_iteration_limit(JS_LOOP_ITERATION_LIMIT);
+    limits.set_stack_size_limit(JS_STACK_SIZE_LIMIT);
+    limits.set_recursion_limit(JS_RECURSION_LIMIT);
+    let scripts: Vec<ScriptEntry> = {
         let borrowed = tree_shared.borrow();
-        extract_scripts(&borrowed)
+        extract_script_entries(&borrowed)
     };
+    let script_base_url = base_url.clone();
     let _guard = crate::bridge::install_shared_with_base(tree_shared.clone(), base_url);
     let mut executed = 0;
-    for script in scripts {
-        match ctx.eval(Source::from_bytes(&script)) {
+    let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
+    let raw_script_mode = std::env::var("BROWSER_RAW_SCRIPT_ERRORS").is_ok();
+    for (idx, script) in scripts.iter().enumerate() {
+        let script_code = match script {
+            ScriptEntry::Inline(code) => {
+                if trace_scripts {
+                    eprintln!("[js-runtime] script[{idx}] inline len={}", code.len());
+                }
+                Some((code.clone(), format!("inline[{idx}]")))
+            }
+            ScriptEntry::External(src) => match resolve_script_url(src, script_base_url.as_deref())
+            {
+                Some(url) => match fetch_external_script(&url) {
+                    Ok(code) => {
+                        if trace_scripts {
+                            eprintln!(
+                                "[js-runtime] script[{idx}] external {url} len={}",
+                                code.len()
+                            );
+                        }
+                        Some((code, format!("external[{idx}] {url}")))
+                    }
+                    Err(e) => {
+                        eprintln!("[js-runtime] external script fetch failed: {url}: {e}");
+                        None
+                    }
+                },
+                None => {
+                    eprintln!("[js-runtime] external script skipped: {src}");
+                    None
+                }
+            },
+        };
+        let Some((script_code, script_label)) = script_code else {
+            continue;
+        };
+        if raw_script_mode {
+            if trace_scripts {
+                eprintln!("[js-runtime] script[{idx}] {script_label} raw eval start");
+            }
+            match ctx.eval(Source::from_bytes(script_code.as_bytes())) {
+                Ok(_) => {
+                    executed += 1;
+                    if trace_scripts {
+                        eprintln!("[js-runtime] script[{idx}] {script_label} raw eval end");
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[js-runtime] script[{idx}] {script_label} raw eval error: {:?}",
+                        e
+                    );
+                }
+            }
+            if trace_scripts {
+                eprintln!("[js-runtime] script[{idx}] eval end");
+            }
+            continue;
+        }
+        let mut wrapped_code = String::new();
+        wrapped_code.push_str("(function(){\ntry{\n");
+        wrapped_code.push_str(&script_code);
+        let catch_prefix = "\n}catch(__err){\nif(typeof __log === 'function'){\nvar __parts = [];\nvar __errObj = (__err !== null && __err !== undefined) ? __err : {};\nif (typeof __errObj.message === 'string') {\n    __parts.push('message=' + __errObj.message);\n} else if (typeof __errObj.toString === 'function') {\n    __parts.push('message=' + String(__errObj.toString()));\n} else {\n    __parts.push('message=' + String(__errObj));\n}\nif (typeof __errObj.name !== 'undefined') __parts.push('name=' + String(__errObj.name));\nif (typeof __errObj.fileName !== 'undefined') __parts.push('fileName=' + String(__errObj.fileName));\nif (typeof __errObj.lineNumber !== 'undefined') __parts.push('lineNumber=' + String(__errObj.lineNumber));\nif (typeof __errObj.columnNumber !== 'undefined') __parts.push('columnNumber=' + String(__errObj.columnNumber));\nif (typeof __errObj.stack !== 'undefined') __parts.push('stack=' + String(__errObj.stack));\nif (typeof __errObj.constructor === 'function' && __errObj.constructor.name) __parts.push('constructor=' + String(__errObj.constructor.name));\ntry { __parts.push('type=' + (typeof __errObj)); } catch(e) {}\ntry { if (typeof __errObj === 'object' && __errObj !== null) { __parts.push('errKeys=' + String(Object.keys(__errObj))); __parts.push('errToJSON=' + String(JSON.stringify(__errObj))); } } catch(e) {}\ntry { if (typeof __errObj.toString === 'function') __parts.push('errToString=' + String(__errObj.toString())); } catch(e) {}\n__log('[";
+        wrapped_code.push_str(catch_prefix);
+        wrapped_code.push_str(&script_label);
+        wrapped_code.push_str("] ' + __parts.join(' | '));\n}\n}\n})();\n//# sourceURL=");
+        wrapped_code.push_str(&script_label);
+        wrapped_code.push('\n');
+        if trace_scripts {
+            eprintln!("[js-runtime] script[{idx}] eval start");
+        }
+        match ctx.eval(Source::from_bytes(wrapped_code.as_bytes())) {
             Ok(_) => executed += 1,
             Err(e) => {
-                eprintln!("[js-runtime] script error: {e}");
+                eprintln!("[js-runtime] script[{idx}] {script_label} eval error: {e}");
             }
+        }
+        if trace_scripts {
+            eprintln!("[js-runtime] script[{idx}] eval end");
         }
     }
     // M16.3: pump the event loop. 执行完所有 script 后，drain 到期 timer
@@ -81,6 +251,38 @@ pub fn execute_scripts_with_base(
     executed
 }
 
+fn resolve_script_url(src: &str, base_url: Option<&str>) -> Option<String> {
+    if let Ok(url) = url::Url::parse(src) {
+        return Some(url.to_string());
+    }
+    if let Some(base) = base_url {
+        if let Ok(base) = url::Url::parse(base) {
+            if let Ok(url) = base.join(src) {
+                return Some(url.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn fetch_external_script(url: &str) -> Result<String, String> {
+    let url = url.to_string();
+    let handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio runtime build failed: {e}"))?;
+        let client = browser_net::HttpClient::new();
+        let bytes = rt
+            .block_on(client.get(&url))
+            .map_err(|e| format!("{e:?}"))?;
+        String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
+    });
+    handle
+        .join()
+        .map_err(|_| "external script fetch thread panicked".to_string())?
+}
+
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
 /// safety cap is hit. Returns the number of callbacks invoked.
 /// M16.4: 每轮 tick 先 `ctx.run_jobs()`（执行 Promise then 回调 microtask），
@@ -88,12 +290,22 @@ pub fn execute_scripts_with_base(
 /// `ctx.eval` 不返回值我们也不关心（回调的副作用在 DOM 上，不在返回值）。
 fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
+    const MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
+    const MAX_SLEEP_MS: u64 = 200;
+    let started_at = std::time::Instant::now();
     let mut invoked = 0;
     // M23.5: WS 是长连接异步，握手/收消息在后台线程。即使 timer idle，
     // 也要 poll WS 事件直到所有连接关闭（否则 onopen/onmessage 永不触发）。
     let mut ws_idle_polls = 0u32;
     const WS_MAX_IDLE_POLLS: u32 = 500; // ~2.5s（500 × 5ms）安全裕度
     for _ in 0..MAX_TICKS {
+        if started_at.elapsed() >= MAX_TOTAL {
+            eprintln!(
+                "[js-runtime] event loop hard timeout ({}s)",
+                MAX_TOTAL.as_secs()
+            );
+            break;
+        }
         // M16.4: 先执行 Promise microtask（then 回调）。可能 schedule 新 timer。
         ctx.run_jobs();
         let mut tick_invoked = 0;
@@ -131,9 +343,13 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
             let now = std::time::Instant::now();
             if deadline > now {
                 let wait = deadline - now;
-                // 单个 timer 等待上限 2s，防恶意页面无限 setTimeout 卡死爬虫
-                let capped = wait.min(std::time::Duration::from_secs(2));
-                std::thread::sleep(capped);
+                // 限制单次等待与总等待，避免页面通过超长 timer 长时间卡住。
+                let mut wait = wait.min(std::time::Duration::from_millis(MAX_SLEEP_MS));
+                let left = MAX_TOTAL.saturating_sub(started_at.elapsed());
+                wait = wait.min(left);
+                if wait > std::time::Duration::ZERO {
+                    std::thread::sleep(wait);
+                }
             }
             ws_idle_polls = 0;
             continue; // sleep 后回到循环顶部 drain 到期 timer
@@ -189,6 +405,13 @@ pub fn run_scripts_with_base(
     use std::rc::Rc;
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
     let mut ctx = Context::default();
+    let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
+    {
+        let limits = ctx.runtime_limits_mut();
+        limits.set_loop_iteration_limit(JS_LOOP_ITERATION_LIMIT);
+        limits.set_stack_size_limit(JS_STACK_SIZE_LIMIT);
+        limits.set_recursion_limit(JS_RECURSION_LIMIT);
+    }
     install(&mut ctx);
     // M13.3: 安装 localStorage / sessionStorage 后端 + JS 对象
     let storage = browser_storage::new_storage();
@@ -227,6 +450,152 @@ pub fn run_scripts_with_base(
     // M41: Image 构造器（爬虫友好——设 src 后 setTimeout(0) 假触发 onload，不 fetch）。
     // 消除 baidu SPA 实测的 `Image is not defined` 错误。
     let _ = crate::image_shim::install_image(&mut ctx);
+    // M57: 基础兼容 shim，补齐常见前端运行时入口。
+    let _ = crate::compat_shim::install_compat_shims(&mut ctx);
+
+    if trace_scripts {
+        let diag = r#"(function() {
+            if (globalThis.__objectDiagInstalled) return;
+            globalThis.__objectDiagInstalled = true;
+            if (typeof globalThis.__log !== 'function') return;
+
+            function __diag(name, args) {
+                var first = args && args.length > 0 ? args[0] : undefined;
+                if (first === null) {
+                    globalThis.__log('[diag] ' + name + ' first arg = null');
+                } else if (first === undefined) {
+                    globalThis.__log('[diag] ' + name + ' first arg = undefined');
+                }
+            }
+
+            var _keys = Object.keys;
+            Object.keys = function(obj) {
+                __diag('Object.keys', arguments);
+                return _keys(obj);
+            };
+
+            var _entries = Object.entries;
+            Object.entries = function(obj) {
+                __diag('Object.entries', arguments);
+                return _entries(obj);
+            };
+
+            var _fromEntries = Object.fromEntries;
+            if (typeof _fromEntries === 'function') {
+                Object.fromEntries = function() {
+                    __diag('Object.fromEntries', arguments);
+                    return _fromEntries.apply(Object, arguments);
+                };
+            }
+
+            var _values = Object.values;
+            Object.values = function(obj) {
+                __diag('Object.values', arguments);
+                return _values(obj);
+            };
+
+            var _assign = Object.assign;
+            Object.assign = function(target) {
+                __diag('Object.assign', arguments);
+                return _assign.apply(Object, arguments);
+            };
+
+            var _hasOwn = Object.prototype.hasOwnProperty;
+            if (typeof _hasOwn === 'function') {
+                Object.prototype.hasOwnProperty = function(prop) {
+                    __diag('Object.prototype.hasOwnProperty', arguments);
+                    return _hasOwn.call(this, prop);
+                };
+            }
+
+            var _defineProperty = Object.defineProperty;
+            Object.defineProperty = function(obj, prop, desc) {
+                __diag('Object.defineProperty', arguments);
+                return _defineProperty(obj, prop, desc);
+            };
+
+            var _defineProperties = Object.defineProperties;
+            Object.defineProperties = function(obj, props) {
+                __diag('Object.defineProperties', arguments);
+                return _defineProperties(obj, props);
+            };
+
+            var _create = Object.create;
+            Object.create = function(obj) {
+                __diag('Object.create', arguments);
+                return _create.apply(Object, arguments);
+            };
+
+            var _setPrototypeOf = Object.setPrototypeOf;
+            Object.setPrototypeOf = function(obj, proto) {
+                __diag('Object.setPrototypeOf', arguments);
+                return _setPrototypeOf(obj, proto);
+            };
+
+            var _getPrototypeOf = Object.getPrototypeOf;
+            Object.getPrototypeOf = function(obj) {
+                __diag('Object.getPrototypeOf', arguments);
+                return _getPrototypeOf(obj);
+            };
+
+            var _getOwnPropertyNames = Object.getOwnPropertyNames;
+            Object.getOwnPropertyNames = function(obj) {
+                __diag('Object.getOwnPropertyNames', arguments);
+                return _getOwnPropertyNames(obj);
+            };
+
+            var _fromEntries = Object.fromEntries;
+            if (typeof _fromEntries === 'function') {
+                Object.fromEntries = function() {
+                    __diag('Object.fromEntries', arguments);
+                    return _fromEntries.apply(Object, arguments);
+                };
+            }
+
+            var _reflectApply = Reflect.apply;
+            if (typeof _reflectApply === 'function') {
+                Reflect.apply = function() {
+                    __diag('Reflect.apply', arguments);
+                    return _reflectApply.apply(Reflect, arguments);
+                };
+            }
+
+            var _reflectConstruct = Reflect.construct;
+            if (typeof _reflectConstruct === 'function') {
+                Reflect.construct = function() {
+                    __diag('Reflect.construct', arguments);
+                    return _reflectConstruct.apply(Reflect, arguments);
+                };
+            }
+
+            if (typeof Array.from === 'function') {
+                var _arrayFrom = Array.from;
+                Array.from = function() {
+                    __diag('Array.from', arguments);
+                    return _arrayFrom.apply(Array, arguments);
+                };
+            }
+
+            if (typeof Array.prototype.slice === 'function') {
+                var _arraySlice = Array.prototype.slice;
+                Array.prototype.slice = function() {
+                    __diag('Array.prototype.slice', arguments);
+                    return _arraySlice.apply(this, arguments);
+                };
+            }
+
+            var _deleteProperty = Reflect.deleteProperty;
+            if (typeof _deleteProperty === 'function') {
+                Reflect.deleteProperty = function(obj, key) {
+                    __diag('Reflect.deleteProperty', arguments);
+                    return _deleteProperty(obj, key);
+                };
+            }
+        })();"#;
+        if let Err(e) = ctx.eval(boa_engine::Source::from_bytes(diag)) {
+            eprintln!("[js-runtime] object-diag install failed: {e}");
+        }
+    }
     let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
     (shared, count)
 }
@@ -271,6 +640,34 @@ mod tests {
     }
 
     #[test]
+    fn extract_skips_json_and_template_scripts() {
+        let tree = parse(
+            "<html><body>\
+             <script type=\"application/json\">{\"x\":1}</script>\
+             <script type=\"text/template\">{{name}}</script>\
+             <script>__setBody('ok')</script>\
+             </body></html>",
+        );
+        let scripts = extract_scripts(&tree);
+        assert_eq!(scripts.len(), 1);
+        assert!(scripts[0].contains("__setBody('ok')"));
+    }
+
+    #[test]
+    fn extract_accepts_js_and_module_scripts() {
+        let tree = parse(
+            "<html><body>\
+             <script type=\"text/javascript\">__setBody('js')</script>\
+             <script type=\"module\">__appendBody('module')</script>\
+             </body></html>",
+        );
+        let scripts = extract_scripts(&tree);
+        assert_eq!(scripts.len(), 2);
+        assert!(scripts[0].contains("__setBody('js')"));
+        assert!(scripts[1].contains("__appendBody('module')"));
+    }
+
+    #[test]
     fn extract_skips_empty_scripts() {
         let tree = parse(
             "<html><body>\
@@ -311,9 +708,11 @@ mod tests {
                     <script>throw new Error('boom')</script>\
                     <script>__setBody('recovered')</script>\
                     </body></html>";
-        let (shared, executed) = run_scripts(parse(html));
-        // The first script threw, the second succeeded.
-        assert_eq!(executed, 1);
+        let (shared, _executed) = run_scripts(parse(html));
+        // Each script is wrapped in try/catch (M57 compat), so the thrown
+        // error is logged but does not abort the run. The key guarantee this
+        // test verifies: a later script still runs and its DOM mutation
+        // survives — the throw must not poison the pipeline.
         assert_eq!(body_text_content(&shared.borrow()), "recovered");
     }
 
@@ -328,5 +727,30 @@ mod tests {
         let (shared, _) = run_scripts(parse(html));
         let text = body_text_content(&shared.borrow());
         assert!(text.contains("static"), "got: {text}");
+    }
+
+    #[test]
+    fn infinite_loop_script_is_bounded_by_runtime_limit() {
+        // M-cls.2: a runaway `while(true)` must throw (loop iteration limit)
+        // instead of hanging or OOMing. The script sets a sentinel *before*
+        // the loop; because per-script eval is wrapped in try/catch by
+        // execute_scripts_with_base, the throw is swallowed and the next
+        // script's sentinel still runs — proving the loop did not hang.
+        let html = "<html><body>\
+                    <script>__appendBody('before')</script>\
+                    <script>var i=0; while(true){i++;}</script>\
+                    <script>__appendBody('after')</script>\
+                    </body></html>";
+        let start = std::time::Instant::now();
+        let (shared, _) = run_scripts(parse(html));
+        let elapsed = start.elapsed();
+        let text = body_text_content(&shared.borrow());
+        assert!(text.contains("before"), "got: {text}");
+        assert!(text.contains("after"), "got: {text}");
+        // Must finish fast (limit kicks in), not hang for seconds.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "runaway loop took {elapsed:?}, limit not enforced"
+        );
     }
 }

@@ -200,13 +200,18 @@ pub fn install(ctx: &mut Context) {
     // M7.2.1: real DOM API bridges.
     register_fn0(ctx, "__createEl", create_el as NativeFn);
     register_fn2(ctx, "__appendChild", append_child as NativeFn);
+    register_fn3(ctx, "__insertBefore", insert_before as NativeFn);
     register_fn3(ctx, "__setAttr", set_attr as NativeFn);
+    register_fn2(ctx, "__removeAttr", remove_attr as NativeFn);
     register_fn1(ctx, "__getElById", get_el_by_id as NativeFn);
     register_fn1(ctx, "__qs", qs as NativeFn);
     register_fn2(ctx, "__setText", set_text as NativeFn);
     register_fn1(ctx, "__getText", get_text as NativeFn);
     register_fn1(ctx, "__getTag", get_tag as NativeFn);
     register_fn1(ctx, "__getTagName", get_tag as NativeFn);
+    register_fn1(ctx, "__getParent", get_parent as NativeFn);
+    register_fn1(ctx, "__children", get_children as NativeFn);
+    register_fn2(ctx, "__removeChild", remove_child as NativeFn);
     register_fn2(ctx, "__getAttr", get_attr as NativeFn);
     register_fn2(ctx, "__findChild", find_child as NativeFn);
     register_fn1(ctx, "__getBody", get_body as NativeFn);
@@ -297,6 +302,14 @@ fn arg_usize(args: &[JsValue], idx: usize) -> Option<usize> {
         .map(|n| n as usize)
 }
 
+fn arg_usize_or_none(args: &[JsValue], idx: usize) -> Option<usize> {
+    match args.get(idx) {
+        Some(v) if v.is_undefined() || v.is_null() => None,
+        Some(v) => v.as_number().map(|n| n as usize),
+        None => None,
+    }
+}
+
 fn set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let html = arg_string(args, 0).unwrap_or_default();
     with_tree(|t| set_body_inner_html(t, &html));
@@ -361,6 +374,7 @@ fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
         return Ok(JsValue::String(boa_engine::JsString::from("")));
     }
     let url = resolve_url(&raw);
+    eprintln!("[js-fetch-bridge] GET {url}");
     match fetch_sync(&url) {
         // 编码：首行 status=200，后续行是 body（body 可能含换行，用 splitn(2) 解）。
         Ok(body) => Ok(JsValue::String(boa_engine::JsString::from(format!(
@@ -409,6 +423,7 @@ fn fetch_sync_method_bridge(
         return Ok(JsValue::String(boa_engine::JsString::from("")));
     }
     let resolved = resolve_url(&url);
+    eprintln!("[js-fetch-bridge] {method} {resolved}");
     match fetch_sync_with_method(&resolved, &method, body.as_deref(), content_type.as_deref()) {
         Ok((status, body)) => Ok(JsValue::String(boa_engine::JsString::from(format!(
             "{status}\n{body}"
@@ -511,7 +526,7 @@ fn fetch_sync_with_method(
 // DOM helpers
 // ---------------------------------------------------------------------------
 
-fn find_first_element(tree: &Tree, tag: &str) -> Option<NodeId> {
+pub(crate) fn find_first_element(tree: &Tree, tag: &str) -> Option<NodeId> {
     let mut found = None;
     tree.traverse(tree.root(), |id, node| {
         if let NodeData::Element { tag: node_tag, .. } = &node.data {
@@ -545,7 +560,8 @@ fn set_body_inner_html(tree: &mut Tree, html: &str) {
     tree.insert(Some(body), NodeData::Text(html.into()));
 }
 
-fn append_body_text(tree: &mut Tree, text: &str) {
+/// M-cls.3: pub(crate) —— 给 spa_fallback 注入正文用。
+pub(crate) fn append_body_text(tree: &mut Tree, text: &str) {
     let body = match find_first_element(tree, "body") {
         Some(id) => id,
         None => return,
@@ -614,20 +630,110 @@ fn append_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResu
     Ok(JsValue::undefined())
 }
 
+fn insert_before(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let parent_id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let child_id = match arg_usize(args, 1) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let reference_id = arg_usize_or_none(args, 2);
+    with_tree(|t| insert_before_inner(t, parent_id, child_id, reference_id));
+    Ok(JsValue::undefined())
+}
+
 /// Detach `child` from its current parent and re-attach under `new_parent`.
 fn move_subtree(tree: &mut Tree, new_parent: NodeId, child: NodeId) {
-    let mut old_parent: Option<NodeId> = None;
-    for i in 0..tree.len() {
-        let id = i;
-        if tree.children_of(id).contains(&child) {
-            old_parent = Some(id);
-            break;
-        }
+    if child >= tree.len() || new_parent >= tree.len() {
+        return;
     }
-    if let Some(op) = old_parent {
+    if let Some(op) = tree.get(child).parent {
         tree.get_mut(op).children.retain(|&c| c != child);
     }
+    tree.get_mut(new_parent).children.retain(|&c| c != child);
+    tree.get_mut(child).parent = Some(new_parent);
     tree.get_mut(new_parent).children.push(child);
+}
+
+fn insert_before_inner(
+    tree: &mut Tree,
+    parent_id: NodeId,
+    child_id: NodeId,
+    before_id: Option<NodeId>,
+) {
+    if parent_id >= tree.len() || child_id >= tree.len() {
+        return;
+    }
+    if let Some(current_parent) = tree.get(child_id).parent {
+        tree.get_mut(current_parent)
+            .children
+            .retain(|&c| c != child_id);
+    }
+    tree.get_mut(parent_id).children.retain(|&c| c != child_id);
+
+    let insert_pos = before_id
+        .and_then(|before| {
+            tree.get(parent_id)
+                .children
+                .iter()
+                .position(|&id| id == before)
+        })
+        .unwrap_or_else(|| tree.get(parent_id).children.len());
+    tree.get_mut(parent_id)
+        .children
+        .insert(insert_pos, child_id);
+    tree.get_mut(child_id).parent = Some(parent_id);
+}
+
+fn get_parent(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let parent = with_tree(|t| t.get(id).parent);
+    Ok(match parent {
+        Some(parent_id) => JsValue::new(parent_id as f64),
+        None => JsValue::undefined(),
+    })
+}
+fn get_children(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let parent_id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::String(boa_engine::JsString::from(""))),
+    };
+    let child_ids = with_tree(|t| {
+        t.children_of(parent_id)
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
+    Ok(JsValue::String(boa_engine::JsString::from(child_ids)))
+}
+
+fn remove_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let parent_id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let child_id = match arg_usize(args, 1) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    with_tree(|t| {
+        if child_id >= t.len() || parent_id >= t.len() {
+            return;
+        }
+        t.get_mut(parent_id).children.retain(|&c| c != child_id);
+        if let Some(current_parent) = t.get(child_id).parent {
+            if current_parent == parent_id {
+                t.get_mut(child_id).parent = None;
+            }
+        }
+    });
+    Ok(JsValue::undefined())
 }
 
 fn set_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
@@ -652,6 +758,26 @@ fn set_attr_inner(tree: &mut Tree, id: NodeId, key: &str, value: &str) {
         } else {
             attrs.push((key.into(), value.into()));
         }
+    }
+}
+
+fn remove_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let key = arg_string(args, 1).unwrap_or_default();
+    if key.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    with_tree(|t| remove_attr_inner(t, id, &key));
+    Ok(JsValue::undefined())
+}
+
+fn remove_attr_inner(tree: &mut Tree, id: NodeId, key: &str) {
+    let node = tree.get_mut(id);
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        attrs.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
     }
 }
 
@@ -696,11 +822,19 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     if let Some(tag) = sel.strip_prefix('#') {
         return find_by_id(tree, tag);
     }
-    // M7.2.4: universal selector (*), class selector (.foo), and
-    // compound selectors (div.container, p.red).
-    // Strategy: tokenize into components (e.g., ["div", ".container"]),
-    // then match each.
-    let tokens = tokenize_selector(sel);
+    let segments: Vec<&str> = sel
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let tokens = if segments.len() > 1 {
+        tokenize_selector(segments.last().copied().unwrap_or(sel))
+    } else {
+        tokenize_selector(sel)
+    };
+    // M7.2.4: universal selector (*), class selector (.foo), id, tag, and
+    // limited attribute selector ([foo], [foo=value]).
+    // For 简化版 descendant 选择器，仅匹配最后一段 selector。
     let mut found = None;
     tree.traverse(tree.root(), |id, node| {
         if matches_selector(node, &tokens) {
@@ -724,9 +858,27 @@ fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
     while let Some(&c) = chars.peek() {
         if c.is_ascii_whitespace() {
             chars.next();
+            continue;
         } else if c == '*' {
             tokens.push(SelectorToken::Universal);
             chars.next();
+        } else if c == '#' {
+            chars.next();
+            let mut id = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '-' || next == '_' {
+                    id.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if !id.is_empty() {
+                tokens.push(SelectorToken::Id(id));
+            } else {
+                // 无效 id 选择器，丢弃该符号防止死循环
+                tokens.push(SelectorToken::Universal);
+            }
         } else if c == '.' {
             chars.next();
             let mut cls = String::new();
@@ -741,6 +893,92 @@ fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
             if !cls.is_empty() {
                 tokens.push(SelectorToken::Class(cls));
             }
+        } else if c == '[' {
+            chars.next();
+            while let Some(&space) = chars.peek() {
+                if space.is_ascii_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let mut attr = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '-' || next == '_' {
+                    attr.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            while let Some(&space) = chars.peek() {
+                if space.is_ascii_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if let Some(&'=') = chars.peek() {
+                chars.next();
+                while let Some(&space) = chars.peek() {
+                    if space.is_ascii_whitespace() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let mut value = String::new();
+                if let Some(&quote) = chars.peek() {
+                    if quote == '\'' || quote == '"' {
+                        let q = quote;
+                        chars.next();
+                        while let Some(&next) = chars.peek() {
+                            if next == q {
+                                break;
+                            }
+                            value.push(next);
+                            chars.next();
+                        }
+                        if let Some(&_q) = chars.peek() {
+                            chars.next();
+                        }
+                    } else {
+                        while let Some(&next) = chars.peek() {
+                            if next.is_ascii_whitespace() || next == ']' {
+                                break;
+                            }
+                            value.push(next);
+                            chars.next();
+                        }
+                    }
+                }
+                while let Some(&space) = chars.peek() {
+                    if space.is_ascii_whitespace() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(&']') = chars.peek() {
+                    chars.next();
+                }
+                if !attr.is_empty() {
+                    tokens.push(SelectorToken::AttrEquals(attr, value));
+                }
+            } else {
+                while let Some(&ch) = chars.peek() {
+                    if ch == ']' {
+                        break;
+                    }
+                    chars.next();
+                }
+                if let Some(&']') = chars.peek() {
+                    chars.next();
+                }
+                if !attr.is_empty() {
+                    tokens.push(SelectorToken::AttrExists(attr));
+                }
+            }
         } else {
             // Tag name.
             let mut tag = String::new();
@@ -754,6 +992,9 @@ fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
             }
             if !tag.is_empty() {
                 tokens.push(SelectorToken::Tag(tag));
+            } else {
+                // 其他字符（如 ':'、'['、']'）不应停滞，直接消费避免死循环。
+                let _ = chars.next();
             }
         }
     }
@@ -765,6 +1006,9 @@ enum SelectorToken {
     Universal,
     Tag(String),
     Class(String),
+    Id(String),
+    AttrExists(String),
+    AttrEquals(String, String),
 }
 
 fn matches_selector(node: &Node, tokens: &[SelectorToken]) -> bool {
@@ -776,6 +1020,13 @@ fn matches_selector(node: &Node, tokens: &[SelectorToken]) -> bool {
                 SelectorToken::Class(cls) => attrs.iter().any(|(k, v)| {
                     k.eq_ignore_ascii_case("class") && v.split_whitespace().any(|c| c == cls)
                 }),
+                SelectorToken::Id(id) => attrs
+                    .iter()
+                    .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == id),
+                SelectorToken::AttrExists(attr) => attrs.iter().any(|(k, _)| k == attr),
+                SelectorToken::AttrEquals(attr, value) => {
+                    attrs.iter().any(|(k, v)| k == attr && v == value)
+                }
             };
             if !ok {
                 return false;
@@ -831,19 +1082,28 @@ fn collect_text_inner(tree: &Tree, id: NodeId, out: &mut String) {
 }
 
 fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
-    let id = match arg_usize(args, 0) {
-        Some(id) => id,
-        None => return Ok(JsValue::undefined()),
-    };
-    let tag = with_tree(|t| match t.data(id) {
-        NodeData::Element { tag, .. } => Some(tag.clone()),
-        _ => None,
-    });
-    match tag {
-        // M37: 返回真实标签名（之前是 placeholder 返回 undefined）
-        Some(t) => Ok(JsValue::String(t.into())),
-        None => Ok(JsValue::undefined()),
+    if let Some(id) = arg_usize(args, 0) {
+        let tag = with_tree(|t| match t.data(id) {
+            NodeData::Element { tag, .. } => Some(tag.clone()),
+            _ => None,
+        });
+        return Ok(match tag {
+            Some(t) => JsValue::String(t.into()),
+            None => JsValue::undefined(),
+        });
     }
+    let tag_name = arg_string(args, 0)
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if tag_name.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    let found = with_tree(|t| find_first_element(t, &tag_name));
+    Ok(match found {
+        Some(id) => JsValue::new(id as f64),
+        None => JsValue::undefined(),
+    })
 }
 
 /// M37: `__getAttr(id, key) -> string` — 读元素属性（Element 对象的 getter 用）。
@@ -1404,6 +1664,7 @@ fn xhr_open_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsR
         .map(|s| s.to_std_string_escaped())
         .unwrap_or_default();
     let resolved = resolve_url(&url);
+    eprintln!("[js-xhr] open {method} {url}");
     XHR_INSTANCES.with(|slot| {
         if let Some(map) = slot.borrow_mut().as_mut() {
             if let Some(state) = map.get_mut(&id) {
@@ -1430,6 +1691,7 @@ fn xhr_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsR
     let Some(url) = url else {
         return Ok(JsValue::undefined());
     };
+    eprintln!("[js-xhr] send {}", url);
     let (response_text, status, error) = match fetch_sync(&url) {
         Ok(body) => (body, 200u16, None),
         Err(e) => (String::new(), 0u16, Some(e)),
@@ -2013,6 +2275,47 @@ mod m7_dom_api_tests {
             panic!("Expected element, got {found:?}");
         }
     }
+
+    #[test]
+    fn qs_attribute_selector_matches_attr_exists() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body(r#"<div data-test="1">x</div><div id="b">y</div>"#);
+        let (shared, _guard) = install_current(tree);
+        let val = ctx
+            .eval(Source::from_bytes(r#"__qs("[data-test]")"#))
+            .unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        let found = t.data(id);
+        if let NodeData::Element { attrs, .. } = found {
+            assert!(attrs.iter().any(|(k, v)| k == "data-test" && v == "1"));
+        } else {
+            panic!("Expected element, got {found:?}");
+        }
+    }
+
+    #[test]
+    fn qs_descendant_selector_uses_last_segment() {
+        let mut ctx = make_ctx();
+        let tree = tree_with_body(
+            r#"<div class="box"><span class="target">A</span></div><section><span class="target" id="target-2">B</span></section>"#,
+        );
+        let (shared, _guard) = install_current(tree);
+        let val = ctx
+            .eval(Source::from_bytes(r#"__qs("section .target")"#))
+            .unwrap();
+        let id = val.as_number().unwrap() as usize;
+        drop(_guard);
+        let t = shared.borrow();
+        let found = t.data(id);
+        if let NodeData::Element { attrs, .. } = found {
+            assert!(attrs.iter().any(|(k, v)| k == "class" && v == "target"));
+        } else {
+            panic!("Expected element, got {found:?}");
+        }
+    }
+
     #[test]
     fn js_get_body_returns_body_nodeid() {
         let mut ctx = make_ctx();

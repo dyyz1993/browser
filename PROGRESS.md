@@ -24,6 +24,34 @@
 
 ## 最近变更（倒序）
 
+### M-cls — cls.cn/telegraph SPA 渲染 + 内存自愈护栏 ✅
+- M-cls.1 ✅ 内存自愈护栏（子进程 + RLIMIT_AS + 父进程 RSS 监控 kill）
+- M-cls.2 ✅ 收紧 boa 运行时限制（loop 250K→40K, stack 4096, recursion 256）
+- M-cls.3 ✅ CSR 数据兜底（spa_fallback + host→fetcher 注册表，cls.cn 接 m.cls.cn SSR）
+- M-cls.4 ✅ 大纲文档（assessment + plan）
+- M-cls.5 ✅ 连带回归修复（navigation fixture location getter）
+
+用户诉求：cls.cn/telegraph 能 SPA 渲染 + 内存"内部自愈"（免得 40GB）+ 统一大纲。
+
+**根因**：cls.cn/telegraph 是 Next.js **CSR**，`__NEXT_DATA__` 只有 `{chooseNav}`
+无正文，正文需带签名 XHR（`get_roll_list` errno 10012）。执行 `main.js`(142KB)
+在 boa 0.20 里 eval 内存暴涨到 **6.6GB 被 OOM 杀**，渲染永不完成。
+
+**解法**（纵深防御 + 数据双管）：
+1. 危险 JS 跑在子进程，父进程轮询 RSS（50ms）超 ~400MB 立即 SIGKILL（self-healing）。
+   macOS RLIMIT_AS 不强制，RSS 监控是实际护栏。子进程被杀 → **不重跑 JS**，
+   改 `run_js=false` 渲染静态壳 + CSR 兜底。
+2. CSR 兜底：发现 `m.cls.cn/telegraph` 是 **SSR**，内嵌 `roll_data[]`（20 条
+   brief/ctime/level，无签名）。`spa_fallback` 抠 JSON（自研解析器）注入 body。
+3. host→fetcher 注册表，新 CSR 站点加项即可。
+
+**实测**：峰值 RSS **~415MB**（修复前 6.6GB，降 98.4%），wall **~2s**（修复前
+57s 被杀），输出 20 条真实电报（日期+等级+正文，非 `-.--` 占位符）。
+
+文档：[docs/assessments/M-cls-spa.md](docs/assessments/M-cls-spa.md)（诊断+决策）、
+[docs/plans/M-cls-spa.md](docs/plans/M-cls-spa.md)（步骤+验收）。
+工程门禁：fmt ✅ clippy 0 warnings ✅ **682 tests pass** ✅。
+
 ### M29-M30 — ADR 文档 + 截图优化 + <a> 蓝色渲染 ✅
 - M29.1 ✅ ADR-0003 TLS 后端切换（hyper-rustls → native-tls）
 - M29.2 ✅ wss:// TLS 验证（代码层面确认 ws crate 只支持 ws://）

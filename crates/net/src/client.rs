@@ -98,13 +98,13 @@ impl ClientBuilder {
             builder = builder.user_agent(UA);
         }
 
-        let interceptor = self.interceptor.unwrap_or_else(|| Arc::new(NoopInterceptor));
+        let interceptor = self
+            .interceptor
+            .unwrap_or_else(|| Arc::new(NoopInterceptor));
         let inner = builder.build()?;
         Ok(HttpClient { inner, interceptor })
     }
 }
-
-
 
 impl HttpClient {
     /// Create a new client with default settings.

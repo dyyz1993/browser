@@ -1,9 +1,8 @@
 // Request/response interception framework for browser-net crate
 // M58.1: Define Interceptor trait and contexts
 
-
 use async_trait::async_trait;
-use reqwest::{StatusCode, header::HeaderMap};
+use reqwest::{header::HeaderMap, StatusCode};
 use url::Url;
 
 /// Request context passed to interceptor before sending
@@ -134,7 +133,13 @@ impl Interceptor for LoggingInterceptor {
     }
 
     async fn intercept_response(&self, ctx: ResponseContext) -> ResponseContext {
-        eprintln!("[{} RES] {} {} ({} bytes)", self.log_prefix, ctx.url, ctx.status.as_u16(), ctx.body.len());
+        eprintln!(
+            "[{} RES] {} {} ({} bytes)",
+            self.log_prefix,
+            ctx.url,
+            ctx.status.as_u16(),
+            ctx.body.len()
+        );
         ctx
     }
 }
@@ -195,7 +200,11 @@ impl BlockInterceptor {
 
         // Domain match
         if let Some(host) = url.host_str() {
-            if self.blocked_domains.iter().any(|d| host == d || host.ends_with(&format!(".{}", d))) {
+            if self
+                .blocked_domains
+                .iter()
+                .any(|d| host == d || host.ends_with(&format!(".{}", d)))
+            {
                 return true;
             }
         }
@@ -224,7 +233,10 @@ mod tests {
     fn test_mock_response_json() {
         let mock = MockResponse::json(200, r#"{"status":"ok"}"#);
         assert_eq!(mock.status, StatusCode::OK);
-        assert_eq!(mock.headers.get("content-type").unwrap(), "application/json");
+        assert_eq!(
+            mock.headers.get("content-type").unwrap(),
+            "application/json"
+        );
         assert_eq!(String::from_utf8_lossy(&mock.body), r#"{"status":"ok"}"#);
     }
 
@@ -232,22 +244,30 @@ mod tests {
     fn test_mock_response_html() {
         let mock = MockResponse::html("<html><body>Test</body></html>");
         assert_eq!(mock.status, StatusCode::OK);
-        assert_eq!(mock.headers.get("content-type").unwrap(), "text/html; charset=utf-8");
-        assert_eq!(String::from_utf8_lossy(&mock.body), "<html><body>Test</body></html>");
+        assert_eq!(
+            mock.headers.get("content-type").unwrap(),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&mock.body),
+            "<html><body>Test</body></html>"
+        );
     }
 
     #[test]
     fn test_mock_response_text() {
         let mock = MockResponse::text("Hello, world!");
         assert_eq!(mock.status, StatusCode::OK);
-        assert_eq!(mock.headers.get("content-type").unwrap(), "text/plain; charset=utf-8");
+        assert_eq!(
+            mock.headers.get("content-type").unwrap(),
+            "text/plain; charset=utf-8"
+        );
         assert_eq!(String::from_utf8_lossy(&mock.body), "Hello, world!");
     }
 
     #[test]
     fn test_block_interceptor_exact() {
-        let interceptor = BlockInterceptor::new()
-            .block_exact("https://example.com/tracker.js");
+        let interceptor = BlockInterceptor::new().block_exact("https://example.com/tracker.js");
 
         let ctx = RequestContext {
             url: Url::parse("https://example.com/tracker.js").unwrap(),
@@ -310,8 +330,7 @@ mod tests {
 
     #[test]
     fn test_block_interceptor_no_match() {
-        let interceptor = BlockInterceptor::new()
-            .block_exact("https://blocked.com/bad.js");
+        let interceptor = BlockInterceptor::new().block_exact("https://blocked.com/bad.js");
 
         let ctx = RequestContext {
             url: Url::parse("https://example.com/good.js").unwrap(),

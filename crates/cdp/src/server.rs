@@ -372,7 +372,10 @@ impl CdpSession {
             }
             // ── M49: Emulation domain (device metrics, user agent) ──
             m if m.starts_with("Emulation.") => {
-                let mut st = self.emulation.lock().map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
+                let mut st = self
+                    .emulation
+                    .lock()
+                    .map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
                 match crate::emulation_domain::dispatch(id, m, msg.params.as_ref(), &mut st) {
                     Ok(resp) => (resp, vec![]),
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (

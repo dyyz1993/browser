@@ -14,8 +14,8 @@ pub mod interceptor;
 pub use client::{get, HttpClient};
 pub use error::NetError;
 pub use interceptor::{
-    Interceptor, NoopInterceptor, LoggingInterceptor, BlockInterceptor,
-    RequestContext, ResponseContext, MockResponse
+    BlockInterceptor, Interceptor, LoggingInterceptor, MockResponse, NoopInterceptor,
+    RequestContext, ResponseContext,
 };
 
 #[cfg(test)]

@@ -87,10 +87,7 @@ fn set_user_agent(
 }
 
 /// Emulation.clearDeviceMetricsOverride
-fn clear_device_metrics(
-    id: i64,
-    state: &mut EmulationState,
-) -> Result<String, CdpError> {
+fn clear_device_metrics(id: i64, state: &mut EmulationState) -> Result<String, CdpError> {
     state.clear();
     Ok(CdpMessage::ok_empty(id))
 }
@@ -139,7 +136,12 @@ mod tests {
         params.insert("deviceScaleFactor".to_string(), Json::Number(2.0));
         params.insert("mobile".to_string(), Json::Bool(true));
 
-        let result = dispatch(1, "Emulation.setDeviceMetricsOverride", Some(&Json::Object(params)), &mut st);
+        let result = dispatch(
+            1,
+            "Emulation.setDeviceMetricsOverride",
+            Some(&Json::Object(params)),
+            &mut st,
+        );
         assert!(result.is_ok());
         assert_eq!(st.width, Some(1024));
         assert_eq!(st.height, Some(768));
@@ -153,7 +155,12 @@ mod tests {
         let mut params = BTreeMap::new();
         params.insert("width".to_string(), Json::Number(1024.0));
 
-        let result = dispatch(2, "Emulation.setDeviceMetricsOverride", Some(&Json::Object(params)), &mut st);
+        let result = dispatch(
+            2,
+            "Emulation.setDeviceMetricsOverride",
+            Some(&Json::Object(params)),
+            &mut st,
+        );
         assert!(result.is_ok());
         assert_eq!(st.width, Some(1024));
         assert_eq!(st.height, None);
@@ -165,9 +172,17 @@ mod tests {
     fn test_set_user_agent() {
         let mut st = make_state();
         let mut params = BTreeMap::new();
-        params.insert("userAgent".to_string(), Json::String("MyBot/1.0".to_string()));
+        params.insert(
+            "userAgent".to_string(),
+            Json::String("MyBot/1.0".to_string()),
+        );
 
-        let result = dispatch(3, "Emulation.setUserAgentOverride", Some(&Json::Object(params)), &mut st);
+        let result = dispatch(
+            3,
+            "Emulation.setUserAgentOverride",
+            Some(&Json::Object(params)),
+            &mut st,
+        );
         assert!(result.is_ok());
         assert_eq!(st.user_agent, Some("MyBot/1.0".to_string()));
     }

@@ -13,9 +13,9 @@ use crate::jsonrpc::{CdpError, CdpMessage, Json};
 /// - Input.setInterceptDrags: No-op acknowledgment
 pub fn dispatch(id: i64, method: &str, _params: Option<&Json>) -> Result<String, CdpError> {
     match method {
-        "Input.dispatchMouseEvent"
-        | "Input.dispatchKeyEvent"
-        | "Input.setInterceptDrags" => Ok(CdpMessage::ok_empty(id)),
+        "Input.dispatchMouseEvent" | "Input.dispatchKeyEvent" | "Input.setInterceptDrags" => {
+            Ok(CdpMessage::ok_empty(id))
+        }
         _ => Err(CdpError::MethodNotFound(method.to_string())),
     }
 }
