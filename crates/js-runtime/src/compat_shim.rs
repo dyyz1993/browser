@@ -1513,6 +1513,103 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             };
         }
 
+        // M62: TextEncoder/TextDecoder（UTF-8，fetch/stream 配套）。
+        if (typeof globalThis.TextEncoder !== 'function') {
+            globalThis.TextEncoder = function TextEncoder() {
+                this.encoding = 'utf-8';
+            };
+            globalThis.TextEncoder.prototype.encode = function(str) {
+                str = str || '';
+                var arr = [];
+                for (var i = 0; i < str.length; i++) {
+                    var c = str.charCodeAt(i);
+                    if (c < 0x80) arr.push(c);
+                    else if (c < 0x800) {
+                        arr.push(0xc0 | (c >> 6));
+                        arr.push(0x80 | (c & 0x3f));
+                    } else {
+                        arr.push(0xe0 | (c >> 12));
+                        arr.push(0x80 | ((c >> 6) & 0x3f));
+                        arr.push(0x80 | (c & 0x3f));
+                    }
+                }
+                return new Uint8Array(arr);
+            };
+        }
+        if (typeof globalThis.TextDecoder !== 'function') {
+            globalThis.TextDecoder = function TextDecoder(label) {
+                this.encoding = (label || 'utf-8').toLowerCase();
+            };
+            globalThis.TextDecoder.prototype.decode = function(buf) {
+                if (!buf) return '';
+                var arr = buf.buffer ? new Uint8Array(buf.buffer) : new Uint8Array(buf);
+                var out = '', i = 0;
+                while (i < arr.length) {
+                    var b = arr[i++];
+                    if (b < 0x80) { out += String.fromCharCode(b); }
+                    else if (b < 0xe0) {
+                        var b2 = arr[i++];
+                        out += String.fromCharCode(((b & 0x1f) << 6) | (b2 & 0x3f));
+                    } else {
+                        var b2 = arr[i++], b3 = arr[i++];
+                        out += String.fromCharCode(((b & 0xf) << 12) | ((b2 & 0x3f) << 6) | (b3 & 0x3f));
+                    }
+                }
+                return out;
+            };
+        }
+        // M62: Headers（fetch 配套，键值对存储）。
+        if (typeof globalThis.Headers !== 'function') {
+            globalThis.Headers = function Headers(init) {
+                this.__h = {};
+                if (init) {
+                    if (typeof init.forEach === 'function') {
+                        init.forEach(function(v, k) { this[k.toLowerCase()] = v; }, this.__h);
+                    } else {
+                        for (var k in init) { this.__h[k.toLowerCase()] = init[k]; }
+                    }
+                }
+            };
+            globalThis.Headers.prototype.get = function(k) { return this.__h[k.toLowerCase()] || null; };
+            globalThis.Headers.prototype.set = function(k, v) { this.__h[k.toLowerCase()] = v; };
+            globalThis.Headers.prototype.append = function(k, v) {
+                var lk = k.toLowerCase();
+                if (this.__h[lk]) this.__h[lk] += ', ' + v;
+                else this.__h[lk] = v;
+            };
+            globalThis.Headers.prototype.has = function(k) { return k.toLowerCase() in this.__h; };
+            globalThis.Headers.prototype.delete = function(k) { delete this.__h[k.toLowerCase()]; };
+        }
+        // M62: FormData（表单数据，键值对）。
+        if (typeof globalThis.FormData !== 'function') {
+            globalThis.FormData = function FormData() { this.__d = {}; };
+            globalThis.FormData.prototype.append = function(k, v) {
+                if (!this.__d[k]) this.__d[k] = [];
+                this.__d[k].push(v);
+            };
+            globalThis.FormData.prototype.get = function(k) { return this.__d[k] ? this.__d[k][0] : null; };
+            globalThis.FormData.prototype.has = function(k) { return k in this.__d; };
+        }
+        // M62: Blob（二进制数据，简化版存字符串）。
+        if (typeof globalThis.Blob !== 'function') {
+            globalThis.Blob = function Blob(parts, opts) {
+                this.size = 0;
+                this.type = (opts && opts.type) || '';
+                this.__text = '';
+                if (parts) {
+                    for (var i = 0; i < parts.length; i++) {
+                        var s = String(parts[i]);
+                        this.__text += s;
+                        this.size += s.length;
+                    }
+                }
+            };
+            globalThis.Blob.prototype.text = function() {
+                var self = this;
+                return Promise.resolve(self.__text);
+            };
+        }
+
         // M62: queueMicrotask —— 用 Promise 微任务队列实现（boa 0.21 支持）。
         if (typeof globalThis.queueMicrotask !== 'function') {
             globalThis.queueMicrotask = function(cb) {

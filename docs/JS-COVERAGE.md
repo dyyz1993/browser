@@ -16,10 +16,10 @@
 
 | 指标 | 当前值 | 补测试后 |
 |------|--------|---------|
-| 二进制大小（release） | 14MB | 14MB（不变） |
+| 二进制大小（release） | 14MB | 14MB（28 项测试 + 5 API polyfill，仍不变） |
 | 静态站峰值 RSS（example.com） | 14MB | _待测_ |
 | CSR 站峰值 RSS（seo.box） | 95MB | _待测_ |
-| 测试总数 | 764（+18 JS 特性含事件/qsa/microtask） | 稳定增长 |
+| 测试总数 | 774（+28 JS 特性全入库） | 稳定增长 |
 
 ---
 
@@ -55,8 +55,8 @@
 | **Proxy** | ✅ | integration_js_features | Vue 3 响应式硬依赖已满足 |
 | **Reflect** | ✅ 原生 | 无测试 | M62 移除包装 |
 | 迭代器协议 | ✅ | for...of 隐式验证 | |
-| 生成器 function* | ❓ | | |
-| ES Modules import | ❓ | | |
+| 生成器 function* | ✅ | integration_js_features | |
+| ES Modules import | ⚠️ 未测 | 静态 import 需模块加载器 | |
 
 ---
 
@@ -141,7 +141,7 @@
 | queueMicrotask | ✅ | integration_js_features | |
 | MutationObserver | ❌ | |
 | AbortController | ⚠️ | |
-| Headers/FormData/Blob | ❌ | fetch 配套缺 |
+| Headers/FormData/Blob | ✅ | integration_js_features（简化 polyfill） |
 | console.* | ✅ | |
 
 ---

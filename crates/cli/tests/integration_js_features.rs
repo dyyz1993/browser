@@ -363,6 +363,197 @@ order.push('queued');
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn es6_generators() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+function* gen() { yield 1; yield 2; yield 3; }
+var sum = 0;
+for (var v of gen()) { sum += v; }
+document.getElementById('out').textContent = 'GEN_OK ' + sum;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("GEN_OK 6"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn es2020_optional_chaining_nullish() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var obj = { a: { b: 42 } };
+var val = obj?.a?.b ?? 0;
+var x = null;
+var y = x ?? 'fallback';
+document.getElementById('out').textContent = 'CHAIN_OK ' + val + ' ' + y;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CHAIN_OK 42 fallback"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn es2020_logical_assignment() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var a = false; a ||= true;
+var b = true; b &&= false;
+var c = null; c ??= 'set';
+document.getElementById('out').textContent = 'LOGIC_OK ' + a + ' ' + b + ' ' + c;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("LOGIC_OK true false set"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn es2020_bigint() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var big = 9007199254740993n;
+var sum = big + 1n;
+document.getElementById('out').textContent = 'BIGINT_OK ' + typeof big + ' ' + (sum > big);
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BIGINT_OK bigint true"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn es2021_weakref() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var obj = { data: 42 };
+var wr = new WeakRef(obj);
+var derefed = wr.deref();
+document.getElementById('out').textContent = 'WEAKREF_OK ' + derefed.data;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("WEAKREF_OK 42"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn es2021_numeric_separators() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var n = 1_000_000;
+var hex = 0xFF_FF;
+document.getElementById('out').textContent = 'NUMSEP_OK ' + n + ' ' + hex;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NUMSEP_OK 1000000 65535"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_url_and_search_params() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var u = new URL('https://x.com:8080/a/b?c=1&d=2#hash');
+var sp = new URLSearchParams('x=10&y=20');
+document.getElementById('out').textContent = 'URL_OK ' + u.host + ' ' + u.pathname + ' ' + sp.get('y');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("URL_OK x.com:8080 /a/b 20"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_structured_clone() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var orig = { items: [1, 2, 3], nested: { val: 42 } };
+var copy = structuredClone(orig);
+copy.items.push(4);
+document.getElementById('out').textContent = 'CLONE_OK ' + orig.items.length + ' ' + copy.items.length + ' ' + copy.nested.val;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CLONE_OK 3 4 42"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_text_encoder_decoder() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var te = new TextEncoder();
+var enc = te.encode('hello');
+var td = new TextDecoder();
+var dec = td.decode(enc);
+document.getElementById('out').textContent = 'TEXTENC_OK ' + enc.length + ' ' + dec;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("TEXTENC_OK 5 hello"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_headers_formdata_blob() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var h = new Headers({ 'Content-Type': 'application/json' });
+h.append('X-Test', '1');
+var fd = new FormData();
+fd.append('name', 'alice');
+var blob = new Blob(['data'], { type: 'text/plain' });
+document.getElementById('out').textContent = 'HFB_OK ' + h.get('content-type') + ' ' + fd.get('name') + ' ' + blob.size;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("HFB_OK application/json alice 4"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
