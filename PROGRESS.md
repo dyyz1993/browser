@@ -24,6 +24,13 @@
 
 ## 最近变更（倒序）
 
+### M59 — `browser fetch` 爬虫命令 + 独立 extractor crate（设计完成，实现 🚧）
+- 目标：`browser fetch <url>` 当 curl 用，支持 `--format markdown|html|text|links`。
+- 设计依据：借鉴 xbrowser `scrape`（已验证）+ Firecrawl 内容提取管线（42 选择器噪声过滤）。
+- 关键决策：过滤器独立成 `crates/extractor`（后置插件，不碰 net/js-runtime）。
+- 验收要求：L3 真实站点对标 xbrowser，确保主内容提取不比别人差。
+- 设计文档：[docs/plans/M59-fetch-command-design.md](./docs/plans/M59-fetch-command-design.md)。
+
 ### M58 — reqwest 启用 brotli/gzip/deflate 解码（Vercel/CDN 压缩站可爬）✅
 - 根因：`seo.box` 等 Vercel 托管站点默认对 `text/html` 大响应做 Brotli 压缩
   （`content-encoding: br`）。`browser-net` 的 reqwest 未启用解码 feature，收到
