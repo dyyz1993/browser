@@ -440,6 +440,7 @@ dependencies = [
  "browser-cookie",
  "browser-css-engine",
  "browser-dom",
+ "browser-extractor",
  "browser-gui",
  "browser-html-parser",
  "browser-js-runtime",

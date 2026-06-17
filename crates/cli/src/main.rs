@@ -110,6 +110,31 @@ enum Cmd {
         #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
         js_memory_limit_mb: u64,
     },
+    /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
+    /// Acts as a curl-like scraper for SPA pages. Output format is controlled
+    /// by --format (markdown|html|text|links).
+    Fetch {
+        url: String,
+        /// Output format: markdown (default), html, text, or links.
+        #[arg(long, default_value = "markdown")]
+        format: String,
+        /// CSS selector to extract only matching subtrees (e.g. "table tr").
+        #[arg(long)]
+        selector: Option<String>,
+        /// Strip navigation/footer/ads noise (Firecrawl-style). Default true.
+        /// Pass --only-main-content=false to keep full page.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        only_main_content: bool,
+        /// Skip <script> execution (faster for known-static pages).
+        #[arg(long)]
+        no_js: bool,
+        /// Output structured JSON {url, title, content} instead of raw content.
+        #[arg(long)]
+        json: bool,
+        /// Render width (affects text wrapping for text/markdown).
+        #[arg(long, default_value_t = 80)]
+        width: usize,
+    },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
     /// (won't work in headless CI / SSH sessions without X forwarding).
@@ -362,6 +387,50 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Fetch {
+            url,
+            format,
+            selector,
+            only_main_content,
+            no_js,
+            json,
+            width: _width,
+        } => {
+            ensure_cookie_jar();
+            let html = fetch_with_jar(&url).await?;
+            let base = if no_js { None } else { Some(url.clone()) };
+            let tree = parse_html(&html);
+            let shared: browser_js_runtime::SharedTree = if no_js {
+                use std::cell::RefCell;
+                use std::rc::Rc;
+                Rc::new(RefCell::new(tree))
+            } else {
+                let (shared, executed) =
+                    browser_js_runtime::run_scripts_with_base(tree, base.clone());
+                eprintln!("[browser] {executed} script(s) executed");
+                shared
+            };
+            let out_format = browser_extractor::OutputFormat::parse(&format)
+                .map_err(|e| anyhow!("invalid --format: {e}"))?;
+            let opts = browser_extractor::FetchOptions {
+                format: out_format,
+                selector: selector.clone(),
+                only_main_content,
+            };
+            let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
+                .map_err(|e| anyhow!("extract failed: {e}"))?;
+            if json {
+                let title = json_escape(result.title.as_deref().unwrap_or(""));
+                let content_field = json_escape(&result.content);
+                println!(
+                    "{{\"url\":\"{url}\",\"title\":\"{title}\",\"content\":\"{content_field}\"}}"
+                );
+            } else {
+                print!("{}", result.content);
+                println!();
+            }
+            Ok(())
+        }
         Cmd::Open {
             url,
             width,
@@ -445,6 +514,26 @@ fn sandbox_child_render() -> Result<()> {
 /// M15.4: Fetch HTML sharing the current cookie jar (if installed).
 /// 主请求带 Cookie 头 + 把响应 Set-Cookie 存入 jar，让后续 JS fetch
 /// 能继承会话（解决百度等登录态反爬）。
+/// M59: minimal JSON string escaping (avoids serde_json dependency).
+/// Escapes quotes, backslash, control chars. Good enough for --json output.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 async fn fetch_with_jar(url: &str) -> Result<String> {
     let jar = current_cookie_jar();
     let cookie_header = jar
