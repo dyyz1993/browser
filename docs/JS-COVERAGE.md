@@ -109,7 +109,7 @@
 | history.* | ✅ | navigation_shim 测试 |
 | location.* | ✅ | |
 | setTimeout/clearTimeout | ✅ | integration_settimeout (6) |
-| **setInterval/clearInterval** | ❌ 缺失 | 文档假声明 ✅ |
+| **setInterval/clearInterval** | ✅ | 手测（100 次硬上限防死循环） |
 | Image | ✅ | image_shim 测试 |
 
 ### 事件系统

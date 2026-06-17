@@ -29,6 +29,9 @@ use browser_storage::StorageHandle;
 /// A shared, mutate-able handle to the DOM tree that JS sees.
 pub type SharedTree = Rc<RefCell<Tree>>;
 
+/// M62: setInterval entry: (callback, delay_ms, trigger_count)。
+type IntervalEntry = (JsObject, u64, u32);
+
 thread_local! {
     static CURRENT_TREE: RefCell<Option<SharedTree>> = const { RefCell::new(None) };
     static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -41,6 +44,9 @@ thread_local! {
     // M16.2: setTimeout 后端。wheel 存时间+id，callbacks 存 JsObject（boa GC 保活）。
     static TIMER_WHEEL: RefCell<Option<TimerWheel>> = const { RefCell::new(None) };
     static TIMER_CALLBACKS: RefCell<Option<std::collections::HashMap<TimerId, JsObject>>> =
+        const { RefCell::new(None) };
+    // M62: setInterval 后端。存 (callback, delay_ms, count)，drain 时触发后重新 schedule。
+    static INTERVAL_INFO: RefCell<Option<std::collections::HashMap<TimerId, IntervalEntry>>> =
         const { RefCell::new(None) };
     // M17.1: XMLHttpRequest 后端。id → 状态（method/url/response_text）。
     // 爬虫场景：responseText 存 String，onload 由 JS shim 用 setTimeout(0) 触发
@@ -251,6 +257,11 @@ pub fn install(ctx: &mut Context) {
     register_fn1(ctx, "__clearTimeout", clear_timeout_bridge as NativeFn);
     register_fn2(ctx, "setTimeout", set_timeout_bridge as NativeFn);
     register_fn1(ctx, "clearTimeout", clear_timeout_bridge as NativeFn);
+    // M62: setInterval / clearInterval（Web 标准，文档之前假声明已实现）。
+    register_fn2(ctx, "__setInterval", set_interval_bridge as NativeFn);
+    register_fn1(ctx, "__clearInterval", clear_timeout_bridge as NativeFn); // 复用 clear 逻辑
+    register_fn2(ctx, "setInterval", set_interval_bridge as NativeFn);
+    register_fn1(ctx, "clearInterval", clear_timeout_bridge as NativeFn);
     // M17.1: XMLHttpRequest bridges（__xhr* 内部名，XMLHttpRequest shim 用）。
     register_fn0(ctx, "__xhrCreate", xhr_create_bridge as NativeFn);
     register_fn3(ctx, "__xhrOpen", xhr_open_bridge as NativeFn);
@@ -1366,6 +1377,48 @@ pub fn current_cookie_jar() -> Option<CookieHandle> {
     CURRENT_COOKIE.with(|slot| slot.borrow().as_ref().map(Clone::clone))
 }
 
+// ===== M62: setInterval event loop 后端 =====
+
+/// `__setInterval(callback: Function, delay: number) -> number`
+/// 注册一个重复 timer。每次触发后自动重新 schedule（除非 clearInterval）。
+fn set_interval_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let callback = match args.first().and_then(|v| v.as_object()) {
+        Some(obj) if obj.is_callable() => obj.clone(),
+        _ => return Ok(JsValue::undefined()),
+    };
+    let delay_ms = args
+        .get(1)
+        .and_then(|v| v.as_number())
+        .map(|n| if n < 0.0 { 0u64 } else { n as u64 })
+        .unwrap_or(0);
+    ensure_eventloop();
+    // 确保 INTERVAL_INFO 存在
+    INTERVAL_INFO.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(std::collections::HashMap::new());
+        }
+    });
+    let id = TIMER_WHEEL.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let wheel = slot.as_mut().expect("wheel ensured");
+        wheel.schedule(delay_ms, std::time::Instant::now())
+    });
+    // 存 callback 两份：TIMER_CALLBACKS（drain 取）+ INTERVAL_INFO（触发后重新 schedule）
+    TIMER_CALLBACKS.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .expect("callbacks ensured")
+            .insert(id, callback.clone());
+    });
+    INTERVAL_INFO.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .expect("interval info ensured")
+            .insert(id, (callback, delay_ms, 0u32));
+    });
+    Ok(JsValue::new(id.raw() as f64))
+}
+
 // ===== M16.2: setTimeout / clearTimeout event loop 后端 =====
 
 /// Ensure a timer wheel + callback map exist on the current thread.
@@ -1434,6 +1487,12 @@ fn clear_timeout_bridge(
             cbs.remove(&id);
         }
     });
+    // M62: clearInterval 也清 INTERVAL_INFO，防止 drain 重新 schedule。
+    INTERVAL_INFO.with(|slot| {
+        if let Some(intervals) = slot.borrow_mut().as_mut() {
+            intervals.remove(&id);
+        }
+    });
     Ok(JsValue::undefined())
 }
 
@@ -1455,7 +1514,30 @@ pub fn drain_due_timer_callbacks() -> Vec<JsObject> {
         if let Some(cbs) = slot.as_mut() {
             for id in due_ids {
                 if let Some(cb) = cbs.remove(&id) {
-                    callbacks.push(cb);
+                    callbacks.push(cb.clone());
+                    // M62: 如果是 interval，触发后重新 schedule（不从 INTERVAL_INFO 删除）。
+                    INTERVAL_INFO.with(|islot| {
+                        let mut islot = islot.borrow_mut();
+                        if let Some(intervals) = islot.as_mut() {
+                            if let Some((icb, delay, count)) = intervals.get(&id) {
+                                // M62: 爬虫场景防无限循环，最多触发 100 次。
+                                if *count >= 100 {
+                                    intervals.remove(&id);
+                                    return;
+                                }
+                                let new_id = TIMER_WHEEL.with(|wslot| {
+                                    wslot
+                                        .borrow_mut()
+                                        .as_mut()
+                                        .expect("wheel")
+                                        .schedule(*delay, std::time::Instant::now())
+                                });
+                                cbs.insert(new_id, icb.clone());
+                                intervals.insert(new_id, (icb.clone(), *delay, count + 1));
+                                intervals.remove(&id);
+                            }
+                        }
+                    });
                 }
             }
         }
