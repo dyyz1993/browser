@@ -448,10 +448,39 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 use std::rc::Rc;
                 Rc::new(RefCell::new(tree))
             } else {
-                let (shared, executed) =
-                    browser_js_runtime::run_scripts_with_base(tree, base.clone());
-                eprintln!("[browser] {executed} script(s) executed");
-                shared
+                // M62: 用 catch_unwind 防 boa panic 杀死进程。
+                // 公网未知站点的 JS 可能触发 boa 内部 bug（如 index out of bounds），
+                // panic 后优雅降级为静态 tree（等同 --no-js）。
+                use std::panic::AssertUnwindSafe;
+                let base_for_panic = base.clone();
+                let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    browser_js_runtime::run_scripts_with_base(tree, base_for_panic)
+                }));
+                match result {
+                    Ok((shared, executed)) => {
+                        eprintln!("[browser] {executed} script(s) executed");
+                        shared
+                    }
+                    Err(panic_payload) => {
+                        let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
+                            s.clone()
+                        } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                            (*s).to_string()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        eprintln!(
+                            "[fetch] JS engine panicked (boa bug), falling back to static DOM: {msg}"
+                        );
+                        eprintln!(
+                            "[hint] this site triggers a boa engine bug; use --no-js for reliable extraction"
+                        );
+                        let static_tree = parse_html(&html);
+                        use std::cell::RefCell;
+                        use std::rc::Rc;
+                        Rc::new(RefCell::new(static_tree))
+                    }
+                }
             };
             let out_format = browser_extractor::OutputFormat::parse(&format)
                 .map_err(|e| anyhow!("invalid --format: {e}"))?;
