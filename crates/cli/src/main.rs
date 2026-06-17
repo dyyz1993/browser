@@ -397,6 +397,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             width: _width,
         } => {
             ensure_cookie_jar();
+            let fetch_start = std::time::Instant::now();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
             let tree = parse_html(&html);
@@ -419,6 +420,19 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             };
             let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
                 .map_err(|e| anyhow!("extract failed: {e}"))?;
+            // M59: 启发式提示——重 JS 站 boa 渲染慢/失败时，--no-js 取 SSR 兜底常更快。
+            if !no_js {
+                let content_len = result.content.trim().len();
+                if content_len < 50 {
+                    eprintln!(
+                        "[hint] output nearly empty after JS — try --no-js for SSR fallback (boa may have failed on this SPA)"
+                    );
+                } else if fetch_start.elapsed().as_secs() >= 20 {
+                    eprintln!(
+                        "[hint] render slow — for heavy-JS sites, --no-js may be faster if the site has SSR content"
+                    );
+                }
+            }
             if json {
                 let title = json_escape(result.title.as_deref().unwrap_or(""));
                 let content_field = json_escape(&result.content);
