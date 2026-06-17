@@ -35,13 +35,15 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
     let js = r#"(function() {
         var d = {
             // 数据属性 getter（eval __* 拿当前 DOM 状态）
-            get body() { return __getBody(); },
-            get head() { return __getTag('head'); },
-            get documentElement() { return __getTag('html'); },
+            get body() { return __makeElement(__getBody()); },
+            get head() { return __makeElement(__getTag('head')); },
+            get documentElement() { return __makeElement(__getTag('html')); },
             get title() {
                 var n = __getTag('title');
-                // title 文本在 __getElById 无关，简化：返回空字符串（MVP）
-                return typeof n === 'number' ? '' : '';
+                // title 文本直接读回第一个 <title> 节点文本。
+                return (typeof n === 'number' && typeof __getText === 'function')
+                    ? __getText(n)
+                    : '';
             },
             get cookie() {
                 // 防御：__getCookie 桥可能未安装（cookie 是 M15 后端，
@@ -68,16 +70,26 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
             querySelector: function(sel) {
                 return __makeElement(__qs(sel));
             },
+            querySelectorAll: function(sel) {
+                // MVP: 返回数组，若只依赖首个命中则可继续运行。
+                var first = __qs(sel);
+                return typeof first === 'number' && first >= 0 ? [__makeElement(first)] : [];
+            },
             createElement: function(tag) {
                 return __makeElement(__createEl(tag));
             },
             getElementsByTagName: function(tag) {
                 // MVP: 返回数组，含第一个匹配的 Element 或空数组
-                return __makeElement(__getTag(tag)) ? [__makeElement(__getTag(tag))] : [];
+                var first = __getTag(tag);
+                return typeof first === 'number' && first >= 0 ? [__makeElement(first)] : [];
             },
             createTextNode: function(text) {
-                // MVP: 近似为创建一个文本节点（用 __createEl 占位）
-                return __makeElement(__createEl('__text__'));
+                // MVP: 近似为创建一个文本节点（用 __createEl 占位），并立即设置内容。
+                var node = __makeElement(__createEl('__text__'));
+                if (node && typeof __setText === 'function') {
+                    __setText(node.__nodeId, String(text));
+                }
+                return node;
             },
             addEventListener: function() { /* no-op */ },
             removeEventListener: function() { /* no-op */ },

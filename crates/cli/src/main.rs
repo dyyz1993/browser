@@ -8,6 +8,7 @@
 //! - `browser render-url  <url>`      fetch + parse + execute scripts + render
 
 mod img_ascii;
+mod sandbox;
 mod screenshot;
 
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
 use browser_js_runtime::{
-    current_cookie_jar, ensure_cookie_jar, run_scripts, run_scripts_with_base,
+    current_cookie_jar, ensure_cookie_jar, run_scripts, run_scripts_with_base, try_csr_fallback,
 };
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
 use browser_net::HttpClient;
@@ -104,6 +105,10 @@ enum Cmd {
         /// No-op with --no-js.
         #[arg(long)]
         assert_network_idle: bool,
+        /// M-cls.1: JS 渲染子进程内存硬上限（MB）。vendor bundle 爆涨时内核
+        /// 在子进程内杀掉自己，父进程走 CSR 兜底。0 = 禁用沙箱（进程内渲染）。
+        #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
+        js_memory_limit_mb: u64,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
@@ -133,6 +138,15 @@ enum Cmd {
         /// Port to listen on (Chrome default: 9222).
         #[arg(long, default_value_t = browser_cdp::server::DEFAULT_CDP_PORT)]
         port: u16,
+    },
+    /// M-cls.1: 内部隐藏子命令 —— 在 RLIMIT_AS 受限的子进程里跑一次 JS
+    /// 渲染。父进程（render-url/open）通过 sandbox 模块 spawn 它，stdin 传
+    /// `base_url \x1f width \x1f html`，stdout 收回渲染文本。用户不应直接调用。
+    #[command(hide = true)]
+    JsRender {
+        /// 子进程 RLIMIT_AS 上限（MB）。
+        #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
+        mem_mb: u64,
     },
 }
 
@@ -295,11 +309,39 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             screenshot,
             max_height,
             assert_network_idle,
+            js_memory_limit_mb,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
-            let (text, colored) = render_html_to_string_inner(&html, width, !no_js, base.clone())?;
+            // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。vendor
+            // bundle 爆涨时被内核杀掉，返回 None → 落回进程内渲染（仍会跑
+            // CSR 兜底拿到正文）。no_js 或显式禁用沙箱时直接进程内渲染。
+            let (text, colored) = if !no_js && js_memory_limit_mb > 0 {
+                match sandbox::run_js_render_in_sandbox(&html, &url, width, js_memory_limit_mb) {
+                    Ok(Some(text)) => {
+                        // 沙箱只返回纯文本；colored 仅截图用，按需在进程内补算。
+                        let colored = if screenshot.is_some() {
+                            render_html_to_string_colored(&html, width, true, base.clone())?
+                        } else {
+                            String::new()
+                        };
+                        (text, colored)
+                    }
+                    Ok(None) => {
+                        // 沙箱失败 = JS 太重（OOM 被 kill）或超时。**不重跑 JS**
+                        // （会再次 OOM），改为渲染静态壳 + CSR 数据兜底拿正文。
+                        eprintln!("[sandbox] JS render failed/OOM → static shell + CSR fallback (no JS re-run)");
+                        render_html_to_string_inner_ex(&html, width, false, true, base.clone())?
+                    }
+                    Err(e) => {
+                        eprintln!("[sandbox] infra error: {e}; falling back to in-process render");
+                        render_html_to_string_inner_ex(&html, width, false, true, base.clone())?
+                    }
+                }
+            } else {
+                render_html_to_string_inner(&html, width, !no_js, base.clone())?
+            };
             print!("{text}");
             if let Some(p) = screenshot {
                 screenshot::render_text_to_png(&colored, &p, max_height)
@@ -355,7 +397,48 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .map_err(|e| anyhow!("CDP server error: {e}"))?;
             Ok(())
         }
+        Cmd::JsRender { mem_mb } => {
+            // M-cls.1: 子进程入口。先设内存硬上限，再读 stdin 帧跑渲染。
+            sandbox::apply_memory_limit(mem_mb).ok();
+            sandbox_child_render()
+        }
     }
+}
+
+/// M-cls.1: 子进程主体 —— 读 stdin 帧（`base_url \x1f width \x1f html`），
+/// 跑一次"解析 + 执行脚本 + CSR 兜底 + 布局 + 渲染"，把纯文本写 stdout。
+///
+/// 在 RLIMIT_AS 受限的子进程里执行，所以即便页面 JS 在 boa 里爆涨，内核
+/// 也会杀掉本进程而不波及父进程。任何错误都打 stderr + 以非 0 退出
+/// （父进程据此走 CSR 兜底）。
+fn sandbox_child_render() -> Result<()> {
+    use std::io::{Read, Write};
+    let mut payload = String::new();
+    std::io::stdin()
+        .read_to_string(&mut payload)
+        .map_err(|e| anyhow!("sandbox: read stdin failed: {e}"))?;
+    // 解析帧：base_url \x1f width \x1f html。html 末尾不含分隔符。
+    let mut parts = payload.splitn(3, '\x1f');
+    let base_url = parts.next().unwrap_or("").trim().to_string();
+    let width_str = parts.next().unwrap_or("80").trim();
+    let html = parts.next().unwrap_or("");
+    let width: usize = width_str.parse().unwrap_or(80);
+    let base = if base_url.is_empty() || base_url == "about:blank" {
+        None
+    } else {
+        Some(base_url.clone())
+    };
+    // 复用主渲染管线（含 JS 执行 + CSR 兜底）。失败 → 非 0 退出，父进程兜底。
+    let (plain, _colored) = render_html_to_string_inner(html, width, true, base)?;
+    // 只写纯文本到 stdout（父进程直接打印）。colored 仅 screenshot 用，沙箱不走截图。
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(plain.as_bytes())
+        .map_err(|e| anyhow!("sandbox: write stdout failed: {e}"))?;
+    stdout
+        .flush()
+        .map_err(|e| anyhow!("sandbox: flush stdout failed: {e}"))?;
+    Ok(())
 }
 
 /// Shared render pipeline — prints ASCII to stdout.
@@ -415,16 +498,33 @@ fn render_html_to_string_colored(
 /// M30: returns `(plain_text, colored_text)`. Parse + layout + JS run
 /// exactly **once**; only the final render pass differs (plain vs colored).
 /// Avoids double-executing JS when both stdout and screenshot are needed.
+///
+/// `run_js` = 是否执行 `<script>`；`csr_fallback` = 是否在 JS 后/跳过 JS 时
+/// 尝试 CSR 数据兜底（M-cls.3）。两者解耦：沙箱 JS 失败时父进程会用
+/// `run_js=false, csr_fallback=true` 重渲染——既不重跑会 OOM 的 JS，又能
+/// 拿到 SSR 兜底正文。
 fn render_html_to_string_inner(
     html: &str,
     width: usize,
     run_js: bool,
     base_url: Option<String>,
 ) -> Result<(String, String)> {
+    render_html_to_string_inner_ex(html, width, run_js, run_js, base_url)
+}
+
+/// 同 [`render_html_to_string_inner`]，但 CSR 兜底开关独立于 run_js。
+/// （M-cls.1 沙箱失败回退路径用 `run_js=false, csr_fallback=true`。）
+fn render_html_to_string_inner_ex(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    csr_fallback: bool,
+    base_url: Option<String>,
+) -> Result<(String, String)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let (shared, n) = if base_url.is_some() {
-            run_scripts_with_base(tree, base_url)
+            run_scripts_with_base(tree, base_url.clone())
         } else {
             run_scripts(tree)
         };
@@ -436,6 +536,18 @@ fn render_html_to_string_inner(
     };
     if run_js {
         eprintln!("[browser] {executed} script(s) executed");
+    }
+    // M-cls.3: CSR 数据兜底。JS 跑完若仍是空壳（或 JS 被跳过），且页面是
+    // 已知 CSR 站点，直接拉对应 SSR 数据页注入正文。仅在 csr_fallback 且
+    // 有 base_url 时尝试。失败静默（best-effort，不阻断）。
+    if csr_fallback {
+        if let Some(bu) = base_url.as_deref() {
+            match try_csr_fallback(&shared_tree, bu) {
+                Ok(true) => eprintln!("[csr-fallback] injected data for {bu}"),
+                Ok(false) => {}
+                Err(e) => eprintln!("[csr-fallback] {bu}: {e}"),
+            }
+        }
     }
     // M7.1.6: extract <style> tag contents so they participate in
     // computed styles. Walks the DOM in-tree before the immutable

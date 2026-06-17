@@ -275,9 +275,8 @@ impl CdpSession {
             return Ok(());
         };
         let session_id = msg.session_id.clone(); // M53: flatten session routing
-                                                 // M42: dispatch table is empty — everything is "not found" yet.
-                                                 // M44+ will route "Page.*" to PageHandler, "Runtime.*" to RuntimeHandler, etc.
-                                                 // M50: collect response + post-response events
+                                                 // M44+ routes "Page.*" / "Runtime.*" / etc. to domain handlers.
+                                                 // M50: collect response + post-response events.
         let (resp, post_events): (String, Vec<String>) = match method {
             // ── M42 builtin: Discovery/Target probing ──
             // Puppeteer/Playwright probe these on connect; answering them early
@@ -340,17 +339,70 @@ impl CdpSession {
                 }
             }
             // ── M45: Runtime domain (evaluate JS, enable/disable) ──
+            // M48: evaluate/callFunctionOn 现在跑在绑定到当前页面 DOM tree 的
+            // shimmed ctx 上，所以这里 lock page 取 tree + url 传进去。dispatch
+            // 是同步的，整段在这个 lock 作用域内完成（无 await）。
             m if m.starts_with("Runtime.") => {
-                match crate::runtime_domain::dispatch(id, m, msg.params.as_ref()) {
-                    Ok(resp) => (resp, vec![]),
-                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
-                        CdpMessage::error_response(id, -32601, "Method not found"),
-                        vec![],
-                    ),
-                    Err(e) => (
-                        CdpMessage::error_response(id, -32000, &e.to_string()),
-                        vec![],
-                    ),
+                let Ok(st) = self.page.lock() else {
+                    return Ok(()); // lock poisoned
+                };
+                let tree = &st.tree;
+                let url = st.url.as_str();
+                // M48: Runtime.enable 时，标准浏览器会为每个 execution context
+                // 发 Runtime.executionContextCreated 事件。puppeteer 的 FrameManager
+                // 靠它把 context 绑到 frame（否则 mainWorld/isolatedWorld 永远没就绪，
+                // _createIsolatedWorld 等不到 frame 的 context → newPage() 卡死）。
+                // 单页单 context 模型：发一个 main-world context（id=1, auxData 指向
+                // 主 frame，isDefault=true）。
+                if m == "Runtime.enable" && session_id.is_some() {
+                    let mut ctx = BTreeMap::new();
+                    ctx.insert("id".to_string(), Json::Number(1.0));
+                    ctx.insert("origin".to_string(), Json::String(String::new()));
+                    ctx.insert("name".to_string(), Json::String(String::new()));
+                    ctx.insert(
+                        "auxData".to_string(),
+                        Json::Object({
+                            let mut a = BTreeMap::new();
+                            a.insert(
+                                "frameId".to_string(),
+                                Json::String(crate::discovery::TARGET_ID.to_string()),
+                            );
+                            a.insert("isDefault".to_string(), Json::Bool(true));
+                            a.insert("type".to_string(), Json::String("default".to_string()));
+                            a
+                        }),
+                    );
+                    let event = CdpMessage::event(
+                        "Runtime.executionContextCreated",
+                        Json::Object({
+                            let mut p = BTreeMap::new();
+                            p.insert("context".to_string(), Json::Object(ctx));
+                            p
+                        }),
+                    );
+                    match crate::runtime_domain::dispatch(id, m, msg.params.as_ref(), tree, url) {
+                        Ok(resp) => (resp, vec![event]),
+                        Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                            CdpMessage::error_response(id, -32601, "Method not found"),
+                            vec![event],
+                        ),
+                        Err(e) => (
+                            CdpMessage::error_response(id, -32000, &e.to_string()),
+                            vec![event],
+                        ),
+                    }
+                } else {
+                    match crate::runtime_domain::dispatch(id, m, msg.params.as_ref(), tree, url) {
+                        Ok(resp) => (resp, vec![]),
+                        Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                            CdpMessage::error_response(id, -32601, "Method not found"),
+                            vec![],
+                        ),
+                        Err(e) => (
+                            CdpMessage::error_response(id, -32000, &e.to_string()),
+                            vec![],
+                        ),
+                    }
                 }
             }
             // ── M47: Network domain (getResponseBody, enable/disable) ──
@@ -372,7 +424,10 @@ impl CdpSession {
             }
             // ── M49: Emulation domain (device metrics, user agent) ──
             m if m.starts_with("Emulation.") => {
-                let mut st = self.emulation.lock().map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
+                let mut st = self
+                    .emulation
+                    .lock()
+                    .map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
                 match crate::emulation_domain::dispatch(id, m, msg.params.as_ref(), &mut st) {
                     Ok(resp) => (resp, vec![]),
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
@@ -435,6 +490,24 @@ impl CdpSession {
                         )]
                     }
                     "Target.setAutoAttach" => vec![], // session-level: no-op
+                    // M48: createTarget = puppeteer 的 browser.newPage()。puppeteer 在
+                    // createTarget 返回 {targetId} 后 waitForTarget(t => t._targetId===targetId)，
+                    // 等一个 Target.targetCreated 事件命中。
+                    // 注意：**不发** attachedToTarget——连接级 setAutoAttach(id=3) 已经发过
+                    // attachedToTarget 并建了 session(browser-rs-session-0)。这里再发会让
+                    // puppeteer 重复建同名 session、覆盖 map，导致 enable 命令的 callback
+                    // 漂到被丢弃的旧 session 上 → newPage() 卡死。只发 targetCreated。
+                    "Target.createTarget" => {
+                        let ti = crate::discovery::target_object(&ws_host);
+                        vec![CdpMessage::event(
+                            "Target.targetCreated",
+                            Json::Object({
+                                let mut p = BTreeMap::new();
+                                p.insert("targetInfo".to_string(), ti);
+                                p
+                            }),
+                        )]
+                    }
                     "Target.attachToTarget" | "Target.attachToBrowserTarget" => {
                         vec![CdpMessage::event(
                             "Target.attachedToTarget",
@@ -468,8 +541,27 @@ impl CdpSession {
                 || m.starts_with("Security.")
                 || m.starts_with("Performance.")
                 || m.starts_with("Inspector.")
-                || m.starts_with("Accessibility.") =>
+                || m.starts_with("Accessibility.")
+                || m.starts_with("Audits.")
+                || m.starts_with("WebMCP.")
+                || m.starts_with("BackgroundService.")
+                || m.starts_with("Media.")
+                || m.starts_with("ServiceWorker.")
+                || m.starts_with("HeapProfiler.")
+                || m.starts_with("Profiler.")
+                || m.starts_with("DeviceOrientation.")
+                || m.starts_with("Storage.")
+                || m.starts_with("SystemInfo.")
+                || m.starts_with("Autofill.")
+                || m.starts_with("WebAuthn.")
+                || m.starts_with("Permissions.")
+                || m.starts_with("Cast.")
+                || m.starts_with("Tethering.")
+                || m.starts_with("Tracing.")
+                || m.starts_with("FileSystem.") =>
             {
+                // M48: puppeteer 初始化时会发一大批 *.enable，任何 -32601 都可能
+                // 让它的批量 await 卡住。对未知/未实现的域统一 no-op ack。
                 (CdpMessage::ok_empty(id), vec![])
             }
             _ => (

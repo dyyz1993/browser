@@ -83,6 +83,9 @@ pub fn target_object(ws_host: &str) -> Json {
         )),
     );
     m.insert("id".to_string(), Json::String(TARGET_ID.to_string()));
+    // M48: CDP 的 Target.targetInfo 用 `targetId`（不是 `id`）。puppeteer 的
+    // TargetManager 读 event.targetInfo.targetId 建 target。`id` 留给 /json HTTP 发现。
+    m.insert("targetId".to_string(), Json::String(TARGET_ID.to_string()));
     m.insert("title".to_string(), Json::String("browser-rs".to_string()));
     m.insert("type".to_string(), Json::String("page".to_string()));
     m.insert("attached".to_string(), Json::Bool(true)); // M53: puppeteer checks this

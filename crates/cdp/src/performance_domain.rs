@@ -62,8 +62,7 @@ fn get_metrics(id: i64) -> String {
         }
         output.push_str(&format!(
             r#"{{"name":"{}","value":{}}}"#,
-            metric.0,
-            metric.1
+            metric.0, metric.1
         ));
     }
     output.push_str("]}}}\n");

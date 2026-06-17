@@ -26,6 +26,75 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
         function Element(nodeId) {
             this.__nodeId = nodeId;
         }
+        function __attrGet(nodeId, key) {
+            return (typeof __getAttr === 'function') ? __getAttr(nodeId, key) : null;
+        }
+        function __attrSet(nodeId, key, value) {
+            if (typeof __setAttr === 'function') {
+                __setAttr(nodeId, key, String(value));
+            }
+        }
+        function __attrRemove(nodeId, key) {
+            if (typeof __removeAttr === 'function') {
+                __removeAttr(nodeId, key);
+            }
+        }
+        function __dataAttrName(key) {
+            return 'data-' + String(key).replace(/[A-Z]/g, function(ch) {
+                return '-' + ch.toLowerCase();
+            });
+        }
+        function __readStyleProp(nodeId, prop) {
+            var style = __attrGet(nodeId, 'style');
+            if (typeof style !== 'string' || !style) return '';
+            var parts = style.split(';');
+            for (var i = 0; i < parts.length; i++) {
+                var pair = parts[i].split(':');
+                if (pair.length < 2) continue;
+                var key = pair[0].trim();
+                if (key === prop) {
+                    return pair.slice(1).join(':').trim();
+                }
+            }
+            return '';
+        }
+        function __writeStyleProp(nodeId, prop, value) {
+            var style = __attrGet(nodeId, 'style');
+            var text = (typeof style === 'string' && style) ? style : '';
+            var parts = text ? text.split(';') : [];
+            var out = [];
+            var found = false;
+            for (var i = 0; i < parts.length; i++) {
+                var raw = parts[i].trim();
+                if (!raw) continue;
+                var pair = raw.split(':');
+                if (pair.length < 2) continue;
+                var key = pair[0].trim();
+                var val = pair.slice(1).join(':').trim();
+                if (key === prop) {
+                    found = true;
+                    if (value !== '') out.push(prop + ':' + value);
+                } else {
+                    out.push(key + ':' + val);
+                }
+            }
+            if (!found && value !== '') {
+                out.push(prop + ':' + value);
+            }
+            __attrSet(nodeId, 'style', out.join(';'));
+        }
+        function __childListToElements(rawIds) {
+            if (!rawIds) return [];
+            var parts = String(rawIds).split(',');
+            var out = [];
+            for (var i = 0; i < parts.length; i++) {
+                var n = Number(parts[i]);
+                if (isFinite(n) && n >= 0) {
+                    out.push(__makeElement(n));
+                }
+            }
+            return out;
+        }
 
         // ── textContent: getter/setter 反射到 __getText / __setText ──
         Object.defineProperty(Element.prototype, 'textContent', {
@@ -37,10 +106,9 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
         // ── id: getter/setter 反射到 __getAttr / __setAttr ──
         Object.defineProperty(Element.prototype, 'id', {
             get: function() {
-                return (typeof __getAttr === 'function')
-                    ? __getAttr(this.__nodeId, 'id') : '';
+                return __attrGet(this.__nodeId, 'id') || '';
             },
-            set: function(v) { __setAttr(this.__nodeId, 'id', String(v)); },
+            set: function(v) { __attrSet(this.__nodeId, 'id', v); },
             enumerable: true, configurable: true,
         });
 
@@ -59,6 +127,127 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
             set: function(v) { __setText(this.__nodeId, String(v)); },
             enumerable: true, configurable: true,
         });
+        Object.defineProperty(Element.prototype, 'parentNode', {
+            get: function() {
+                var parentId = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : undefined;
+                return __makeElement(parentId);
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'parentElement', {
+            get: function() {
+                var parentId = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : undefined;
+                return __makeElement(parentId);
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'children', {
+            get: function() {
+                var raw = (typeof __children === 'function') ? __children(this.__nodeId) : '';
+                return __childListToElements(raw);
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'childNodes', {
+            get: function() {
+                return this.children;
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'firstChild', {
+            get: function() {
+                return this.children.length > 0 ? this.children[0] : null;
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'lastChild', {
+            get: function() {
+                return this.children.length > 0 ? this.children[this.children.length - 1] : null;
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'classList', {
+            get: function() {
+                return {
+                    add: function() {},
+                    remove: function() {},
+                    contains: function() { return false; }
+                };
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'dataset', {
+            get: function() {
+                var nodeId = this.__nodeId;
+                var ds = {};
+                function defineDatasetProp(name) {
+                    Object.defineProperty(ds, name, {
+                        get: function() {
+                            var v = __attrGet(nodeId, __dataAttrName(name));
+                            return (v === null || v === undefined) ? undefined : String(v);
+                        },
+                        set: function(v) {
+                            __attrSet(nodeId, __dataAttrName(name), v);
+                        },
+                        enumerable: true,
+                        configurable: true
+                    });
+                }
+                defineDatasetProp('dplId');
+                defineDatasetProp('scrollBehavior');
+                return ds;
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'style', {
+            get: function() {
+                var nodeId = this.__nodeId;
+                var style = {
+                    get cssText() {
+                        var v = __attrGet(nodeId, 'style');
+                        return (typeof v === 'string') ? v : '';
+                    },
+                    set cssText(v) {
+                        __attrSet(nodeId, 'style', v || '');
+                    },
+                    getPropertyValue: function(name) {
+                        return __readStyleProp(nodeId, String(name));
+                    },
+                    setProperty: function(name, value) {
+                        __writeStyleProp(nodeId, String(name), String(value));
+                    },
+                    removeProperty: function(name) {
+                        var old = __readStyleProp(nodeId, String(name));
+                        __writeStyleProp(nodeId, String(name), '');
+                        return old;
+                    }
+                };
+                Object.defineProperty(style, 'scrollBehavior', {
+                    get: function() { return __readStyleProp(nodeId, 'scroll-behavior'); },
+                    set: function(v) { __writeStyleProp(nodeId, 'scroll-behavior', String(v)); },
+                    enumerable: true,
+                    configurable: true
+                });
+                return style;
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'nonce', {
+            get: function() {
+                var v = __attrGet(this.__nodeId, 'nonce');
+                return (v === null || v === undefined) ? '' : String(v);
+            },
+            set: function(v) { __attrSet(this.__nodeId, 'nonce', v); },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'nodeName', {
+            get: function() { return this.tagName; },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(Element.prototype, 'ownerDocument', {
+            get: function() { return globalThis.document || null; },
+            enumerable: true, configurable: true,
+        });
 
         // ── 方法 ──
         Element.prototype.appendChild = function(child) {
@@ -67,16 +256,74 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
             }
             return child;
         };
+        Element.prototype.insertBefore = function(child, reference) {
+            if (child && typeof child.__nodeId === 'number') {
+                if (typeof __insertBefore === 'function') {
+                    var refId = (reference && typeof reference.__nodeId === 'number')
+                        ? reference.__nodeId : undefined;
+                    __insertBefore(this.__nodeId, child.__nodeId, refId);
+                } else {
+                    __appendChild(this.__nodeId, child.__nodeId);
+                }
+            }
+            return child;
+        };
         Element.prototype.setAttribute = function(key, value) {
-            __setAttr(this.__nodeId, String(key), String(value));
+            __attrSet(this.__nodeId, String(key), value);
+        };
+        Element.prototype.getAttribute = function(key) {
+            var v = __attrGet(this.__nodeId, String(key));
+            return (v === null || v === undefined) ? null : String(v);
+        };
+        Element.prototype.removeAttribute = function(key) {
+            __attrRemove(this.__nodeId, String(key));
         };
         Element.prototype.getElementById = function(id) {
             var nid = (typeof __findChild === 'function')
                 ? __findChild(this.__nodeId, id) : undefined;
             return (typeof nid === 'number') ? new Element(nid) : null;
         };
+        Element.prototype.querySelectorAll = function() {
+            return [];
+        };
         Element.prototype.addEventListener = function() {};
         Element.prototype.removeEventListener = function() {};
+        Element.prototype.scrollIntoView = function() {};
+        Element.prototype.getClientRects = function() { return []; };
+        Element.prototype.cloneNode = function() {
+            var copy = __makeElement(__createEl(String(this.tagName || '').toLowerCase()));
+            if (!copy) return null;
+            if (this.id) copy.id = this.id;
+            if (this.nonce) copy.nonce = this.nonce;
+            var styleText = this.getAttribute('style');
+            if (styleText) copy.setAttribute('style', styleText);
+            var className = this.getAttribute('class');
+            if (className) copy.setAttribute('class', className);
+            var text = this.textContent;
+            if (text) copy.textContent = text;
+            return copy;
+        };
+        Element.prototype.isEqualNode = function(other) {
+            if (!other || typeof other.__nodeId !== 'number') return false;
+            return this.tagName === other.tagName
+                && this.textContent === other.textContent
+                && this.getAttribute('nonce') === other.getAttribute('nonce')
+                && this.getAttribute('style') === other.getAttribute('style')
+                && this.getAttribute('class') === other.getAttribute('class');
+        };
+        Element.prototype.remove = function() {
+            var parent = __getParent(this.__nodeId);
+            if (typeof parent === 'number' && typeof __removeChild === 'function') {
+                __removeChild(parent, this.__nodeId);
+            }
+        };
+        Element.prototype.removeChild = function(child) {
+            if (child && typeof child.__nodeId === 'number' && typeof __removeChild === 'function') {
+                __removeChild(this.__nodeId, child.__nodeId);
+                return child;
+            }
+            return null;
+        };
 
         // __makeElement 工厂：包装 bridge 返回的 NodeId。
         globalThis.__makeElement = function(nodeId) {
@@ -87,6 +334,8 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
         };
 
         globalThis.Element = Element;
+        globalThis.HTMLElement = Element;
+        globalThis.Node = Element;
     })();
     undefined;"#;
     ctx.eval(Source::from_bytes(js))?;
@@ -223,5 +472,30 @@ mod tests {
             .eval(Source::from_bytes("document.getElementById('t1').tagName"))
             .unwrap();
         assert_eq!(str_result(r), "P");
+    }
+
+    #[test]
+    fn dataset_reads_data_attributes() {
+        let (mut ctx, _g) =
+            setup("<html data-dpl-id=\"abc\"><body><div id=\"t1\">X</div></body></html>");
+        let r = ctx
+            .eval(Source::from_bytes("document.documentElement.dataset.dplId"))
+            .unwrap();
+        assert_eq!(str_result(r), "abc");
+    }
+
+    #[test]
+    fn style_scroll_behavior_round_trips() {
+        let (mut ctx, _g) = setup("<html><body><div id=\"t1\"></div></body></html>");
+        ctx.eval(Source::from_bytes(
+            "document.getElementById('t1').style.scrollBehavior = 'smooth';",
+        ))
+        .unwrap();
+        let r = ctx
+            .eval(Source::from_bytes(
+                "document.getElementById('t1').style.scrollBehavior",
+            ))
+            .unwrap();
+        assert_eq!(str_result(r), "smooth");
     }
 }
