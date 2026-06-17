@@ -81,7 +81,22 @@ const EXCLUDE_NON_MAIN_TAGS: &[&str] = &[
 /// 强制保留的选择器（即使祖先被排除）。保护主内容容器。
 /// Firecrawl FORCE_INCLUDE_MAIN_TAGS + 通用 `article`/`[role=main]` 等价物。
 /// 注：css-engine 不支持属性选择器，`[role=main]` 用 `#main`/`article` 近似。
-const FORCE_INCLUDE_TAGS: &[&str] = &["#main", "article", "main"];
+///
+/// M59 覆盖面调研发现：Vue/React/Nuxt SPA 常用 `#app`/`#nuxt`/`#__nuxt`/
+/// `#root` 做根容器，若不保护会被 EXCLUDE 误删（掘金实测：正文全丢）。
+/// 扩充覆盖常见 SPA 根容器。
+const FORCE_INCLUDE_TAGS: &[&str] = &[
+    "#main",
+    "article",
+    "main",
+    // 常见 SPA 根容器（Vue/Nuxt/React）
+    "#app",
+    "#nuxt",
+    "#__nuxt",
+    "#__layout",
+    "#root",
+    "#juejin",
+];
 
 /// 无条件移除的 tag（不论 only_main_content）。
 const ALWAYS_REMOVE_TAGS: &[&str] = &[

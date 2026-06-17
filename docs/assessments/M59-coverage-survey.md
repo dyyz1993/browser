@@ -37,11 +37,20 @@
 - **Stack Overflow**：返回 403。SO 检测非浏览器请求（可能看 TLS 指纹/请求头
   完整度）。curl 能通（3.8KB），我们 403。**属项目「不做反爬对抗」宗旨边界。**
 
-### 类型 3：JS 引擎差距（3 个）
+### 类型 3：JS 引擎差距 / 纯 SPA（3 个）
 - **gov.cn**：JS 报错（`not a callable function`）→ 渲染空。
   **`--no-js` 兜底完美工作**：拿到 12KB 完整新闻列表（含新闻标题）。
-- **掘金**：JS 复杂（`Reflect.construct` / `Array.from` 兼容问题）→ 超时。
+- **掘金**：纯 SPA（Nuxt.js），SSR 只给导航壳（815B），文章列表靠 JS fetch。
+  深入诊断确认：去 script 后 SSR 可见文本仅 ~800 字节，文章数据全在 JS 里。
+  boa 跑不动其 JS（`Reflect.construct`/`Array.from` 兼容问题）→ 必须 Chrome。
+  **这不是 bug，是 boa 引擎硬限制 + 站点纯 CSR 无 SSR 兜底。**
 - **Firecrawl 文档**：能爬到（标记持平），但跑 JS 耗 45s/138MB。
+
+### 连带改进：FORCE_INCLUDE 扩充（覆盖面调研副产品）
+诊断掘金时发现：force-include 列表只有 `#main`/`article`/`main` 三个，
+Vue/React/Nuxt SPA 常用 `#app`/`#nuxt`/`#__nuxt`/`#root` 做根容器，
+全漏掉 → 正文容器被 EXCLUDE 误删。已扩充 FORCE_INCLUDE_TAGS 覆盖常见
+SPA 根容器，对未来有 SSR 兜底的 Vue/React 站提升保护效果。
 
 ## 修正后的真实覆盖率
 
