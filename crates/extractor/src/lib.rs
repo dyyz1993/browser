@@ -13,10 +13,9 @@
 pub mod clean;
 pub mod format_html;
 pub mod format_links;
+pub mod format_md;
 pub mod format_text;
 pub mod selector;
-
-// format_md.rs 在 Step 3 加入。
 
 use browser_dom::Tree;
 
@@ -125,11 +124,7 @@ fn extract_with_clean(
         OutputFormat::Html => format_html::to_html(tree, selector, &excluded),
         OutputFormat::Text => format_text::to_text(tree, selector, &excluded),
         OutputFormat::Links => format_links::to_links(tree, base_url, selector, &excluded),
-        OutputFormat::Markdown => {
-            // Step 3 实装前，markdown 暂时降级为纯文本（保证命令可用）。
-            eprintln!("[extractor] markdown format not yet implemented, falling back to text");
-            format_text::to_text(tree, selector, &excluded)
-        }
+        OutputFormat::Markdown => format_md::to_markdown(tree, base_url, selector, &excluded),
     }
 }
 
