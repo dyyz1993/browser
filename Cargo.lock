@@ -480,6 +480,16 @@ name = "browser-eventloop"
 version = "0.0.1"
 
 [[package]]
+name = "browser-extractor"
+version = "0.0.1"
+dependencies = [
+ "browser-css-engine",
+ "browser-dom",
+ "browser-html-parser",
+ "url",
+]
+
+[[package]]
 name = "browser-gui"
 version = "0.0.1"
 dependencies = [

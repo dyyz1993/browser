@@ -16,6 +16,7 @@ members = [
     "crates/cli",
     "crates/ws",
     "crates/cdp",
+    "crates/extractor",
 ]
 
 [workspace.package]

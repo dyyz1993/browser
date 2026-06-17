@@ -1,0 +1,22 @@
+[package]
+name = "browser-extractor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Post-render content extraction for the browser project (HTML/text/markdown/links)"
+
+[lib]
+name = "browser_extractor"
+path = "src/lib.rs"
+
+[dependencies]
+# M59: extractor 是后置过滤器，只吃渲染后的 &Tree，严守「不碰 net/js-runtime」边界。
+# 依赖方向：cli ──→ extractor ──→ dom / css-engine / url
+browser-dom = { path = "../dom" }
+browser-css-engine = { path = "../css-engine" }
+# 解析依赖里也需要 html-parser 来从 fixture HTML 造 tree（仅测试用）。
+url = "2"
+
+[dev-dependencies]
+browser-html-parser = { path = "../html-parser" }
