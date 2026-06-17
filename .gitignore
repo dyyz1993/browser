@@ -12,3 +12,5 @@ metadata/
 objects/
 target/
 *.log
+# M48: Puppeteer e2e 依赖（体积大，不进 git）
+tests/e2e/node_modules/

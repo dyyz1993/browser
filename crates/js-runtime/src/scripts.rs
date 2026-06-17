@@ -600,6 +600,67 @@ pub fn run_scripts_with_base(
     (shared, count)
 }
 
+/// M48: 构建一个装好全部 shims（document/window/navigator/fetch/...）的 boa
+/// `Context`，供 `run_scripts_with_base` 和 CDP `Runtime.evaluate`/`callFunctionOn`
+/// 复用。返回的 ctx 还没绑定任何 tree —— 调用方需用
+/// `bridge::install_shared_with_base` 装 tree guard 后才能 eval。
+///
+/// `base_url` 用于 location/navigation 后端的初始 URL（None → about:blank）。
+fn build_shimmed_context(base_url: &Option<String>) -> Context {
+    let mut ctx = Context::default();
+    {
+        let limits = ctx.runtime_limits_mut();
+        limits.set_loop_iteration_limit(JS_LOOP_ITERATION_LIMIT);
+        limits.set_stack_size_limit(JS_STACK_SIZE_LIMIT);
+        limits.set_recursion_limit(JS_RECURSION_LIMIT);
+    }
+    install(&mut ctx);
+    let storage = browser_storage::new_storage();
+    crate::bridge::install_storage(storage);
+    let _ = crate::storage_shim::install_storage_globals(&mut ctx);
+    let initial_url = base_url
+        .clone()
+        .unwrap_or_else(|| "about:blank".to_string());
+    let nav = browser_navigation::new_navigation(&initial_url);
+    crate::bridge::install_navigation(nav);
+    let _ = crate::navigation_shim::install_navigation_globals(&mut ctx);
+    crate::bridge::ensure_cookie_jar();
+    let _ = crate::xhr_shim::install_xml_http_request(&mut ctx);
+    let _ = crate::fetch_shim::install_fetch(&mut ctx);
+    let _ = crate::ws_shim::install_websocket(&mut ctx);
+    let _ = crate::navigator_shim::install_navigator(&mut ctx);
+    let _ = crate::window_shim::install_window(&mut ctx);
+    let _ = crate::document_shim::install_document(&mut ctx);
+    let _ = crate::element_shim::install_element(&mut ctx);
+    let _ = crate::screen_shim::install_screen(&mut ctx);
+    let _ = crate::image_shim::install_image(&mut ctx);
+    let _ = crate::compat_shim::install_compat_shims(&mut ctx);
+    ctx
+}
+
+/// M48: 在一个**已构建好的 DOM tree** 上执行单个 JS 表达式，返回结果字符串
+/// （boa `display()` 格式）。供 CDP `Runtime.evaluate` / `callFunctionOn` 用 ——
+/// 让 `document.title`、`document.querySelector` 等能访问真实页面 DOM。
+///
+/// 与 `run_scripts_with_base` 不同：不执行页面里的 `<script>`，只 eval 调用方
+/// 传入的表达式。tree 的 thread-local 安装在函数返回时由 `TreeGuard::drop` 清理。
+///
+/// # Errors
+/// 返回 `Err(msg)` 如果 JS 解析或执行失败。
+pub fn eval_in_tree(tree: Tree, base_url: Option<String>, expr: &str) -> Result<String, String> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
+    let mut ctx = build_shimmed_context(&base_url);
+    // 安装 tree guard：让 document/window shims 的 __* 桥能访问 DOM。
+    // guard 在作用域结束时自动清理 thread-local slot。
+    let _guard = crate::bridge::install_shared_with_base(shared, base_url);
+    let result: JsValue = ctx
+        .eval(Source::from_bytes(expr))
+        .map_err(|e| format!("js eval error: {e}"))?;
+    Ok(result.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

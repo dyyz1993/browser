@@ -437,6 +437,68 @@ pub async fn dispatch(
             })
         }
         // M53: unknown Page.* methods (enable/disable/etc) → no-op ack
+        // M48: puppeteer 的 _createIsolatedWorld 调这两个。返回正确结构才能
+        // 让 isolated world 建立、newPage() 继续推进。
+        "Page.addScriptToEvaluateOnNewDocument" => {
+            // 标准 CDP 返回 {identifier}（脚本 id）。给个固定 id 即可。
+            let mut result = BTreeMap::new();
+            result.insert(
+                "identifier".to_string(),
+                Json::String("browser-rs-script-1".to_string()),
+            );
+            Ok(DispatchResult {
+                response: CdpMessage::ok_response(id, Json::Object(result)),
+                events: vec![],
+            })
+        }
+        "Page.createIsolatedWorld" => {
+            // 标准 CDP 返回 {executionContextId}。单 context 模型给 id=2
+            // （main world 是 1，isolated world 用 2）。
+            let mut result = BTreeMap::new();
+            result.insert("executionContextId".to_string(), Json::Number(2.0));
+            // M48: 必须同时发 Runtime.executionContextCreated（context id=2），
+            // 否则 puppeteer 的 utilityWorld（isolated world）context 永不就绪，
+            // page.title()/evaluate() 等（跑在 utility world 上）永远卡住。
+            let frame_id = params
+                .and_then(|p| p.get_str("frameId"))
+                .unwrap_or(crate::discovery::TARGET_ID)
+                .to_string();
+            // M48: name 必须用 puppeteer 传来的 worldName（值为
+            // '__puppeteer_utility_world__<version>'）。FrameManager 靠
+            // contextPayload.name === UTILITY_WORLD_NAME 把 context 映射到
+            // PUPPETEER_WORLD；名字不对会被忽略，isolatedRealm() 永远没 context，
+            // page.title()/$(...)（跑在 utility world 上）永远卡住。
+            let world_name = params
+                .and_then(|p| p.get_str("worldName"))
+                .unwrap_or("")
+                .to_string();
+            let mut ctx = BTreeMap::new();
+            ctx.insert("id".to_string(), Json::Number(2.0));
+            ctx.insert("origin".to_string(), Json::String(String::new()));
+            ctx.insert("name".to_string(), Json::String(world_name));
+            ctx.insert(
+                "auxData".to_string(),
+                Json::Object({
+                    let mut a = BTreeMap::new();
+                    a.insert("frameId".to_string(), Json::String(frame_id));
+                    a.insert("isDefault".to_string(), Json::Bool(false));
+                    a.insert("type".to_string(), Json::String("isolated".to_string()));
+                    a
+                }),
+            );
+            let event = CdpMessage::event(
+                "Runtime.executionContextCreated",
+                Json::Object({
+                    let mut p = BTreeMap::new();
+                    p.insert("context".to_string(), Json::Object(ctx));
+                    p
+                }),
+            );
+            Ok(DispatchResult {
+                response: CdpMessage::ok_response(id, Json::Object(result)),
+                events: vec![event],
+            })
+        }
         _ => Ok(DispatchResult {
             response: CdpMessage::ok_empty(id),
             events: vec![],

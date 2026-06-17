@@ -1,0 +1,15 @@
+{
+  "name": "browser-cdp-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Puppeteer end-to-end tests driving the browser-rs CDP server. Validates CDP compatibility for the SPA-crawler-browser positioning.",
+  "scripts": {
+    "basic": "node basic.js",
+    "dom": "node dom.js",
+    "evaluate": "node evaluate.js",
+    "all": "node run-all.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.1.0"
+  }
+}

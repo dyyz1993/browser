@@ -38,7 +38,10 @@ pub fn dispatch(
         "Emulation.setDeviceMetricsOverride" => set_device_metrics(id, params, state),
         "Emulation.setUserAgentOverride" => set_user_agent(id, params, state),
         "Emulation.clearDeviceMetricsOverride" => clear_device_metrics(id, state),
-        _ => Err(CdpError::MethodNotFound(method.to_string())),
+        // M48: puppeteer 发很多 Emulation.set*EmulationEnabled / setCPUThrottlingRate 等。
+        // 我们不真正模拟，但必须 ok_empty（-32601 会让 puppeteer 的 EmulationManager
+        // 抛 ProtocolError，整个 newPage 失败）。
+        _ => Ok(CdpMessage::ok_empty(id)),
     }
 }
 
@@ -203,12 +206,14 @@ mod tests {
 
     #[test]
     fn test_unknown_method() {
+        // M48: 未知 Emulation 方法返回 ok_empty（而非 MethodNotFound）。
+        // puppeteer 连接时会发一批 Emulation.set*（setDeviceMetricsOverride 等），
+        // 其中很多我们没有真实实现，但必须 ack 否则 puppeteer 握手失败。
         let mut st = make_state();
         let result = dispatch(5, "Emulation.unknownMethod", None, &mut st);
-        assert!(result.is_err());
-        match result {
-            Err(CdpError::MethodNotFound(msg)) => assert_eq!(msg, "Emulation.unknownMethod"),
-            _ => panic!("Expected MethodNotFound error"),
-        }
+        assert!(result.is_ok(), "unknown Emulation method should ack ok_empty");
+        // 状态不应被改动。
+        assert!(st.width.is_none());
+        assert!(st.height.is_none());
     }
 }

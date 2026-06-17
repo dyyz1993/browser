@@ -14,12 +14,25 @@
 
 use std::collections::BTreeMap;
 
-use browser_js_runtime::JsRuntime;
+use browser_dom::Tree;
+use browser_js_runtime::eval_in_tree;
 
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
 
-/// Evaluate a JS expression with a fresh JsRuntime and return a CDP response.
-pub fn dispatch(id: i64, method: &str, params: Option<&Json>) -> Result<String, CdpError> {
+/// Evaluate a JS expression against the current page's DOM tree and return a
+/// CDP response.
+///
+/// `tree` / `url` describe the page that navigate() built. M48: evaluate /
+/// callFunctionOn now run in a shimmed boa context bound to this tree, so
+/// `document.title`, `document.querySelector`, etc. read the real DOM (previously
+/// they hit an empty `JsRuntime::new()` → "document is not defined").
+pub fn dispatch(
+    id: i64,
+    method: &str,
+    params: Option<&Json>,
+    tree: &Tree,
+    url: &str,
+) -> Result<String, CdpError> {
     match method {
         "Runtime.enable" | "Runtime.disable" | "Runtime.runIfWaitingForDebugger" => {
             // No-op ack — we don't emit console/log events yet.
@@ -31,8 +44,7 @@ pub fn dispatch(id: i64, method: &str, params: Option<&Json>) -> Result<String, 
             let expr = params
                 .and_then(|p| p.get_str("expression"))
                 .ok_or_else(|| CdpError::InvalidJson("missing expression".to_string()))?;
-            let mut rt = JsRuntime::new();
-            match rt.eval(expr) {
+            match eval_in_tree(tree.clone(), url_or_default(url), expr) {
                 Ok(value) => {
                     // Build RemoteObject { type, value }.
                     let (val_type, val_json) = classify_value(&value);
@@ -54,8 +66,73 @@ pub fn dispatch(id: i64, method: &str, params: Option<&Json>) -> Result<String, 
                 }
             }
         }
+        // M48: Runtime.callFunctionOn —— puppeteer 的 page.evaluate/$/title
+        // 全走这个（不是 Runtime.evaluate）。在指定 executionContext 里执行一个
+        // 函数声明。boa 模型：构造 (functionDeclaration).apply(null, args) eval。
+        // 注意：boa 0.20 不支持箭头函数/ES6，现代 puppeteer 序列化的函数声明
+        // 可能解析失败 —— 那种情况返回 exceptionDetails（不卡，puppeteer 会报错）。
+        "Runtime.callFunctionOn" => {
+            let function_decl = params
+                .and_then(|p| p.get_str("functionDeclaration"))
+                .ok_or_else(|| CdpError::InvalidJson("missing functionDeclaration".to_string()))?;
+            // 序列化参数（arguments 数组，每项是 {value:...}）。
+            let args_json = params
+                .and_then(|p| p.get("arguments"))
+                .and_then(|a| match a {
+                    Json::Array(arr) => Some(arr.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let args_str: Vec<String> = args_json
+                .iter()
+                .map(|a| match a {
+                    Json::Object(m) => match m.get("value") {
+                        Some(v) => v.to_json_string(),
+                        None => "undefined".to_string(),
+                    },
+                    _ => a.to_json_string(),
+                })
+                .collect();
+            // 构造 (<functionDecl>)(arg0, arg1, ...) —— IIFE 形式，避免函数声明
+            // 需要名字。不套 JSON.stringify：boa display() 对字符串会加引号，
+            // classify_value 据此归类；若再 stringify 会导致字符串双重引号。
+            let expr = format!(
+                "({FD})({ARGS})",
+                FD = function_decl,
+                ARGS = args_str.join(",")
+            );
+            match eval_in_tree(tree.clone(), url_or_default(url), &expr) {
+                Ok(value) => {
+                    // boa display() 的输出，classify_value 据此归类。
+                    let (val_type, val_json) = classify_value(&value);
+                    let mut remote = BTreeMap::new();
+                    remote.insert("type".to_string(), Json::String(val_type));
+                    remote.insert("value".to_string(), val_json);
+                    let mut result = BTreeMap::new();
+                    result.insert("result".to_string(), Json::Object(remote));
+                    Ok(CdpMessage::ok_response(id, Json::Object(result)))
+                }
+                Err(e) => {
+                    let mut exc = BTreeMap::new();
+                    exc.insert("text".to_string(), Json::String(e.clone()));
+                    exc.insert("exceptionId".to_string(), Json::Number(1.0));
+                    let mut result = BTreeMap::new();
+                    result.insert("exceptionDetails".to_string(), Json::Object(exc));
+                    Ok(CdpMessage::ok_response(id, Json::Object(result)))
+                }
+            }
+        }
         // M53: unknown methods → no-op ack (puppeteer sends many enable/disable)
         _ => Ok(CdpMessage::ok_empty(id)),
+    }
+}
+
+/// Empty url → about:blank, otherwise `Some(url)` for the navigation shim.
+fn url_or_default(url: &str) -> Option<String> {
+    if url.is_empty() {
+        Some("about:blank".to_string())
+    } else {
+        Some(url.to_string())
     }
 }
 
@@ -93,7 +170,14 @@ mod tests {
     fn evaluate_arithmetic() {
         let mut p = BTreeMap::new();
         p.insert("expression".to_string(), Json::String("2 + 3".to_string()));
-        let resp = dispatch(1, "Runtime.evaluate", Some(&Json::Object(p))).unwrap();
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+        )
+        .unwrap();
         assert!(resp.contains("\"value\":5"), "got: {resp}");
         assert!(resp.contains("\"type\":\"number\""), "got: {resp}");
     }
@@ -105,7 +189,14 @@ mod tests {
             "expression".to_string(),
             Json::String("\"hello\".toUpperCase()".to_string()),
         );
-        let resp = dispatch(1, "Runtime.evaluate", Some(&Json::Object(p))).unwrap();
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+        )
+        .unwrap();
         assert!(resp.contains("\"value\":\"HELLO\""), "got: {resp}"); // boa quotes; classify strips
     }
 
@@ -113,7 +204,14 @@ mod tests {
     fn evaluate_boolean() {
         let mut p = BTreeMap::new();
         p.insert("expression".to_string(), Json::String("1 < 2".to_string()));
-        let resp = dispatch(1, "Runtime.evaluate", Some(&Json::Object(p))).unwrap();
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+        )
+        .unwrap();
         assert!(resp.contains("\"type\":\"boolean\""), "got: {resp}");
         assert!(resp.contains("\"value\":true"), "got: {resp}");
     }
@@ -125,13 +223,20 @@ mod tests {
             "expression".to_string(),
             Json::String("}}invalid{{".to_string()),
         );
-        let resp = dispatch(1, "Runtime.evaluate", Some(&Json::Object(p))).unwrap();
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+        )
+        .unwrap();
         assert!(resp.contains("\"exceptionDetails\""), "got: {resp}");
     }
 
     #[test]
     fn enable_returns_ok_empty() {
-        let resp = dispatch(1, "Runtime.enable", None).unwrap();
+        let resp = dispatch(1, "Runtime.enable", None, &Tree::new(), "").unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
     }
 
@@ -158,7 +263,7 @@ mod tests {
     #[test]
     fn unknown_method_noop() {
         // M53: unknown methods now return no-op ack instead of error
-        let resp = dispatch(1, "Runtime.totallyFake", None).unwrap();
+        let resp = dispatch(1, "Runtime.totallyFake", None, &Tree::new(), "").unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
     }
 }

@@ -52,6 +52,30 @@
 [docs/plans/M-cls-spa.md](docs/plans/M-cls-spa.md)（步骤+验收）。
 工程门禁：fmt ✅ clippy 0 warnings ✅ **682 tests pass** ✅。
 
+### M42-M48 — CDP 协议层 + Puppeteer 端到端全链路打通 ✅
+本项目是**通用 SPA 爬虫浏览器 + 兼容 CDP**。M42 起逐步补齐 CDP 协议，
+M48 用真实 **Puppeteer 25.1** 验证全链路。
+
+- M42-M43 ✅ CDP server 骨架：WebSocket + JSON-RPC + `/json` 发现端点。
+- M44 ✅ `Page` 域：navigate（fetch→parse→render→存 PageState）+ captureScreenshot。
+- M45 ✅ `Runtime` 域：evaluate。
+- M46 ✅ `DOM` 域：getDocument / getOuterHTML / querySelector（基于 PageState.tree）。
+- M47 ✅ `Network` 域：getResponseBody + enable/disable。
+- M49 ✅ `Emulation` 域（未知方法统一 ack，puppeteer 握手必需）。
+- M50-M53 ✅ `Page` lifecycle 事件 + `Target` 域（flatten session）。
+
+**M48 Puppeteer e2e 实测全链路打通**（`run-all.js` 3/3 scenarios、12/12 断言）：
+握手 + newPage + navigate + title（走 isolated world）+ screenshot（PNG）
++ page.evaluate（含 document/location 真实 DOM 访问）+ DOM 取数。
+6 个真实修复：targetId 字段、createTarget 事件去重、catch-all 扩展、
+executionContextCreated、isolated world worldName（**title 卡点根因**）、
+Runtime.callFunctionOn + `eval_in_tree`（**evaluate 接真实 DOM**）。
+详见 [docs/assessments/M48-puppeteer-e2e.md](docs/assessments/M48-puppeteer-e2e.md)。
+工程门禁：fmt ✅ clippy 0 warnings ✅ cdp 80 tests + js-runtime 135 tests ✅。
+**已知边界**：`page.$()`/`$()` 受 boa 0.20 不支持 ES2018+（async generator/
+for-await/using）限制；爬虫用 `page.evaluate(() => document.querySelector(...))`
+完全够用（dom-via-evaluate.js 4/4 验证）。
+
 ### M29-M30 — ADR 文档 + 截图优化 + <a> 蓝色渲染 ✅
 - M29.1 ✅ ADR-0003 TLS 后端切换（hyper-rustls → native-tls）
 - M29.2 ✅ wss:// TLS 验证（代码层面确认 ws crate 只支持 ws://）
