@@ -265,6 +265,63 @@ document.getElementById('out').textContent = 'BASE64_OK ' + enc + ' ' + dec + ' 
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn web_api_event_constructors() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var ev = new Event('click', { bubbles: true });
+var cev = new CustomEvent('custom', { detail: { v: 99 } });
+document.getElementById('out').textContent = 'EVENT_OK ' + ev.type + ' ' + ev.bubbles + ' ' + cev.detail.v;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EVENT_OK click true 99"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_dom_content_loaded_auto_dispatched() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('out').textContent = 'DCL_FIRED';
+});
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DCL_FIRED"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_element_dispatch_custom_event() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<button id="btn">Click</button>
+<script>
+var btn = document.getElementById('btn');
+btn.addEventListener('action', function(e) {
+  document.getElementById('out').textContent = 'EVT_' + e.detail.amount;
+});
+btn.dispatchEvent(new CustomEvent('action', { detail: { amount: 100 } }));
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EVT_100"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

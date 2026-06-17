@@ -286,8 +286,22 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
         Element.prototype.querySelectorAll = function() {
             return [];
         };
-        Element.prototype.addEventListener = function() {};
-        Element.prototype.removeEventListener = function() {};
+        Element.prototype.addEventListener = function(type, cb) {
+            if (!this.__listeners) this.__listeners = {};
+            if (!this.__listeners[type]) this.__listeners[type] = [];
+            this.__listeners[type].push(cb);
+        };
+        Element.prototype.removeEventListener = function(type, cb) {
+            if (!this.__listeners || !this.__listeners[type]) return;
+            this.__listeners[type] = this.__listeners[type].filter(function(f) { return f !== cb; });
+        };
+        Element.prototype.dispatchEvent = function(ev) {
+            if (!this.__listeners || !ev || !this.__listeners[ev.type]) return true;
+            var cbs = this.__listeners[ev.type];
+            ev.target = this; ev.currentTarget = this;
+            for (var i = 0; i < cbs.length; i++) { try { cbs[i](ev); } catch(e) {} }
+            return true;
+        };
         Element.prototype.scrollIntoView = function() {};
         Element.prototype.getClientRects = function() { return []; };
         Element.prototype.cloneNode = function() {

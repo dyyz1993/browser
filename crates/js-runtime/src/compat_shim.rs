@@ -1447,6 +1447,72 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             };
         }
 
+        // M62: 事件系统。爬虫场景不需要真交互，但框架初始化（DOMContentLoaded、
+        // 自定义事件）必须不报错。Event/CustomEvent/EventTarget 让框架不挂。
+        if (typeof globalThis.Event !== 'function') {
+            globalThis.Event = function Event(type, options) {
+                this.type = type;
+                this.bubbles = (options && options.bubbles) || false;
+                this.cancelable = (options && options.cancelable) || false;
+                this.detail = undefined;
+                this.target = null;
+                this.currentTarget = null;
+                this.preventDefault = function() {};
+                this.stopPropagation = function() {};
+                this.stopImmediatePropagation = function() {};
+            };
+        }
+        if (typeof globalThis.CustomEvent !== 'function') {
+            globalThis.CustomEvent = function CustomEvent(type, options) {
+                this.type = type;
+                this.bubbles = (options && options.bubbles) || false;
+                this.cancelable = (options && options.cancelable) || false;
+                this.detail = (options && options.detail) || undefined;
+                this.target = null;
+                this.currentTarget = null;
+                this.preventDefault = function() {};
+                this.stopPropagation = function() {};
+            };
+            globalThis.CustomEvent.prototype = Object.create(globalThis.Event.prototype);
+            globalThis.CustomEvent.prototype.constructor = globalThis.CustomEvent;
+        }
+        if (typeof globalThis.EventTarget !== 'function') {
+            globalThis.EventTarget = function EventTarget() {
+                this.__listeners = {};
+            };
+            globalThis.EventTarget.prototype.addEventListener = function(type, cb) {
+                if (!this.__listeners) this.__listeners = {};
+                if (!this.__listeners[type]) this.__listeners[type] = [];
+                this.__listeners[type].push(cb);
+            };
+            globalThis.EventTarget.prototype.removeEventListener = function(type, cb) {
+                if (!this.__listeners || !this.__listeners[type]) return;
+                this.__listeners[type] = this.__listeners[type].filter(function(f) {
+                    return f !== cb;
+                });
+            };
+            globalThis.EventTarget.prototype.dispatchEvent = function(ev) {
+                if (!this.__listeners || !ev || !this.__listeners[ev.type]) return true;
+                var cbs = this.__listeners[ev.type];
+                ev.target = this;
+                ev.currentTarget = this;
+                for (var i = 0; i < cbs.length; i++) {
+                    try { cbs[i](ev); } catch (e) {
+                        if (typeof __log === 'function') __log('[event] listener threw: ' + e.message);
+                    }
+                }
+                return true;
+            };
+        }
+        if (typeof globalThis.MessageEvent !== 'function') {
+            globalThis.MessageEvent = function MessageEvent(type, options) {
+                this.type = type;
+                this.data = (options && options.data) || null;
+                this.origin = (options && options.origin) || '';
+                this.target = null;
+            };
+        }
+
         if (typeof globalThis.structuredClone !== 'function') {
             globalThis.structuredClone = function(value) {
                 try {

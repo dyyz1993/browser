@@ -19,7 +19,7 @@
 | 二进制大小（release） | 14MB | 14MB（不变） |
 | 静态站峰值 RSS（example.com） | 14MB | _待测_ |
 | CSR 站峰值 RSS（seo.box） | 95MB | _待测_ |
-| 测试总数 | 759（+13 JS 特性） | 稳定增长 |
+| 测试总数 | 762（+16 JS 特性含事件系统） | 稳定增长 |
 
 ---
 
@@ -71,8 +71,8 @@
 | createElement | ✅ | lazy-load fixture |
 | createTextNode | ✅ | |
 | getElementsByTagName | ⚠️ 仅首个 | |
-| addEventListener | ❌ no-op | |
-| removeEventListener | ❌ no-op | |
+| addEventListener | ✅ 存回调 | integration_js_features |
+| removeEventListener | ✅ | integration_js_features |
 | write | ❌ no-op | |
 | body/head/title 等 getter | ✅ | |
 
@@ -85,13 +85,13 @@
 | setAttribute/getAttribute | ✅ | |
 | textContent | ✅ | |
 | innerHTML | ✅ | async-data fixture |
-| **querySelectorAll** | ❌ 返回 [] | |
+| **querySelectorAll** | ❌ 返回 [] | 待 P3 |
 | cloneNode | ✅ | |
 | classList | ⚠️ no-op | |
 | dataset | ⚠️ 部分 | |
 | style | ⚠️ 部分 | |
 | getClientRects | ⚠️ 返回 [] | |
-| addEventListener | ❌ no-op | |
+| addEventListener | ✅ 存回调 | integration_js_features |
 
 ### 网络
 | API | 状态 | 测试 |
@@ -115,11 +115,11 @@
 ### 事件系统
 | API | 状态 | 备注 |
 |------|------|------|
-| Event 构造器 | ❌ | |
-| EventTarget | ❌ | |
-| CustomEvent | ❌ | |
-| dispatchEvent | ❌ | |
-| addEventListener（真实现） | ❌ | 目前全 no-op |
+| Event 构造器 | ✅ | integration_js_features |
+| EventTarget | ✅ | integration_js_features |
+| CustomEvent | ✅ | integration_js_features |
+| dispatchEvent | ✅ | integration_js_features（含 DOMContentLoaded 自动 dispatch） |
+| addEventListener（真实现） | ✅ | document/element 存回调 + dispatchEvent 触发 |
 
 ### 编码/加密/二进制
 | API | 状态 | 备注 |

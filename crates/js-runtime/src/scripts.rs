@@ -248,6 +248,26 @@ pub fn execute_scripts_with_base(
     // 回调，回调可能 schedule 新 timer（或本身 schedule），重复直到 idle。
     // 防死循环：最多迭代 MAX_TICKS 次（防止 setTimeout 无限递归卡死爬虫）。
     executed += pump_event_loop(ctx);
+    // M62: dispatch DOMContentLoaded + load 事件。SPA 框架（React/Vue/jQuery）
+    // 常在 document.addEventListener('DOMContentLoaded', init) 里初始化，
+    // 爬虫场景脚本执行完即可视为 DOM 就绪。best-effort，失败不阻断。
+    let _ = ctx.eval(boa_engine::Source::from_bytes(
+        r#"
+        try {
+            if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
+                var ev1 = (typeof Event === 'function') ? new Event('DOMContentLoaded') : { type: 'DOMContentLoaded' };
+                document.dispatchEvent(ev1);
+                var ev2 = (typeof Event === 'function') ? new Event('load') : { type: 'load' };
+                document.dispatchEvent(ev2);
+                if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+                    window.dispatchEvent(ev2);
+                }
+            }
+        } catch(e) {}
+        "#,
+    ));
+    // dispatch 后可能 schedule 了新 timer（框架初始化逻辑），再 pump 一次。
+    executed += pump_event_loop(ctx);
     executed
 }
 

@@ -91,7 +91,22 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
                 }
                 return node;
             },
-            addEventListener: function() { /* no-op */ },
+            addEventListener: function(type, cb) {
+                if (!this.__listeners) this.__listeners = {};
+                if (!this.__listeners[type]) this.__listeners[type] = [];
+                this.__listeners[type].push(cb);
+            },
+            removeEventListener: function(type, cb) {
+                if (!this.__listeners || !this.__listeners[type]) return;
+                this.__listeners[type] = this.__listeners[type].filter(function(f) { return f !== cb; });
+            },
+            dispatchEvent: function(ev) {
+                if (!this.__listeners || !ev || !this.__listeners[ev.type]) return true;
+                var cbs = this.__listeners[ev.type];
+                ev.target = this; ev.currentTarget = this;
+                for (var i = 0; i < cbs.length; i++) { try { cbs[i](ev); } catch(e) {} }
+                return true;
+            },
             removeEventListener: function() { /* no-op */ },
             write: function(html) { /* no-op for crawler */ },
         };
