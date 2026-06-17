@@ -211,7 +211,10 @@ mod tests {
         // 其中很多我们没有真实实现，但必须 ack 否则 puppeteer 握手失败。
         let mut st = make_state();
         let result = dispatch(5, "Emulation.unknownMethod", None, &mut st);
-        assert!(result.is_ok(), "unknown Emulation method should ack ok_empty");
+        assert!(
+            result.is_ok(),
+            "unknown Emulation method should ack ok_empty"
+        );
         // 状态不应被改动。
         assert!(st.width.is_none());
         assert!(st.height.is_none());

@@ -24,6 +24,17 @@
 
 ## 最近变更（倒序）
 
+### M58 — reqwest 启用 brotli/gzip/deflate 解码（Vercel/CDN 压缩站可爬）✅
+- 根因：`seo.box` 等 Vercel 托管站点默认对 `text/html` 大响应做 Brotli 压缩
+  （`content-encoding: br`）。`browser-net` 的 reqwest 未启用解码 feature，收到
+  压缩字节流按明文解 → `read body failed: error decoding response body`，整站爬取失败。
+- 影响面：所有 Vercel/Cloudflare 类默认压缩站点（G1 爬虫硬伤）。
+- 修复：`crates/net/Cargo.toml` 给 reqwest 加 `brotli`/`gzip`/`deflate` 三个官方
+  解码 feature（非新 crate，属白名单 reqwest 的合理配置）。
+- 验收：`render-url https://seo.box/referring/` 端到端跑通，CSR 表格（fetch JSON +
+  JS 填 DOM）完整渲染出 Top Referring Websites 数据。
+- 连带：顺手 `cargo fmt` 修了 `cdp/emulation_domain.rs` 一处预存格式 diff。
+
 ### M-cls — cls.cn/telegraph SPA 渲染 + 内存自愈护栏 ✅
 - M-cls.1 ✅ 内存自愈护栏（子进程 + RLIMIT_AS + 父进程 RSS 监控 kill）
 - M-cls.2 ✅ 收紧 boa 运行时限制（loop 250K→40K, stack 4096, recursion 256）

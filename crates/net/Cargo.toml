@@ -11,10 +11,18 @@ description = "HTTP / HTTPS / WebSocket client for the browser project"
 # 根因：hyper-rustls 的 ring provider 与百度等中国大站 CDN 的 TLS 实现不兼容
 # （AlertReceived(ProtocolVersion)），而系统 TLS 库（native-tls，curl 同款）能连。
 # 连真实站点是 GOALS.md 最高优先级（G1 爬虫），高于"纯 Rust 依赖"原则。
+#
+# M58: 启用 brotli/gzip/deflate 解码特性。Vercel/Cloudflare 等现代 CDN 默认对
+# text/html 等大响应做 brotli 压缩（content-encoding: br）。缺这些特性时 reqwest
+# 收到压缩字节流按明文解码，报 "error decoding response body"，导致整站爬取失败。
+# 这些是 reqwest 官方解码 feature（非新 crate），属白名单 reqwest 的合理配置。
 reqwest = { version = "0.12", default-features = false, features = [
     "default-tls",
     "http2",
     "charset",
+    "brotli",
+    "gzip",
+    "deflate",
 ] }
 tokio = { workspace = true }
 url = "2"
