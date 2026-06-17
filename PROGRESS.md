@@ -24,6 +24,12 @@
 
 ## 最近变更（倒序）
 
+### M60 — JS 覆盖率提升到 80% 路线图（规划中 🚧）
+- 目标：从实测 58% 覆盖率提升到 80%+，保住「13MB 低内存」卖点。
+- 关键发现：boa 0.21（2025-10）已完整落地 async/await（0.20 的头号杀手）。
+- 务实路径：分层混合 —— ① boa 升 0.21 ② SSR 数据提取层 ③ 补缺失 Web API。
+- 规划文档：[docs/plans/M60-js-coverage-roadmap.md](./docs/plans/M60-js-coverage-roadmap.md)。
+
 ### M59 — `browser fetch` 爬虫命令 + 独立 extractor crate ✅
 - 目标：`browser fetch <url>` 当 curl 用，支持 `--format markdown|html|text|links`。
 - 设计依据：借鉴 xbrowser `scrape`（已验证）+ Firecrawl 内容提取管线（42 选择器噪声过滤）。
