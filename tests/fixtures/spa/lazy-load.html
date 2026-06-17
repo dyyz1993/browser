@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!--
+  SPA 模式 3: lazy-load（动态 DOM 构建 / 列表渲染）
+  模拟 SPA 框架的列表渲染：从数据数组动态 createElement 构建列表。
+  验收点：渲染后含 "Task: Write tests" 等 4 个任务项。
+  依赖：document.createElement + textContent + appendChild 循环。
+-->
+<html lang="en">
+<head><meta charset="UTF-8"><title>SPA Lazy List</title></head>
+<body>
+<h1>Task List</h1>
+<ul id="task-list"></ul>
+<script>
+// 模拟组件渲染：数据 → DOM
+var tasks = [
+  { id: 1, title: "Write tests", done: false },
+  { id: 2, title: "Fix bugs", done: true },
+  { id: 3, title: "Refactor code", done: false },
+  { id: 4, title: "Deploy", done: false }
+];
+
+var list = document.getElementById('task-list');
+for (var i = 0; i < tasks.length; i++) {
+  var t = tasks[i];
+  var li = document.createElement('li');
+  var status = t.done ? '[x]' : '[ ]';
+  li.textContent = status + ' Task: ' + t.title;
+  list.appendChild(li);
+}
+</script>
+</body>
+</html>

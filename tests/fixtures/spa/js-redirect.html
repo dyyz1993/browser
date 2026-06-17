@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!--
+  SPA 模式 5: js-redirect（JS 重定向 / location 操作）
+  模拟 SPA 登录后重定向场景：JS 检测条件后用 location 改写。
+  验收点：渲染后含 "Redirecting to dashboard" 或重定向目标
+  （测试 JS 执行了重定向逻辑，而非停在初始 "checking..." 状态）。
+  依赖：location 对象 + 条件分支 + DOM 更新。
+-->
+<html lang="en">
+<head><meta charset="UTF-8"><title>SPA Redirect</title></head>
+<body>
+<div id="status">checking session...</div>
+<div id="content"></div>
+<script>
+// 模拟鉴权检查 + 重定向逻辑
+var session = { token: "valid-token-123", user: "alice" };
+
+function checkAuth() {
+  var status = document.getElementById('status');
+  var content = document.getElementById('content');
+  if (session.token) {
+    // 模拟重定向后的目标页内容（实际 SPA 会 location.href = '/dashboard'，
+    // 这里直接渲染目标内容，因为我们的浏览器不导航）
+    status.textContent = 'Redirecting to dashboard';
+    content.innerHTML =
+      '<h2>Dashboard</h2>' +
+      '<p>Welcome back, ' + session.user + '</p>' +
+      '<p>Session token: ' + session.token.substring(0, 10) + '...</p>';
+  } else {
+    status.textContent = 'Please login';
+    content.innerHTML = '<a href="/login">Login</a>';
+  }
+}
+
+checkAuth();
+</script>
+</body>
+</html>

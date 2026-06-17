@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<!--
+  SPA 模式 2: route-switch（客户端路由切换）
+  模拟 SPA 路由：点击导航（用 hash 变化模拟）切换显示不同视图。
+  验收点：渲染后含 "Home Page Content" 且不含 "About Page Content"
+  （默认路由是 home）。测试 JS 执行后 DOM 反映当前路由状态。
+  依赖：location.hash 监听 + DOM 显隐切换。
+-->
+<html lang="en">
+<head><meta charset="UTF-8"><title>SPA Router</title></head>
+<body>
+<nav>
+  <a href="#/">Home</a>
+  <a href="#/about">About</a>
+  <a href="#/contact">Contact</a>
+</nav>
+<main id="app">
+  <div id="view-home" class="view">
+    <h2>Home Page Content</h2>
+    <p>Welcome to the homepage.</p>
+  </div>
+  <div id="view-about" class="view" style="display:none;">
+    <h2>About Page Content</h2>
+    <p>About us information.</p>
+  </div>
+  <div id="view-contact" class="view" style="display:none;">
+    <h2>Contact Page Content</h2>
+    <p>Contact details here.</p>
+  </div>
+</main>
+<script>
+// 极简 SPA 路由：根据 hash 显示对应 view
+function render() {
+  var hash = (location.hash || '#/').replace('#/', '');
+  var views = ['home', 'about', 'contact'];
+  for (var i = 0; i < views.length; i++) {
+    var el = document.getElementById('view-' + views[i]);
+    if (el) {
+      el.style.display = (views[i] === hash || (hash === '' && views[i] === 'home')) ? '' : 'none';
+    }
+  }
+}
+// 初始渲染（默认 home）
+render();
+// 监听路由变化（addEventListener 在我们的桥是 no-op，所以靠初始渲染验证）
+window.addEventListener('hashchange', render);
+</script>
+</body>
+</html>

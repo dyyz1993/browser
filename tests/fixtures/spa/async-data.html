@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!--
+  SPA 模式 1: async-data（异步数据加载）
+  模拟最经典的 CSR 场景：页面初始是 loading 占位，JS 异步获取数据后填充。
+  验收点：渲染后含 "Product: Rust Book" 和 "Price: $39.99"，不含 "loading"。
+  依赖：async/await + setTimeout + DOM textContent/innerHTML 改写。
+-->
+<html lang="en">
+<head><meta charset="UTF-8"><title>SPA Async Data</title></head>
+<body>
+<h1>Product Detail</h1>
+<div id="product">
+  <p id="status">loading...</p>
+</div>
+<script>
+// 模拟异步 fetch 数据（用 setTimeout 模拟网络延迟）
+async function loadProduct() {
+  await new Promise(function(resolve) {
+    setTimeout(resolve, 30);
+  });
+  var data = {
+    name: "Rust Book",
+    price: "$39.99",
+    stock: "In Stock"
+  };
+  var el = document.getElementById('product');
+  el.innerHTML =
+    '<p>Product: ' + data.name + '</p>' +
+    '<p>Price: ' + data.price + '</p>' +
+    '<p>Stock: ' + data.stock + '</p>';
+}
+loadProduct();
+</script>
+</body>
+</html>

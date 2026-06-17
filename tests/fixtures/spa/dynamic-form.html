@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!--
+  SPA 模式 4: dynamic-form（表单状态 + 条件渲染）
+  模拟 SPA 表单：根据输入动态显示/隐藏字段、更新摘要。
+  验收点：渲染后含 "Summary: 2 items selected"（JS 执行后的初始状态）。
+  依赖：DOM 属性读写 + 条件 innerHTML 更新 + 对象状态管理。
+-->
+<html lang="en">
+<head><meta charset="UTF-8"><title>SPA Dynamic Form</title></head>
+<body>
+<h1>Order Form</h1>
+<div id="form-area">
+  <p>Selected: <span id="summary">none</span></p>
+</div>
+<div id="result"></div>
+<script>
+// 模拟表单状态管理（类似 React state / Vue data）
+var state = {
+  items: ['Widget', 'Gadget'],
+  shipping: 'express'
+};
+
+function updateSummary() {
+  var count = state.items.length;
+  var summary = document.getElementById('summary');
+  if (summary) {
+    summary.textContent = count + ' items (' + state.shipping + ')';
+  }
+  var result = document.getElementById('result');
+  if (result) {
+    result.innerHTML = '<p>Summary: ' + count + ' items selected</p>';
+  }
+}
+
+// 初始渲染
+updateSummary();
+</script>
+</body>
+</html>
