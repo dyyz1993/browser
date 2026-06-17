@@ -1153,7 +1153,7 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 }
             };
         }
-        if (typeof Reflect !== 'undefined' && typeof Reflect.construct === 'function') {
+        if (false) { // M62: boa 0.21 原生支持 Reflect.construct
             var __origReflectConstruct = Reflect.construct;
             Reflect.construct = function(target, args, newTarget) {
                 if (__isNil(target) || __isNil(args)) {
@@ -1172,7 +1172,7 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 }
             };
         }
-        if (typeof Array.from === 'function') {
+        if (false) { // M62: boa 0.21 原生支持 Array.from
             var __origArrayFrom = Array.from;
             Array.from = function() {
                 if (__isNil(arguments[0])) {
