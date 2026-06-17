@@ -14,7 +14,7 @@ browser-cookie = { path = "../cookie" }
 browser-eventloop = { path = "../eventloop" }
 browser-net = { path = "../net" }
 browser-ws = { path = "../ws" }
-boa_engine = "0.20"
+boa_engine = "0.21"
 tokio = { workspace = true, features = ["rt", "net"] }
 url = "2"
 
