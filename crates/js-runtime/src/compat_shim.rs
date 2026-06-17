@@ -1209,35 +1209,64 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 }
             };
         }
-        __wrapArrayMethod('forEach');
-        __wrapArrayMethod('map', function() { return []; });
-        __wrapArrayMethod('filter', function() { return []; });
-        __wrapArrayMethod('reduce', function() { return this; });
-        __wrapArrayMethod('reduceRight', function() { return this; });
-        __wrapArrayMethod('every', function() { return true; });
-        __wrapArrayMethod('some', function() { return false; });
-        __wrapArrayMethod('find', function() { return undefined; });
-        __wrapArrayMethod('findIndex', function() { return -1; });
-        __wrapArrayMethod('concat', function() { return []; });
-        __wrapArrayMethod('copyWithin', function() { return []; });
-        __wrapArrayMethod('entries', function() { return []; });
-        __wrapArrayMethod('every', function() { return true; });
-        __wrapArrayMethod('fill', function() { return []; });
-        __wrapArrayMethod('includes', function() { return false; });
-        __wrapArrayMethod('indexOf', function() { return -1; });
-        __wrapArrayMethod('join', function() { return ''; });
-        __wrapArrayMethod('keys', function() { return []; });
-        __wrapArrayMethod('lastIndexOf', function() { return -1; });
-        __wrapArrayMethod('map', function() { return []; });
-        __wrapArrayMethod('pop', function() { return undefined; });
-        __wrapArrayMethod('push', function() { return 0; });
-        __wrapArrayMethod('reduce', function() { return this; });
-        __wrapArrayMethod('reverse', function() { return []; });
-        __wrapArrayMethod('shift', function() { return undefined; });
-        __wrapArrayMethod('sort', function() { return []; });
-        __wrapArrayMethod('splice', function() { return []; });
-        __wrapArrayMethod('unshift', function() { return 0; });
-        __wrapArrayMethod('values', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('forEach');
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('map', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('filter', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('reduce', function() { return this; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('reduceRight', function() { return this; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('every', function() { return true; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('some', function() { return false; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('find', function() { return undefined; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('findIndex', function() { return -1; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('concat', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('copyWithin', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('entries', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('every', function() { return true; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('fill', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('includes', function() { return false; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('indexOf', function() { return -1; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('join', function() { return ''; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('keys', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('lastIndexOf', function() { return -1; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('map', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('pop', function() { return undefined; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('push', function() { return 0; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('reduce', function() { return this; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('reverse', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('shift', function() { return undefined; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('sort', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('splice', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('unshift', function() { return 0; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('values', function() { return []; });
 
         // 缺失的现代 Web API 兼容兜底：在 boa 中大量网站会直接依赖这些 API，
         // 但未实现时会在页面脚本第一层直接抛错，导致 SPA 无法完成 hydration。
@@ -1634,8 +1663,10 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 }
             };
         }
-        __wrapArrayMethod('slice', function() { return []; });
-        __wrapArrayMethod('concat', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('slice', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapArrayMethod('concat', function() { return []; });
 
         // 兼容字符串/数字对象在空值下调用原型方法（如 startsWith / includes / split）。
         // Next/React 常见运行时会在尚未归一化参数时做链式字符串处理，若 this 为 undefined
@@ -1664,7 +1695,8 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
         }
         function __wrapStringMethodsWithReturn(nameList, fallbackForString) {
             for (var i = 0; i < nameList.length; i++) {
-                __wrapStringMethod(nameList[i], fallbackForString);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod(nameList[i], fallbackForString);
             }
         }
         function __strFallbackToSelf(args) {
@@ -1673,31 +1705,56 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             }
             return String(this);
         }
-        __wrapStringMethod('startsWith', function() { return false; });
-        __wrapStringMethod('endsWith', function() { return false; });
-        __wrapStringMethod('includes', function() { return false; });
-        __wrapStringMethod('indexOf', function() { return -1; });
-        __wrapStringMethod('lastIndexOf', function() { return -1; });
-        __wrapStringMethod('match', function() { return null; });
-        __wrapStringMethod('matchAll', function() { return []; });
-        __wrapStringMethod('split', function() { return []; });
-        __wrapStringMethod('replace', __strFallbackToSelf);
-        __wrapStringMethod('replaceAll', __strFallbackToSelf);
-        __wrapStringMethod('slice', function() { return ''; });
-        __wrapStringMethod('substring', function() { return ''; });
-        __wrapStringMethod('substr', function() { return ''; });
-        __wrapStringMethod('trim', __strFallbackToSelf);
-        __wrapStringMethod('trimStart', __strFallbackToSelf);
-        __wrapStringMethod('trimEnd', __strFallbackToSelf);
-        __wrapStringMethod('toLowerCase', __strFallbackToSelf);
-        __wrapStringMethod('toUpperCase', __strFallbackToSelf);
-        __wrapStringMethod('toString', __strFallbackToSelf);
-        __wrapStringMethod('valueOf', __strFallbackToSelf);
-        __wrapStringMethod('charAt', function() { return ''; });
-        __wrapStringMethod('charCodeAt', function() { return NaN; });
-        __wrapStringMethod('concat', __strFallbackToSelf);
-        __wrapStringMethod('padStart', __strFallbackToSelf);
-        __wrapStringMethod('padEnd', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('startsWith', function() { return false; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('endsWith', function() { return false; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('includes', function() { return false; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('indexOf', function() { return -1; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('lastIndexOf', function() { return -1; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('match', function() { return null; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('matchAll', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('split', function() { return []; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('replace', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('replaceAll', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('slice', function() { return ''; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('substring', function() { return ''; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('substr', function() { return ''; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('trim', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('trimStart', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('trimEnd', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('toLowerCase', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('toUpperCase', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('toString', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('valueOf', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('charAt', function() { return ''; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('charCodeAt', function() { return NaN; });
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('concat', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('padStart', __strFallbackToSelf);
+        // M62: boa 0.21 原生支持，移除包装
+        //__wrapStringMethod('padEnd', __strFallbackToSelf);
 
         function __wrapNumberMethod(name, fallback) {
             var __orig = Number.prototype[name];
