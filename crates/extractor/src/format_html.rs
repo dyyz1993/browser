@@ -4,6 +4,7 @@
 //! （多个匹配则依次拼接）。
 
 use browser_dom::{serialize_html, NodeId, Tree};
+use std::collections::HashSet;
 
 use crate::selector::query_all;
 
@@ -14,13 +15,32 @@ use crate::selector::query_all;
 ///
 /// # Errors
 /// 选择器解析失败时返回 `Err(String)`。
-pub fn to_html(tree: &Tree, selector: Option<&str>) -> Result<String, String> {
+pub fn to_html(
+    tree: &Tree,
+    selector: Option<&str>,
+    excluded: &HashSet<NodeId>,
+) -> Result<String, String> {
+    // selector 模式：序列化匹配子树（子树内部不再做噪声过滤，selector 已精确指定）。
     let Some(sel) = selector else {
-        return Ok(serialize_html(tree, tree.root()));
+        // 整文档模式：若无非噪声过滤，直接序列化整棵；否则逐子树序列化跳过 excluded。
+        if excluded.is_empty() {
+            return Ok(serialize_html(tree, tree.root()));
+        }
+        let mut out = String::new();
+        for &child in tree.children_of(tree.root()) {
+            if excluded.contains(&child) {
+                continue;
+            }
+            out.push_str(&serialize_html(tree, child));
+        }
+        return Ok(out);
     };
     let ids: Vec<NodeId> = query_all(tree, sel)?;
     let mut out = String::new();
     for id in ids {
+        if excluded.contains(&id) {
+            continue;
+        }
         out.push_str(&serialize_html(tree, id));
     }
     Ok(out)
@@ -37,7 +57,7 @@ mod tests {
     #[test]
     fn to_html_full_document() {
         let tree = parse("<p>hello</p>");
-        let html = to_html(&tree, None).expect("full doc");
+        let html = to_html(&tree, None, &HashSet::new()).expect("full doc");
         assert!(html.contains("hello"));
         assert!(html.contains("<p>"));
     }
@@ -45,7 +65,7 @@ mod tests {
     #[test]
     fn to_html_with_selector_only_matching_subtree() {
         let tree = parse("<div><p class='x'>keep</p><p>drop</p></div>");
-        let html = to_html(&tree, Some(".x")).expect("selector");
+        let html = to_html(&tree, Some(".x"), &HashSet::new()).expect("selector");
         assert!(html.contains("keep"), "matched content present");
         assert!(!html.contains("drop"), "non-matched content excluded");
     }
@@ -53,7 +73,7 @@ mod tests {
     #[test]
     fn to_html_selector_multiple_matches_concatenated() {
         let tree = parse("<ul><li>a</li><li>b</li></ul>");
-        let html = to_html(&tree, Some("li")).expect("multiple");
+        let html = to_html(&tree, Some("li"), &HashSet::new()).expect("multiple");
         assert!(html.contains(">a<"));
         assert!(html.contains(">b<"));
     }

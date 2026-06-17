@@ -4,6 +4,7 @@
 //! inline 元素直接拼文本，`<br>` 也触发换行。连续空白折叠为单个空格。
 
 use browser_dom::{NodeId, Tree};
+use std::collections::HashSet;
 
 use crate::selector::query_all;
 
@@ -47,21 +48,28 @@ fn is_block(tag: &str) -> bool {
 ///
 /// # Errors
 /// 选择器解析失败时返回 `Err(String)`。
-pub fn to_text(tree: &Tree, selector: Option<&str>) -> Result<String, String> {
+pub fn to_text(
+    tree: &Tree,
+    selector: Option<&str>,
+    excluded: &HashSet<NodeId>,
+) -> Result<String, String> {
     let roots: Vec<NodeId> = match selector {
         Some(sel) => query_all(tree, sel)?,
         None => vec![tree.root()],
     };
     let mut out = String::new();
     for root in roots {
-        walk_text(tree, root, &mut out);
+        walk_text(tree, root, &mut out, excluded);
     }
     // 后处理：折叠连续空白、去除行首尾空白、合并多余空行。
     Ok(postprocess(&out))
 }
 
 /// 递归收集文本，按块级元素插入换行。
-fn walk_text(tree: &Tree, id: NodeId, out: &mut String) {
+fn walk_text(tree: &Tree, id: NodeId, out: &mut String, excluded: &HashSet<NodeId>) {
+    if excluded.contains(&id) {
+        return; // 噪声节点整棵子树跳过
+    }
     let node = tree.get(id);
     match &node.data {
         browser_dom::NodeData::Text(s) => {
@@ -78,7 +86,7 @@ fn walk_text(tree: &Tree, id: NodeId, out: &mut String) {
                 out.push('\n');
             }
             for &child in tree.children_of(id) {
-                walk_text(tree, child, out);
+                walk_text(tree, child, out, excluded);
             }
             // 块级元素后换行。
             if is_block(tag) && !out.ends_with('\n') {
@@ -87,7 +95,7 @@ fn walk_text(tree: &Tree, id: NodeId, out: &mut String) {
         }
         browser_dom::NodeData::Document | browser_dom::NodeData::Doctype { .. } => {
             for &child in tree.children_of(id) {
-                walk_text(tree, child, out);
+                walk_text(tree, child, out, excluded);
             }
         }
         browser_dom::NodeData::Comment(_) => {}
@@ -146,14 +154,14 @@ mod tests {
     #[test]
     fn to_text_extracts_plain_text() {
         let tree = parse("<p>hello world</p>");
-        let text = to_text(&tree, None).expect("text");
+        let text = to_text(&tree, None, &HashSet::new()).expect("text");
         assert_eq!(text, "hello world");
     }
 
     #[test]
     fn to_text_separates_block_elements() {
         let tree = parse("<p>one</p><p>two</p>");
-        let text = to_text(&tree, None).expect("text");
+        let text = to_text(&tree, None, &HashSet::new()).expect("text");
         assert!(text.contains("one"));
         assert!(text.contains("two"));
         // 两个段落应在不同行
@@ -163,14 +171,14 @@ mod tests {
     #[test]
     fn to_text_collapses_whitespace() {
         let tree = parse("<p>  multiple    spaces  </p>");
-        let text = to_text(&tree, None).expect("text");
+        let text = to_text(&tree, None, &HashSet::new()).expect("text");
         assert!(!text.contains("  "), "no double spaces: {text:?}");
     }
 
     #[test]
     fn to_text_handles_br() {
         let tree = parse("<p>line1<br>line2</p>");
-        let text = to_text(&tree, None).expect("text");
+        let text = to_text(&tree, None, &HashSet::new()).expect("text");
         assert!(text.contains("line1") && text.contains("line2"));
         assert!(text.contains('\n'), "br should produce newline");
     }
@@ -178,14 +186,14 @@ mod tests {
     #[test]
     fn to_text_with_selector() {
         let tree = parse("<div><p class='x'>target</p><p>other</p></div>");
-        let text = to_text(&tree, Some(".x")).expect("selector");
+        let text = to_text(&tree, Some(".x"), &HashSet::new()).expect("selector");
         assert_eq!(text, "target");
     }
 
     #[test]
     fn to_text_ignores_comments() {
         let tree = parse("<p>visible</p><!-- hidden comment -->");
-        let text = to_text(&tree, None).expect("text");
+        let text = to_text(&tree, None, &HashSet::new()).expect("text");
         assert_eq!(text, "visible");
         assert!(!text.contains("hidden"));
     }

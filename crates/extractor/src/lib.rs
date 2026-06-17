@@ -10,12 +10,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod clean;
 pub mod format_html;
 pub mod format_links;
 pub mod format_text;
 pub mod selector;
 
-// clean.rs / format_md.rs 在 Step 2 / Step 3 加入。
+// format_md.rs 在 Step 3 加入。
 
 use browser_dom::Tree;
 
@@ -94,19 +95,42 @@ pub fn run_extract(
 ) -> Result<ExtractResult, String> {
     let title = extract_title(tree);
     let selector = opts.selector.as_deref();
-    // Step 2 加入噪声过滤后，这里会先 clean_tree（仅 text/markdown/html 且
-    // only_main_content=true 时）。当前 Step 1 先直通各 format。
-    let content = match opts.format {
-        OutputFormat::Html => format_html::to_html(tree, selector)?,
-        OutputFormat::Text => format_text::to_text(tree, selector)?,
-        OutputFormat::Links => format_links::to_links(tree, base_url, selector)?,
+    let content = extract_with_clean(tree, base_url, opts, selector)?;
+    // 空内容兜底（借鉴 Firecrawl）：only_main_content 过滤后输出为空 →
+    // 自动回退用完整内容（only_main_content=false）重跑一次。
+    if opts.only_main_content && content.trim().is_empty() {
+        eprintln!("[extractor] main content empty, falling back to full content");
+        let fallback_opts = FetchOptions {
+            only_main_content: false,
+            ..opts.clone()
+        };
+        let fallback = extract_with_clean(tree, base_url, &fallback_opts, selector)?;
+        return Ok(ExtractResult {
+            content: fallback,
+            title,
+        });
+    }
+    Ok(ExtractResult { content, title })
+}
+
+/// 单次提取（含噪声过滤）。被 run_extract 调用，也用于空内容兜底重跑。
+fn extract_with_clean(
+    tree: &Tree,
+    base_url: Option<&str>,
+    opts: &FetchOptions,
+    selector: Option<&str>,
+) -> Result<String, String> {
+    let excluded = clean::excluded_nodes(tree, opts.only_main_content)?;
+    match opts.format {
+        OutputFormat::Html => format_html::to_html(tree, selector, &excluded),
+        OutputFormat::Text => format_text::to_text(tree, selector, &excluded),
+        OutputFormat::Links => format_links::to_links(tree, base_url, selector, &excluded),
         OutputFormat::Markdown => {
             // Step 3 实装前，markdown 暂时降级为纯文本（保证命令可用）。
             eprintln!("[extractor] markdown format not yet implemented, falling back to text");
-            format_text::to_text(tree, selector)?
+            format_text::to_text(tree, selector, &excluded)
         }
-    };
-    Ok(ExtractResult { content, title })
+    }
 }
 
 /// 从 `<title>` 元素提取页面标题。
@@ -189,5 +213,47 @@ mod tests {
         };
         let result = run_extract(&tree, Some("https://x.com/"), &opts).expect("links");
         assert!(result.content.contains("https://x.com/p"));
+    }
+
+    #[test]
+    fn run_extract_only_main_content_strips_nav_footer() {
+        let tree = parse(
+            "<body>             <nav><a href='/n'>nav link</a></nav>             <article><p>main content here</p></article>             <footer>copyright text</footer>             </body>",
+        );
+        let opts = FetchOptions {
+            format: OutputFormat::Text,
+            only_main_content: true,
+            ..Default::default()
+        };
+        let result = run_extract(&tree, None, &opts).expect("main content");
+        assert!(
+            result.content.contains("main content here"),
+            "article content must survive"
+        );
+        assert!(
+            !result.content.contains("copyright text"),
+            "footer noise must be stripped"
+        );
+        assert!(
+            !result.content.contains("nav link"),
+            "nav noise must be stripped"
+        );
+    }
+
+    #[test]
+    fn run_extract_empty_main_content_falls_back_to_full() {
+        // 页面只有 nav（被排除），没有 article → main content 为空 → 兜底用完整内容。
+        let tree = parse("<body><nav>only nav</nav><p>real content</p></body>");
+        let opts = FetchOptions {
+            format: OutputFormat::Text,
+            only_main_content: true,
+            ..Default::default()
+        };
+        let result = run_extract(&tree, None, &opts).expect("fallback");
+        // 兜底后应包含被排除了的 nav 内容（因为 fallback only_main_content=false）
+        assert!(
+            result.content.contains("real content"),
+            "fallback should include real content"
+        );
     }
 }

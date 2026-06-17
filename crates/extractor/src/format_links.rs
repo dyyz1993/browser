@@ -24,6 +24,7 @@ pub fn to_links(
     tree: &Tree,
     base_url: Option<&str>,
     selector: Option<&str>,
+    excluded: &HashSet<NodeId>,
 ) -> Result<String, String> {
     let base = base_url.and_then(|b| Url::parse(b).ok());
     let roots: Vec<NodeId> = match selector {
@@ -34,7 +35,7 @@ pub fn to_links(
     let mut out = String::new();
     let mut seen: HashSet<String> = HashSet::new();
     for root in roots {
-        collect_links(tree, root, base.as_ref(), &mut out, &mut seen);
+        collect_links(tree, root, base.as_ref(), &mut out, &mut seen, excluded);
     }
     Ok(out.trim_end().to_string())
 }
@@ -46,7 +47,11 @@ fn collect_links(
     base: Option<&Url>,
     out: &mut String,
     seen: &mut HashSet<String>,
+    excluded: &HashSet<NodeId>,
 ) {
+    if excluded.contains(&id) {
+        return; // 噪声节点整棵子树跳过
+    }
     if let browser_dom::NodeData::Element { tag, attrs } = &tree.get(id).data {
         if tag.eq_ignore_ascii_case("a") {
             let href = attrs.iter().find_map(|(k, v)| {
@@ -72,7 +77,7 @@ fn collect_links(
         }
     }
     for &child in tree.children_of(id) {
-        collect_links(tree, child, base, out, seen);
+        collect_links(tree, child, base, out, seen, excluded);
     }
 }
 
@@ -126,7 +131,7 @@ mod tests {
     fn to_links_extracts_absolute_urls() {
         let tree =
             parse("<a href='https://example.com/a'>A</a><a href='https://example.com/b'>B</a>");
-        let links = to_links(&tree, None, None).expect("links");
+        let links = to_links(&tree, None, None, &HashSet::new()).expect("links");
         assert!(links.contains("A → https://example.com/a"));
         assert!(links.contains("B → https://example.com/b"));
     }
@@ -134,7 +139,8 @@ mod tests {
     #[test]
     fn to_links_resolves_relative_against_base() {
         let tree = parse("<a href='/page'>Page</a>");
-        let links = to_links(&tree, Some("https://site.com/dir/"), None).expect("links");
+        let links =
+            to_links(&tree, Some("https://site.com/dir/"), None, &HashSet::new()).expect("links");
         assert!(
             links.contains("https://site.com/page"),
             "relative resolved: {links}"
@@ -144,7 +150,13 @@ mod tests {
     #[test]
     fn to_links_resolves_dot_relative() {
         let tree = parse("<a href='./sub.json'>data</a>");
-        let links = to_links(&tree, Some("https://seo.box/referring/"), None).expect("links");
+        let links = to_links(
+            &tree,
+            Some("https://seo.box/referring/"),
+            None,
+            &HashSet::new(),
+        )
+        .expect("links");
         assert!(
             links.contains("https://seo.box/referring/sub.json"),
             "dot-relative resolved: {links}"
@@ -154,7 +166,7 @@ mod tests {
     #[test]
     fn to_links_deduplicates() {
         let tree = parse("<a href='https://x.com/'>X</a><a href='https://x.com/'>X2</a>");
-        let links = to_links(&tree, None, None).expect("links");
+        let links = to_links(&tree, None, None, &HashSet::new()).expect("links");
         // 同一 URL 只出现一次
         assert_eq!(links.matches("https://x.com/").count(), 1);
     }
@@ -162,7 +174,7 @@ mod tests {
     #[test]
     fn to_links_skips_javascript_and_empty() {
         let tree = parse("<a href='javascript:void(0)'>js</a><a href=''>empty</a><a href='https://ok.com/'>ok</a>");
-        let links = to_links(&tree, None, None).expect("links");
+        let links = to_links(&tree, None, None, &HashSet::new()).expect("links");
         assert!(!links.contains("javascript"));
         assert!(links.contains("ok.com"));
     }
@@ -172,7 +184,13 @@ mod tests {
         let tree = parse(
             "<div class='nav'><a href='/nav1'>N</a></div><article><a href='/art1'>A</a></article>",
         );
-        let links = to_links(&tree, Some("https://x.com/"), Some("article")).expect("links");
+        let links = to_links(
+            &tree,
+            Some("https://x.com/"),
+            Some("article"),
+            &HashSet::new(),
+        )
+        .expect("links");
         assert!(links.contains("/art1") || links.contains("x.com/art1"));
         assert!(!links.contains("nav1"));
     }
