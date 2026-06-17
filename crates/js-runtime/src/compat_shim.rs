@@ -1645,6 +1645,12 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             };
         }
 
+        // M62: ga（Google Analytics no-op）。base.js 等库直接调 ga()，
+        // 若 hostname 检查失败（boa getter 是方法形式）则 ga 未初始化 → not a callable。
+        if (typeof globalThis.ga !== 'function') {
+            globalThis.ga = function() {};
+        }
+
         // M62: queueMicrotask —— 用 Promise 微任务队列实现（boa 0.21 支持）。
         if (typeof globalThis.queueMicrotask !== 'function') {
             globalThis.queueMicrotask = function(cb) {

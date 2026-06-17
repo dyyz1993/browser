@@ -106,6 +106,11 @@ fn build_location_object(ctx: &mut Context) -> JsResult<JsValue> {
             0,
         )
         .function(
+            NativeFunction::from_fn_ptr(location_hostname),
+            boa_engine::JsString::from("hostname"),
+            0,
+        )
+        .function(
             NativeFunction::from_fn_ptr(location_protocol),
             boa_engine::JsString::from("protocol"),
             0,
@@ -213,6 +218,13 @@ fn location_pathname(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> J
 
 fn location_host(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     ctx.eval(boa_engine::Source::from_bytes("__locationParts().host;"))
+}
+
+/// M62: location.hostname（host 去掉端口；React/base.js 等用 hostname 比较）。
+fn location_hostname(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    ctx.eval(boa_engine::Source::from_bytes(
+        "(function() { var h = __locationParts().host || ''; return h.split(':')[0]; })();",
+    ))
 }
 
 fn location_protocol(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {

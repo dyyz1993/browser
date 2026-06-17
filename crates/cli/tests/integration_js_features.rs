@@ -573,7 +573,10 @@ r.push('comment:' + (typeof comment.tagName !== 'undefined'));
 document.getElementById('out').textContent = r.join(',');
 </script></body></html>"#;
     let path = write_tmp(html);
-    bin().args(["render-script", &path, "--width", "120"]).assert().success()
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("nodeType:1"))
         .stdout(predicate::str::contains("isElement:true"));
     let _ = std::fs::remove_file(&path);
@@ -591,7 +594,10 @@ var mql = window.matchMedia('(min-width: 800px)');
 document.getElementById('out').textContent = 'OK ' + mql.media + ' ' + mo.__observing;
 </script></body></html>"#;
     let path = write_tmp(html);
-    bin().args(["render-script", &path, "--width", "120"]).assert().success()
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("OK (min-width: 800px)"));
     let _ = std::fs::remove_file(&path);
 }
