@@ -68,8 +68,8 @@
 ## JS 执行能力（js-runtime crate）
 
 ### 引擎
-- ✅ boa_engine 0.20（嵌入式 JS 引擎）
-- ⚠️ ES6+ 异步（Promise/setTimeout/async-await）**defer**——boa 0.20 限制
+- ✅ boa_engine **0.21**（M60 升级，async/await 运行时落地，ES 一致性 ~94%）
+- ✅ ES6+ 全面支持（let/const/箭头/模板/解构/class/Symbol/Map/Set/Proxy/async-await，18 项入库测试）
 
 ### JS ↔ DOM 桥（28 个 `__*` 全局函数）
 
@@ -174,9 +174,12 @@
 | `history`/`location` | ✅ | M14 |
 | `XMLHttpRequest` | ✅ | M17 |
 | `WebSocket` | ✅ | M18 |
-| `setTimeout`/`Promise` | ✅ | M30 |
-| `setInterval` | ✅ | M30 |
+| `setTimeout`/`Promise`/async-await | ✅ | M16/M30/M60 |
+| `setInterval` | ✅ | M62（真实现，100 次硬上限防死循环） |
 | `Image` | ✅ | M41 |
+| 事件系统（Event/CustomEvent/EventTarget） | ✅ | M62（DOMContentLoaded 自动 dispatch） |
+| `queueMicrotask` | ✅ | M62 |
+| `atob`/`btoa`（真 Base64） | ✅ | M62 |
 | 表单提交（GET/POST） | ⚠️ 部分 | M8（仅本地交互，不发网络） |
 
 ---
@@ -188,4 +191,4 @@
 3. **GUI 需要显示器**：`open` 子命令在 headless/SSH 无 X 转发时会失败。用 `screenshot` 代替或使用 CDP server 模式。
 4. **真实图像渲染**：GUI 只显示 `[IMG: src]` 占位符（CLI 用 image-ascii），CDP captureScreenshot 生成 PNG base64（M44）。
 5. **JS 对象属性**：`length`/`state`/`href` 是方法形式（`localStorage.length()`），因为 boa getter API 复杂。爬虫 JS 兼容时需注意。
-6. **JS 引擎兼容性**：boa 0.20 不支持 ES6 shorthand（`{ fn() {} }`），部分复杂 bundle 可能报错。
+6. **JS 引擎兼容性**：boa 0.21 支持 ES6+（async/await/Proxy/Map/Set/Symbol 等全部入库测试通过）。已知局限：①某些站点 JS 触发 boa 内部 panic（fetch 命令有 catch_unwind 兜底）；②纯 CSR 无 SSR 兜底的站点需真 Chrome。详见 [JS-COVERAGE.md](./JS-COVERAGE.md)。

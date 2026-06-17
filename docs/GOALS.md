@@ -102,7 +102,7 @@ browser spa http://localhost:8765/async-spa.html --wait networkidle
 | **CSS grid / table / float 布局** | 复杂度高，爬虫只关心文本 |
 | **3D / 复杂动画** | 性能开销大，爬虫不需要 |
 | **多进程架构** | 单进程足够，低内存优先 |
-| **完整 ES6+ 异步语义** | boa 0.20 限制，defer 到切 deno_core |
+| **完整 ES6+ 异步语义** | M60 已升 boa 0.21，async/await 落地（18 项入库测试）。纯 CSR 无 SSR 站仍需 Chrome |
 
 ---
 
