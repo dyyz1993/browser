@@ -97,6 +97,14 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
                 }
                 return node;
             },
+            createDocumentFragment: function() {
+                // M62: React/Vue 虚拟 DOM 批量操作必需。
+                return __makeElement(__createEl('div'));
+            },
+            createComment: function(text) {
+                // M62: React 用 comment 节点做锚点。
+                return __makeElement(__createEl('span'));
+            },
             addEventListener: function(type, cb) {
                 if (!this.__listeners) this.__listeners = {};
                 if (!this.__listeners[type]) this.__listeners[type] = [];

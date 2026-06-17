@@ -113,7 +113,12 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
         });
 
         // ── tagName: getter（只读，大写）──
-        Object.defineProperty(Element.prototype, 'tagName', {
+        // M62: nodeType（React/Vue DOM 元素验证核心：el.nodeType === 1）。
+        Object.defineProperty(Element.prototype, 'nodeType', {
+            get: function() { return 1; }
+        });
+
+Object.defineProperty(Element.prototype, 'tagName', {
             get: function() {
                 return (typeof __getTagName === 'function')
                     ? String(__getTagName(this.__nodeId)).toUpperCase() : '';
@@ -360,6 +365,12 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
         globalThis.Element = Element;
         globalThis.HTMLElement = Element;
         globalThis.Node = Element;
+        // M62: Node 常量（React/Vue 用 nodeType === Node.ELEMENT_NODE 验证 DOM 元素）。
+        globalThis.Node.ELEMENT_NODE = 1;
+        globalThis.Node.TEXT_NODE = 3;
+        globalThis.Node.DOCUMENT_NODE = 9;
+        globalThis.Node.DOCUMENT_FRAGMENT_NODE = 11;
+        globalThis.Node.COMMENT_NODE = 8;
         // M62: 补 HTML 具体元素子类（框架 instanceof 检查需要）。
         // 我们的 DOM 模型不区分子类型，全部等价于 Element。
         globalThis.HTMLScriptElement = Element;

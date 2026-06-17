@@ -1504,6 +1504,41 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 return true;
             };
         }
+        // M62: MutationObserver（Vue 3 响应式 / 框架 hydration 需要）。
+        // 爬虫场景：存回调但不真 observe（DOM 变化由 JS 执行驱动，不需监听）。
+        if (typeof globalThis.MutationObserver !== 'function') {
+            globalThis.MutationObserver = function MutationObserver(cb) {
+                this.__cb = cb;
+                this.__observing = false;
+            };
+            globalThis.MutationObserver.prototype.observe = function(target, opts) {
+                this.__observing = true;
+                this.__target = target;
+                this.__opts = opts;
+            };
+            globalThis.MutationObserver.prototype.disconnect = function() {
+                this.__observing = false;
+            };
+            globalThis.MutationObserver.prototype.takeRecords = function() {
+                return [];
+            };
+        }
+        // M62: window.matchMedia（框架响应式布局检测，base.js/todomvc 报错根源）。
+        if (typeof globalThis.matchMedia !== 'function') {
+            globalThis.matchMedia = function(query) {
+                return {
+                    matches: false,
+                    media: query || '',
+                    onchange: null,
+                    addListener: function() {},
+                    removeListener: function() {},
+                    addEventListener: function() {},
+                    removeEventListener: function() {},
+                    dispatchEvent: function() { return true; }
+                };
+            };
+        }
+
         if (typeof globalThis.MessageEvent !== 'function') {
             globalThis.MessageEvent = function MessageEvent(type, options) {
                 this.type = type;

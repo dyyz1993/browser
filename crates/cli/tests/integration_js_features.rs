@@ -554,6 +554,48 @@ document.getElementById('out').textContent = 'HFB_OK ' + h.get('content-type') +
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn web_api_framework_dom_checks() {
+    // React/Vue 框架 DOM 元素验证的核心属性。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="root"></div>
+<div id="out">FAIL</div>
+<script>
+var el = document.getElementById('root');
+var frag = document.createDocumentFragment();
+var comment = document.createComment('anchor');
+var r = [];
+r.push('nodeType:' + el.nodeType);
+r.push('ELEMENT_NODE:' + Node.ELEMENT_NODE);
+r.push('isElement:' + (el.nodeType === Node.ELEMENT_NODE));
+r.push('fragment:' + (typeof frag.appendChild));
+r.push('comment:' + (typeof comment.tagName !== 'undefined'));
+document.getElementById('out').textContent = r.join(',');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin().args(["render-script", &path, "--width", "120"]).assert().success()
+        .stdout(predicate::str::contains("nodeType:1"))
+        .stdout(predicate::str::contains("isElement:true"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_mutation_observer_and_match_media() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var mo = new MutationObserver(function() {});
+mo.observe(document.body, { childList: true });
+mo.disconnect();
+var mql = window.matchMedia('(min-width: 800px)');
+document.getElementById('out').textContent = 'OK ' + mql.media + ' ' + mo.__observing;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin().args(["render-script", &path, "--width", "120"]).assert().success()
+        .stdout(predicate::str::contains("OK (min-width: 800px)"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
