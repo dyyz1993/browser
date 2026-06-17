@@ -19,7 +19,7 @@
 | 二进制大小（release） | 14MB | 14MB（不变） |
 | 静态站峰值 RSS（example.com） | 14MB | _待测_ |
 | CSR 站峰值 RSS（seo.box） | 95MB | _待测_ |
-| 测试总数 | 762（+16 JS 特性含事件系统） | 稳定增长 |
+| 测试总数 | 764（+18 JS 特性含事件/qsa/microtask） | 稳定增长 |
 
 ---
 
@@ -67,7 +67,7 @@
 |------|------|------|
 | getElementById | ✅ | 多处 |
 | querySelector | ✅ | 多处 |
-| querySelectorAll | ⚠️ 仅首个 | |
+| querySelectorAll | ✅ 全部（M62） | |
 | createElement | ✅ | lazy-load fixture |
 | createTextNode | ✅ | |
 | getElementsByTagName | ⚠️ 仅首个 | |
@@ -85,7 +85,7 @@
 | setAttribute/getAttribute | ✅ | |
 | textContent | ✅ | |
 | innerHTML | ✅ | async-data fixture |
-| **querySelectorAll** | ❌ 返回 [] | 待 P3 |
+| **querySelectorAll** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features |
 | cloneNode | ✅ | |
 | classList | ⚠️ no-op | |
 | dataset | ⚠️ 部分 | |
@@ -138,7 +138,7 @@
 | structuredClone | ⚠️ | |
 | performance.now | ✅ | |
 | requestAnimationFrame | ⚠️ | |
-| queueMicrotask | ❌ | |
+| queueMicrotask | ✅ | integration_js_features | |
 | MutationObserver | ❌ | |
 | AbortController | ⚠️ | |
 | Headers/FormData/Blob | ❌ | fetch 配套缺 |

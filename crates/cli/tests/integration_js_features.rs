@@ -322,6 +322,47 @@ btn.dispatchEvent(new CustomEvent('action', { detail: { amount: 100 } }));
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn web_api_query_selector_all_returns_all() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<div class="item">A</div>
+<div class="item">B</div>
+<div class="item">C</div>
+<script>
+var items = document.querySelectorAll('.item');
+document.getElementById('out').textContent = 'QSA_' + items.length;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("QSA_3"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_queue_microtask() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var order = ['sync'];
+queueMicrotask(function() {
+  order.push('micro');
+  document.getElementById('out').textContent = order.join(',');
+});
+order.push('queued');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sync,queued,micro"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

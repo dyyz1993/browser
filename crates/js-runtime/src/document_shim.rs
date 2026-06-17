@@ -71,9 +71,15 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
                 return __makeElement(__qs(sel));
             },
             querySelectorAll: function(sel) {
-                // MVP: 返回数组，若只依赖首个命中则可继续运行。
-                var first = __qs(sel);
-                return typeof first === 'number' && first >= 0 ? [__makeElement(first)] : [];
+                // M62: 返回所有匹配（之前只返回首个）。
+                var ids = __qsAll(sel);
+                var out = [];
+                for (var i = 0; i < ids.length; i++) {
+                    if (typeof ids[i] === 'number' && ids[i] >= 0) {
+                        out.push(__makeElement(ids[i]));
+                    }
+                }
+                return out;
             },
             createElement: function(tag) {
                 return __makeElement(__createEl(tag));

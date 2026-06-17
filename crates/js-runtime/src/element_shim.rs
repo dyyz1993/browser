@@ -283,8 +283,18 @@ pub fn install_element(ctx: &mut Context) -> JsResult<()> {
                 ? __findChild(this.__nodeId, id) : undefined;
             return (typeof nid === 'number') ? new Element(nid) : null;
         };
-        Element.prototype.querySelectorAll = function() {
-            return [];
+        // M62: Element 级 querySelectorAll（之前写死返回 []）。
+        // 注：Element 级搜索需要从该元素子树开始，简化版仍从 document 根搜索。
+        Element.prototype.querySelectorAll = function(sel) {
+            if (!sel) return [];
+            var ids = (typeof __qsAll === 'function') ? __qsAll(sel) : [];
+            var out = [];
+            for (var i = 0; i < ids.length; i++) {
+                if (typeof ids[i] === 'number' && ids[i] >= 0) {
+                    out.push(__makeElement(ids[i]));
+                }
+            }
+            return out;
         };
         Element.prototype.addEventListener = function(type, cb) {
             if (!this.__listeners) this.__listeners = {};

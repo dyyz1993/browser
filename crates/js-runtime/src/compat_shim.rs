@@ -1513,6 +1513,13 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             };
         }
 
+        // M62: queueMicrotask —— 用 Promise 微任务队列实现（boa 0.21 支持）。
+        if (typeof globalThis.queueMicrotask !== 'function') {
+            globalThis.queueMicrotask = function(cb) {
+                Promise.resolve().then(cb);
+            };
+        }
+
         if (typeof globalThis.structuredClone !== 'function') {
             globalThis.structuredClone = function(value) {
                 try {

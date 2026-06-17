@@ -211,6 +211,8 @@ pub fn install(ctx: &mut Context) {
     register_fn2(ctx, "__removeAttr", remove_attr as NativeFn);
     register_fn1(ctx, "__getElById", get_el_by_id as NativeFn);
     register_fn1(ctx, "__qs", qs as NativeFn);
+    // M62: querySelectorAll 后端（返回所有匹配）。
+    register_fn1(ctx, "__qsAll", qs_all as NativeFn);
     register_fn2(ctx, "__setText", set_text as NativeFn);
     register_fn1(ctx, "__getText", get_text as NativeFn);
     register_fn1(ctx, "__getTag", get_tag as NativeFn);
@@ -828,6 +830,16 @@ fn qs(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue
     }))
 }
 
+/// `__qsAll(selector) -> number[]`：返回所有匹配的 NodeId（M62）。
+fn qs_all(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let sel = arg_string(args, 0).unwrap_or_default();
+    let ids = with_tree(|t| find_all_by_selector(t, &sel));
+    // 用 eval 构造 JS 数组（避开 JsArray 路径差异）。
+    let id_str: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+    let js = format!("[{}]", id_str.join(","));
+    ctx.eval(boa_engine::Source::from_bytes(&js))
+}
+
 fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     let sel = sel.trim();
     if let Some(tag) = sel.strip_prefix('#') {
@@ -853,6 +865,36 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
             return false;
         }
         true
+    });
+    found
+}
+
+/// M62: find_all_by_selector —— 返回所有匹配节点（querySelectorAll 后端）。
+fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
+    let sel = sel.trim();
+    if let Some(tag) = sel.strip_prefix('#') {
+        // id 选择器最多一个
+        if let Some(id) = find_by_id(tree, tag) {
+            return vec![id];
+        }
+        return vec![];
+    }
+    let segments: Vec<&str> = sel
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let tokens = if segments.len() > 1 {
+        tokenize_selector(segments.last().copied().unwrap_or(sel))
+    } else {
+        tokenize_selector(sel)
+    };
+    let mut found = Vec::new();
+    tree.traverse(tree.root(), |id, node| {
+        if matches_selector(node, &tokens) {
+            found.push(id);
+        }
+        true // 不提前退出，收集全部
     });
     found
 }
