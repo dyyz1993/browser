@@ -104,8 +104,22 @@ boa 0.21 升级 + SSR 提取层是**保住卖点的同时最大化覆盖率**的
 - **风险**：boa 0.21 API 可能变（Context 构造、runtime_limits 接口等）
 - **回退**：若 breaking 太大，git revert，转 M61 先做 SSR 提取
 
-### M61：SSR 数据提取层（ROI 最高，零 JS 成本）
-**目标**：不跑 JS，直接抠框架注入的全局数据。
+### M61：fetch --smart 模式（先 SSR 后 JS）✅ 已完成
+**原计划**：SSR JSON 提取（抠 `__NEXT_DATA__` 等）。
+**调研后调整**：JSON 提取适用面窄（现代 Next 用 RSC 流、掘金用混淆函数式且数据空），
+转而实装 `--smart` 模式——比抠 JSON 实用得多。
+
+**实现**：先 `--no-js` 快速提 SSR（<1s），内容 ≥500 字符直接返回，不够再跑 JS。
+**实测效果（nextjs.org/blog）**：默认跑 JS 101s/113MB → `--smart` 12.8s/18.8MB
+（**快 8 倍，省 6 倍内存**）。
+**覆盖增益**：有 SSR 的站点自动跳过 JS（秒出），纯 CSR 站自动回退 JS（拿数据）。
+
+### M61-原（SSR JSON 提取，defer）
+抠 `__NEXT_DATA__`/`__NUXT_DATA__` 的方案，调研发现适用面窄，**defer**：
+- 现代 Next.js（13+）用 `self.__next_f.push` RSC 流，非 JSON
+- Nuxt 2 用混淆函数式 `window.__NUXT__`，非简单 JSON
+- 多数站点 SSR HTML 本身有内容（`--smart` 的 `--no-js` 路径已覆盖）
+- 若未来需要，可针对特定框架单独实装
 
 - 新增 `crates/extractor/src/ssr_data.rs`：
   - 扫 `<script id="__NEXT_DATA__">` → JSON
