@@ -19,7 +19,7 @@
 | 二进制大小（release） | 14MB | 14MB（不变） |
 | 静态站峰值 RSS（example.com） | 14MB | _待测_ |
 | CSR 站峰值 RSS（seo.box） | 95MB | _待测_ |
-| 测试总数 | 756（+10 ES6 特性） | 稳定增长 |
+| 测试总数 | 759（+13 JS 特性） | 稳定增长 |
 
 ---
 
@@ -30,10 +30,10 @@
 |------|------|------|
 | 闭包/作用域 | ✅ | 5 SPA fixture 隐式覆盖 |
 | try/catch/finally | ✅ | 隐式覆盖 |
-| JSON.parse/stringify | ❓ | |
+| JSON.parse/stringify | ✅ | integration_js_features |
 | Array.prototype.* | ✅ | M62 移除包装后原生 |
 | String.prototype.* | ✅ | M62 移除包装后原生 |
-| RegExp | ❓ | |
+| RegExp | ✅ | integration_js_features |
 
 ### ES2015+（关键能力）
 | 特性 | 状态 | 测试 | 备注 |
@@ -124,8 +124,8 @@
 ### 编码/加密/二进制
 | API | 状态 | 备注 |
 |------|------|------|
-| **atob** | ❌ 实现错误 | 非真 Base64 |
-| **btoa** | ❌ 实现错误 | 非真 Base64 |
+| **atob** | ✅ | integration_js_features | M62 修真 Base64 |
+| **btoa** | ✅ | integration_js_features | M62 修真 Base64 |
 | TextEncoder | ❌ | |
 | TextDecoder | ❌ | |
 | crypto.getRandomValues | ⚠️ | |

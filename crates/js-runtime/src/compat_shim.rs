@@ -1524,20 +1524,41 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 this.getReader = function() { return {}; };
             };
         }
-        if (typeof globalThis.atob !== 'function') {
-            globalThis.atob = function(str) {
-                if (typeof str !== 'string') return '';
-                return decodeURIComponent(encodeURIComponent(str)).split('').map(function(c) {
-                    return String.fromCharCode(c.charCodeAt(0));
-                }).join('');
-            };
-        }
+        // M62: 真 Base64 编解码（之前实现是错的透传，破坏 JWT 场景）。
+        var __B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
         if (typeof globalThis.btoa !== 'function') {
             globalThis.btoa = function(str) {
                 if (typeof str !== 'string') return '';
-                var out = '';
-                for (var i = 0; i < str.length; i++) {
-                    out += String.fromCharCode(str.charCodeAt(i) & 0xff);
+                var out = '', i = 0;
+                while (i < str.length) {
+                    var b1 = str.charCodeAt(i++) & 0xff;
+                    var b2 = i < str.length ? (str.charCodeAt(i++) & 0xff) : -1;
+                    var b3 = i < str.length ? (str.charCodeAt(i++) & 0xff) : -1;
+                    out += __B64_CHARS[b1 >> 2];
+                    out += __B64_CHARS[((b1 & 0x3) << 4) | ((b2 > -1 ? b2 : 0) >> 4)];
+                    out += b2 > -1 ? __B64_CHARS[((b2 & 0xf) << 2) | ((b3 > -1 ? b3 : 0) >> 6)] : '=';
+                    out += b3 > -1 ? __B64_CHARS[b3 & 0x3f] : '=';
+                }
+                return out;
+            };
+        }
+        if (typeof globalThis.atob !== 'function') {
+            globalThis.atob = function(str) {
+                if (typeof str !== 'string') return '';
+                str = str.replace(/[^A-Za-z0-9+/=]/g, '');
+                var out = '', i = 0;
+                while (i < str.length) {
+                    var c1 = __B64_CHARS.indexOf(str.charAt(i++));
+                    var c2 = __B64_CHARS.indexOf(str.charAt(i++));
+                    var c3 = __B64_CHARS.indexOf(str.charAt(i++));
+                    var c4 = __B64_CHARS.indexOf(str.charAt(i++));
+                    out += String.fromCharCode((c1 << 2) | (c2 >> 4));
+                    if (c3 >= 0 && str.charAt(i - 2) !== '=') {
+                        out += String.fromCharCode(((c2 & 0xf) << 4) | (c3 >> 2));
+                    }
+                    if (c4 >= 0 && str.charAt(i - 1) !== '=') {
+                        out += String.fromCharCode(((c3 & 0x3) << 6) | c4);
+                    }
                 }
                 return out;
             };

@@ -209,15 +209,69 @@ fetchData().then(function(v) {
     let _ = std::fs::remove_file(&path);
 }
 
-/// 辅助：写临时 HTML 文件，返回路径。
+#[test]
+fn es5_json_parse_stringify() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var o = JSON.parse('{"a":1,"b":"x","c":[3,4]}');
+var s = JSON.stringify({n: 42, tag: "rust"});
+document.getElementById('out').textContent = 'JSON_OK ' + o.a + o.b + o.c[1] + ' ' + (s.indexOf('42') >= 0);
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("JSON_OK 1x4 true"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn es5_regexp() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var m = 'hello2026world'.match(/(\d+)/);
+var rep = 'a-b-c'.replace(/-/g, '_');
+var parts = '2026-06-17'.split('-');
+document.getElementById('out').textContent = 'REGEXP_OK ' + m[1] + ' ' + rep + ' ' + parts.length;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("REGEXP_OK 2026 a_b_c 3"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_base64_atob_btoa() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var enc = btoa('hello');
+var dec = atob('aGVsbG8=');
+var roundtrip = atob(btoa('test123'));
+document.getElementById('out').textContent = 'BASE64_OK ' + enc + ' ' + dec + ' ' + roundtrip;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BASE64_OK aGVsbG8= hello test123"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
-    let path = std::env::temp_dir().join(format!(
-        "m62_es6_{}.html",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let path = std::env::temp_dir().join(format!("m62_es6_{pid}_{id}.html"));
     std::fs::write(&path, html).unwrap();
     path.to_str().unwrap().to_string()
 }
