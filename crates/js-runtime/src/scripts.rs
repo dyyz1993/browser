@@ -307,7 +307,7 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
             break;
         }
         // M16.4: 先执行 Promise microtask（then 回调）。可能 schedule 新 timer。
-        ctx.run_jobs();
+        let _ = ctx.run_jobs(); // 0.21: 返回 JsResult，drain microtask 失败忽略
         let mut tick_invoked = 0;
         // Timer 回调（setTimeout）。
         let due = crate::bridge::drain_due_timer_callbacks();

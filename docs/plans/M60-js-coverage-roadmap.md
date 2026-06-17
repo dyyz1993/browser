@@ -84,8 +84,19 @@ boa 0.21 升级 + SSR 提取层是**保住卖点的同时最大化覆盖率**的
 
 ## 分阶段实施（M60-M63）
 
-### M60：boa 0.20 → 0.21 升级（最高优先，免费拿 async/await）
+### M60：boa 0.20 → 0.21 升级 ✅ 已完成
 **目标**：async/await 运行时可用，ES 一致性 90% → 94%。
+
+**结果（2026-06-17 验证）**：
+- ✅ 升级成功，breaking change 极小（仅 `JsValue::String` → `JsString::from().into()` + `run_jobs()` 返回 Result）
+- ✅ 全量测试 739 passed / 0 failed（零回归）
+- ✅ **async/await 真正可用了**：最小用例 `async function + await Promise` 正确渲染
+- ✅ 掘金从 1 字节（超时/空）→ 2717 字节（拿到导航 + 链接）
+- ⚠️ 但掘金文章列表仍未出来（需登录态/更复杂 API fetch，非 async/await 问题）
+- ⚠️ bark.day.app 仍 1 字节（纯 CSR 无 SSR 兜底，boa 能跑但站点无初始数据）
+
+**结论**：async/await 解锁了"能跑"，但不等于"能拿到数据"——纯 CSR 无 SSR 站点的
+数据获取还需要 M61（SSR 提取）或登录态支持。覆盖率提升需要 M61 配合。
 
 - 升级 `boa_engine = "0.21"`
 - 跑全量测试，修 breaking change

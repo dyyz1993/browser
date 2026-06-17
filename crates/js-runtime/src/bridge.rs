@@ -371,18 +371,18 @@ fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
         .map(|s| s.to_std_string_escaped())
         .unwrap_or_default();
     if raw.is_empty() {
-        return Ok(JsValue::String(boa_engine::JsString::from("")));
+        return Ok(JsValue::from(boa_engine::JsString::from("")));
     }
     let url = resolve_url(&raw);
     eprintln!("[js-fetch-bridge] GET {url}");
     match fetch_sync(&url) {
         // 编码：首行 status=200，后续行是 body（body 可能含换行，用 splitn(2) 解）。
-        Ok(body) => Ok(JsValue::String(boa_engine::JsString::from(format!(
+        Ok(body) => Ok(JsValue::from(boa_engine::JsString::from(format!(
             "200\n{body}"
         )))),
         Err(e) => {
             eprintln!("[js-fetch] {raw} failed: {e}");
-            Ok(JsValue::String(boa_engine::JsString::from("")))
+            Ok(JsValue::from(boa_engine::JsString::from("")))
         }
     }
 }
@@ -420,17 +420,17 @@ fn fetch_sync_method_bridge(
         }
     });
     if url.is_empty() {
-        return Ok(JsValue::String(boa_engine::JsString::from("")));
+        return Ok(JsValue::from(boa_engine::JsString::from("")));
     }
     let resolved = resolve_url(&url);
     eprintln!("[js-fetch-bridge] {method} {resolved}");
     match fetch_sync_with_method(&resolved, &method, body.as_deref(), content_type.as_deref()) {
-        Ok((status, body)) => Ok(JsValue::String(boa_engine::JsString::from(format!(
+        Ok((status, body)) => Ok(JsValue::from(boa_engine::JsString::from(format!(
             "{status}\n{body}"
         )))),
         Err(e) => {
             eprintln!("[js-fetch] {method} {url} failed: {e}");
-            Ok(JsValue::String(boa_engine::JsString::from("")))
+            Ok(JsValue::from(boa_engine::JsString::from("")))
         }
     }
 }
@@ -701,7 +701,7 @@ fn get_parent(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult
 fn get_children(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let parent_id = match arg_usize(args, 0) {
         Some(id) => id,
-        None => return Ok(JsValue::String(boa_engine::JsString::from(""))),
+        None => return Ok(JsValue::from(boa_engine::JsString::from(""))),
     };
     let child_ids = with_tree(|t| {
         t.children_of(parent_id)
@@ -710,7 +710,7 @@ fn get_children(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResu
             .collect::<Vec<_>>()
             .join(",")
     });
-    Ok(JsValue::String(boa_engine::JsString::from(child_ids)))
+    Ok(JsValue::from(boa_engine::JsString::from(child_ids)))
 }
 
 fn remove_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
@@ -1061,7 +1061,7 @@ fn get_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<J
         None => return Ok(JsValue::undefined()),
     };
     let text = with_tree(|t| collect_text(t, id));
-    Ok(JsValue::String(text.into()))
+    Ok(boa_engine::JsString::from(text).into())
 }
 
 /// 递归收集元素的所有子文本节点内容（textContent 语义）。
@@ -1088,7 +1088,7 @@ fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<Js
             _ => None,
         });
         return Ok(match tag {
-            Some(t) => JsValue::String(t.into()),
+            Some(t) => boa_engine::JsString::from(t).into(),
             None => JsValue::undefined(),
         });
     }
@@ -1124,7 +1124,7 @@ fn get_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<J
         _ => None,
     });
     match val {
-        Some(v) => Ok(JsValue::String(v.into())),
+        Some(v) => Ok(boa_engine::JsString::from(v).into()),
         None => Ok(JsValue::null()),
     }
 }
@@ -1261,7 +1261,7 @@ fn storage_get_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> 
     };
     let value = with_storage(|s| browser_storage::storage_get(s, &key));
     match value {
-        Some(v) => Ok(JsValue::String(boa_engine::string::JsString::from(v))),
+        Some(v) => Ok(JsValue::from(boa_engine::string::JsString::from(v))),
         None => Ok(JsValue::null()),
     }
 }
@@ -1311,7 +1311,7 @@ fn storage_key_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> 
     };
     let key = with_storage(|s| browser_storage::storage_key(s, idx));
     match key {
-        Some(k) => Ok(JsValue::String(boa_engine::string::JsString::from(k))),
+        Some(k) => Ok(JsValue::from(boa_engine::string::JsString::from(k))),
         None => Ok(JsValue::null()),
     }
 }
@@ -1725,7 +1725,7 @@ fn xhr_get_response_text_bridge(
             .and_then(|map| map.get(&id).map(|s| s.response_text.clone()))
     });
     match text {
-        Some(t) => Ok(JsValue::String(boa_engine::JsString::from(t))),
+        Some(t) => Ok(JsValue::from(boa_engine::JsString::from(t))),
         None => Ok(JsValue::null()),
     }
 }
@@ -1787,7 +1787,7 @@ fn history_state_bridge(
 ) -> JsResult<JsValue> {
     let state = with_navigation(browser_navigation::history_state);
     match state {
-        Some(s) => Ok(JsValue::String(boa_engine::string::JsString::from(s))),
+        Some(s) => Ok(JsValue::from(boa_engine::string::JsString::from(s))),
         None => Ok(JsValue::null()),
     }
 }
@@ -1798,7 +1798,7 @@ fn location_href_bridge(
     _ctx: &mut Context,
 ) -> JsResult<JsValue> {
     let url = with_navigation(browser_navigation::current_url);
-    Ok(JsValue::String(boa_engine::string::JsString::from(url)))
+    Ok(JsValue::from(boa_engine::string::JsString::from(url)))
 }
 
 fn location_replace_bridge(
