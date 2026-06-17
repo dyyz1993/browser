@@ -428,6 +428,11 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             } else {
                 print!("{}", result.content);
                 println!();
+                // M59: 显式 flush stdout，确保管道/重定向场景（> file / | grep）
+                // 下输出不丢失。print! 是行缓冲，进程退出通常 flush，但网络/JS
+                // 错误路径下可能提前 return，导致缓冲区未刷。
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
             }
             Ok(())
         }
