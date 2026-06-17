@@ -99,15 +99,18 @@ cargo build --release -p browser-cli
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `baa42e3`（M-cls SPA 渲染 + 内存自愈护栏） |
-| 当前分支 | `feat/m-cls-spa`（默认 PR 分支为 `main`） |
-| 总 commits | 168+ |
-| Crates | **15** 个 |
-| 测试 | 682 passed（M-cls 后），0 clippy warnings |
-| 核心目标 G1（SPA 爬虫） | ✅ 达成（M4） |
+| HEAD | M62（boa 0.21 + JS 覆盖矩阵 + fetch 命令） |
+| 当前分支 | `main` |
+| 总 commits | 200+ |
+| Crates | **16** 个（含 `extractor` 后置过滤器） |
+| 测试 | **776+ passed**（含 30 项 JS 特性入库测试），0 clippy warnings |
+| boa 版本 | **0.21**（M60 升级，async/await 运行时落地，ES 一致性 ~94%） |
+| JS 覆盖矩阵 | ES6+ 28 项入库测试全通过（详见 `docs/JS-COVERAGE.md`） |
+| 核心目标 G1（SPA 爬虫） | ✅ 达成（M4），`browser fetch` 命令（M59）当 curl 用 |
 | 截图 G2 | ✅ 达成（M12.1） |
 | 跨平台 G3 | ✅ 达成 |
 | CDP（G 爬虫接入） | ✅ M42–M56 完成，Puppeteer/Playwright 可连 |
+| SPA 覆盖率（实测） | 有 SSR 站 80%，纯 CSR 站 39%（boa 天花板，详见 assessment） |
 
 ### 里程碑脉络
 
@@ -119,9 +122,15 @@ M15–M21 Cookie / 异步JS / XHR / networkidle /
 M22–M38 真实图像 / WebSocket / TLS / 中文字体 /
         JS 全局对象补齐 / flexbox+grid 子集          ✅
 M42–M56 CDP server（11 个 domain，Puppeteer e2e）    ✅
-M57+    CLI 爬虫命令 / 文档收口                      🚧
+M57     CLI 爬虫命令 / 文档收口                      ✅
 M-cls   cls.cn CSR 兜底 + 内存自愈护栏（子进程+
         RSS 监控）                                  ✅
+M58     reqwest brotli/gzip 解码（Vercel 压缩站可爬）✅
+M59     browser fetch 命令 + extractor crate（4 格式）✅
+M60     boa 0.20→0.21 升级（async/await 运行时落地）  ✅
+M61     fetch --smart 模式（先 SSR 后 JS，快 8 倍）   ✅
+M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
+        事件系统 + querySelectorAll + 报错自愈循环）
 ```
 
 > 详细路线图见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)；活跃日志见 [`PROGRESS.md`](./PROGRESS.md)。
@@ -234,6 +243,55 @@ M-cls   cls.cn CSR 兜底 + 内存自愈护栏（子进程+
 
 > 详见 [`docs/assessments/M-cls-spa.md`](./docs/assessments/M-cls-spa.md)。
 
+### 遇到"JS 报错 / SPA 渲染失败 / 框架不兼容"时（自愈自循环）
+
+**核心机制：报错驱动 → 补 API → 验证 → 更新覆盖矩阵。** 不要凭猜测补 API，
+**用真实站点的报错驱动**。这套循环已验证有效（M62 把 CSR 平均分从 29→39）。
+
+**自愈循环五步**（每次遇到新报错都走一遍）：
+
+1. **采集报错** —— 跑 `browser fetch <url> --format markdown`，抓 stderr 里的
+   `[js]` 报错。按频率排序（`grep -oE "message=..." | sort | uniq -c | sort -rn`）。
+   批量采集多个框架站点（React/Vue/Angular），找高频缺口。
+2. **定位根因** —— 报错信息反查缺什么。常见模式：
+   - `X is not defined` → 缺全局对象/构造器（如 `MutationObserver`/`CustomEvent`）
+   - `not a callable function` → 某函数/方法未定义（如 `matchMedia`/`ga`）
+   - `React error #299` / 框架特定错误码 → 查官方文档，通常是 DOM 检查属性缺失
+     （如 `nodeType`/`Node.ELEMENT_NODE` 常量）
+   - `[compat] X threw` → compat_shim 包装问题（boa 0.21 原生支持的应移除包装）
+3. **补 API + 加测试** —— 在对应 shim（compat_shim/document_shim/element_shim/
+   navigation_shim）补缺失 API。**同时加入库测试**（`integration_js_features.rs`），
+   用最小用例固化"补了什么、期望什么行为"。补的类型：
+   - 全局构造器（Event/CustomEvent/MutationObserver）→ compat_shim
+   - document/element 方法 → document_shim/element_shim
+   - location/window 属性 → navigation_shim/window_shim
+   - boa 0.21 原生支持的 → **移除 compat_shim 有害包装**（而非新增）
+4. **验证提升** —— 重跑 `tests/benchmarks/csr_compare.sh`（纯 CSR 站严格对比），
+   看评分/报错数是否改善。基线监控：测试数 + 二进制大小（补 API 不应让二进制涨）。
+5. **更新覆盖矩阵** —— 更新 [`docs/JS-COVERAGE.md`](./docs/JS-COVERAGE.md) 的状态列
+   （❓→✅），同步 FEATURES.md。这是**单一事实来源**，不更新矩阵等于白补。
+
+**约束**（避免无脑补 API）：
+- **爬虫够用原则**：事件系统/动画/MediaQuery 不需要真实现，no-op 或桩即可（存回调
+  但不触发）。框架初始化不报错就行，不需要真交互。
+- **纯 JS polyfill 优先**：补 API 用纯 JS（compat_shim 里的 JS 字符串），不引 Rust
+  依赖。这保证二进制不涨（M62 补了 10+ API，14MB 纹丝不动）。
+- **boa 天花板认知**：纯 CSR 无 SSR 兜底的站（bark/vue-playground）boa 跑不动是引擎
+  限制，不是缺 API。这类站不硬刚，走 `--no-js` 兜底或标注需 Chrome。
+- **不追 100%**：base.js/lodash `_.template` 内部的深层报错，如果不影响核心功能
+  （内容仍渲染出来），停止深挖（边际收益递减）。
+
+**已有的 CSR 测试集与对比工具**：
+- `tests/benchmarks/csr_compare.sh` —— 纯 CSR 站严格对比（多维评分：内容覆盖率 +
+  错误惩罚 + 噪声）
+- `tests/benchmarks/spa_compare.sh` —— 全站对比（含 SSR，`--smart` 模式）
+- `tests/benchmarks/coverage_survey.sh` —— curl/我们/Chrome 三方覆盖面
+- `crates/cli/tests/integration_js_features.rs` —— **30 项 JS 特性入库回归测试**
+- `crates/cli/tests/integration_spa_patterns.rs` —— 5 种 SPA 模式 fixture 测试
+
+> 详见 [`docs/JS-COVERAGE.md`](./docs/JS-COVERAGE.md)（覆盖矩阵 + 补齐计划）+
+> [`docs/assessments/M62-csr-strict-comparison.md`](./docs/assessments/M62-csr-strict-comparison.md)。
+
 ---
 
 ## 七、文档地图（深入细节看这些）
@@ -250,8 +308,9 @@ M-cls   cls.cn CSR 兜底 + 内存自愈护栏（子进程+
 | [`PROGRESS.md`](./PROGRESS.md) | 活跃日志（每 commit 更新） | 看最近变更时 |
 | [`docs/decisions/`](./docs/decisions/) | ADR（架构决策记录 0001–0004） | 理解"为什么这么选"时 |
 | [`docs/postmortems/`](./docs/postmortems/) | 里程碑复盘（M1–M6） | 学教训时 |
-| [`docs/assessments/`](./docs/assessments/) | 真实站点评估（M-cls/M40/M48/M60） | 看真实场景分析时 |
-| [`docs/plans/`](./docs/plans/) | 实现计划（M-cls/M49-M57/M7） | 看实施步骤时 |
+| [`docs/assessments/`](./docs/assessments/) | 真实站点评估（M-cls/M40/M48/M60/M62） | 看真实场景分析时 |
+| [`docs/plans/`](./docs/plans/) | 实现计划（M-cls/M49-M57/M7/M60） | 看实施步骤时 |
+| ⭐ [`docs/JS-COVERAGE.md`](./docs/JS-COVERAGE.md) | **JS 能力覆盖矩阵**（ES 特性 + Web API + 实测状态） | 补 JS API 前**必读**（单一事实来源） |
 
 ### ADR 速查
 
@@ -274,6 +333,13 @@ M-cls   cls.cn CSR 兜底 + 内存自愈护栏（子进程+
 6. **风控/反爬/指纹伪造类需求一律拒绝** —— 这是宗旨层面的边界，不是技术问题。
 7. **文档与代码同步**：改了功能就改 FEATURES，改了架构就改 ARCHITECTURE，每 commit 更新 PROGRESS。
 8. **优先复用现有管线**（fetch→parse→JS→render→serialize），而不是另起炉灶。
+9. **JS 报错走自愈循环**（见第六章）：报错驱动 → 补 API → 加测试 → 验证 → 更新
+   `docs/JS-COVERAGE.md`。**不凭猜测补 API，用真实报错驱动。** 补完必须入库测试 +
+   更新覆盖矩阵，否则等于白补。
+10. **boa 天花板不硬刚**：纯 CSR 无 SSR 兜底的站 boa 跑不动是引擎限制。走 `--no-js`
+    兜底或标注需 Chrome，不要无限投入补 API（边际收益递减）。
+11. **纯 JS polyfill 优先**：补 Web API 用 compat_shim 的 JS 字符串，不引 Rust 依赖。
+    保证二进制不涨（M62 补了 15+ API，14MB 纹丝不动）。
 
 ---
 

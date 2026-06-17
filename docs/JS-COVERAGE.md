@@ -73,7 +73,7 @@
 | getElementsByTagName | ⚠️ 仅首个 | |
 | addEventListener | ✅ 存回调 | integration_js_features |
 | removeEventListener | ✅ | integration_js_features |
-| write | ❌ no-op | |
+| write | ⚠️ no-op | 低频，现代 SPA 不用 | |
 | body/head/title 等 getter | ✅ | |
 
 ### DOM element
@@ -87,10 +87,10 @@
 | innerHTML | ✅ | async-data fixture |
 | **querySelectorAll** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features |
 | cloneNode | ✅ | |
-| classList | ⚠️ no-op | |
-| dataset | ⚠️ 部分 | |
-| style | ⚠️ 部分 | |
-| getClientRects | ⚠️ 返回 [] | |
+| classList | ⚠️ no-op | add/remove/contains 空实现 | |
+| dataset | ⚠️ 部分 | 仅硬编码 dplId/scrollBehavior | |
+| style | ⚠️ 部分 | getPropertyValue/setProperty 有，CSS 不影响渲染 | |
+| getClientRects | ⚠️ 返回 [] | 布局尺寸，爬虫不需要 | |
 | addEventListener | ✅ 存回调 | integration_js_features |
 
 ### 网络
@@ -99,7 +99,7 @@
 | fetch（Promise） | ✅ | integration_fetch |
 | XMLHttpRequest | ✅ | integration_xhr |
 | WebSocket | ✅ | integration_ws |
-| setRequestHeader(XHR) | ❌ no-op | |
+| setRequestHeader(XHR) | ⚠️ no-op | 爬虫场景 headers 不关键 | |
 
 ### 存储/导航/定时器
 | API | 状态 | 测试 |
@@ -126,21 +126,21 @@
 |------|------|------|
 | **atob** | ✅ | integration_js_features | M62 修真 Base64 |
 | **btoa** | ✅ | integration_js_features | M62 修真 Base64 |
-| TextEncoder | ❌ | |
-| TextDecoder | ❌ | |
-| crypto.getRandomValues | ⚠️ | |
-| crypto.randomUUID | ⚠️ | |
+| TextEncoder | ✅ | integration_js_features（UTF-8 polyfill） |
+| TextDecoder | ✅ | integration_js_features（UTF-8 polyfill） |
+| crypto.getRandomValues | ✅ | compat_shim | |
+| crypto.randomUUID | ✅ | compat_shim | |
 
 ### 其他 Web API
 | API | 状态 | 备注 |
 |------|------|------|
 | URL/URLSearchParams | ✅ | compat_shim |
-| structuredClone | ⚠️ | |
+| structuredClone | ✅ | integration_js_features | |
 | performance.now | ✅ | |
-| requestAnimationFrame | ⚠️ | |
+| requestAnimationFrame | ✅ | compat_shim | |
 | queueMicrotask | ✅ | integration_js_features | |
-| MutationObserver | ❌ | |
-| AbortController | ⚠️ | |
+| MutationObserver | ✅ | M62（Vue 3 响应式，存回调不 observe） | |
+| AbortController | ✅ | compat_shim（简化桩） | |
 | Headers/FormData/Blob | ✅ | integration_js_features（简化 polyfill） |
 | console.* | ✅ | |
 
@@ -152,11 +152,60 @@
 
 | 优先级 | 项目 | 原因 |
 |--------|------|------|
-| P0 | async/await 回归测试 | M60 验收没入库，CI 盲区 |
-| P0 | setInterval 实装 | 文档假声明，轮询 SPA 需要 |
+| ~~P0~~ | ~~async/await 回归测试~~ | ✅ M62 已入库 |
+| ~~P0~~ | ~~setInterval 实装~~ | ✅ M62 已实装（100 次上限） |
 | P1 | ES6 语言特性批量测（let/const/箭头/模板/解构/class） | 框架基础语法 |
-| P1 | Symbol/Map/Set/Proxy 实测 | 框架硬依赖 |
-| P2 | atob/btoa 修真 Base64 | JWT 场景 |
-| P2 | Event/EventTarget 基础事件 | 框架 hydration |
-| P3 | Element.querySelectorAll | 真实现 |
-| P3 | queueMicrotask/MutationObserver | 高级 hydration |
+| ~~P1~~ | ~~Symbol/Map/Set/Proxy 实测~~ | ✅ M62 全通过 |
+| ~~P2~~ | ~~atob/btoa 修真 Base64~~ | ✅ M62 已修 |
+| ~~P2~~ | ~~Event/EventTarget 基础事件~~ | ✅ M62 已补（含 DOMContentLoaded 自动 dispatch） |
+| ~~P3~~ | ~~Element.querySelectorAll~~ | ✅ M62 已补真实现 |
+| ~~P3~~ | ~~queueMicrotask/MutationObserver~~ | ✅ M62 已补 |
+
+---
+
+## 四、补齐规划与约束（自愈自循环机制）
+
+> 这套机制已写入 AGENTS.md 第六章「遇到 JS 报错时」。核心原则：
+> **报错驱动，不凭猜测补 API。**
+
+### 自愈循环五步（每次遇到新报错都走一遍）
+
+1. **采集报错** —— `browser fetch <url> 2>&1 | grep "\[js\]"`，按频率排序找高频缺口
+2. **定位根因** —— 报错模式反查缺什么（见下表）
+3. **补 API + 加测试** —— 对应 shim 补 + `integration_js_features.rs` 加最小用例
+4. **验证提升** —— 重跑 `csr_compare.sh` 看评分/报错数，监控二进制大小
+5. **更新本矩阵** —— 状态 ❓→✅，同步 FEATURES.md
+
+### 常见报错模式 → 根因速查表
+
+| 报错模式 | 根因 | 补什么 | 例子（M62 已修） |
+|---------|------|--------|-----------------|
+| `X is not defined` | 缺全局对象/构造器 | compat_shim 加构造器 | MutationObserver/Event/CustomEvent |
+| `not a callable function` | 某函数/方法未定义 | 对应 shim 加方法 | matchMedia/ga/createDocumentFragment |
+| `React error #299` 等框架错误码 | DOM 检查属性缺失 | element_shim 加属性 | nodeType/Node.ELEMENT_NODE 常量 |
+| `[compat] X threw` | compat_shim 包装问题 | 移除包装（boa 0.21 原生） | Array.prototype.forEach/String.includes |
+| `cannot convert null/undefined` | 空值未处理 | 加 null guard | 各 shim 加防御 |
+
+### 补 API 的约束（避免无脑补）
+
+1. **爬虫够用原则**：事件/动画/MediaQuery 不需真实现，no-op 或桩即可
+2. **纯 JS polyfill 优先**：用 compat_shim 的 JS 字符串，不引 Rust 依赖（保二进制不涨）
+3. **boa 天花板认知**：纯 CSR 无 SSR 的站不硬刚，走 `--no-js` 或标注需 Chrome
+4. **不追 100%**：深层 bundle 报错（lodash/template）不影响核心功能则停止深挖
+5. **补完必测**：每补一个 API 必须加 `integration_js_features.rs` 入库测试
+
+### 测试工具箱
+
+| 工具 | 用途 |
+|------|------|
+| `crates/cli/tests/integration_js_features.rs` | 30 项 JS 特性入库回归（补 API 必加） |
+| `crates/cli/tests/integration_spa_patterns.rs` | 5 种 SPA 模式 fixture（async/route/lazy/form/redirect） |
+| `tests/benchmarks/csr_compare.sh` | 纯 CSR 站严格对比（多维评分） |
+| `tests/benchmarks/spa_compare.sh` | 全站对比（含 SSR，--smart 模式） |
+
+### 已知天花板（不硬刚）
+
+- **纯 CSR 无 SSR**（bark/vue-playground）：boa 跑不出数据，需 Chrome
+- **boa 引擎 panic**（owid）：catch_unwind 兜底降级（M62 已修）
+- **base.js/lodash _.template 深层报错**：不影响核心功能，停止深挖
+- **ES Modules import**：需模块加载器，boa 0.21 部分支持未测
