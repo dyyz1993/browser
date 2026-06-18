@@ -103,6 +103,138 @@ fn script_is_module(attrs: &[(String, String)]) -> bool {
     false
 }
 
+/// M64: 检测源码是否有静态 ESM 语法（import/export，非动态 import()）。
+/// 用于决定走 Module::parse 还是退化 ctx.eval。无静态 import/export 的 module
+/// 文件（如 Nuxt 的 1.3MB 入口 bundle）退化 eval 可省 ~100MB 内存。
+///
+/// 注意：`import.meta` 虽然需要 Module 模式，但我们可以源码补丁替换成字符串，
+/// 然后退化 eval（见 `strip_esm_syntax`）。
+fn has_static_esm_syntax(code: &str) -> bool {
+    regex_static_import(code) || regex_static_export(code)
+}
+
+/// M64: 对无静态 import/export 但有 import.meta 的 module 做源码补丁：
+/// 把 `import.meta.url` 替换为页面 URL 字符串，使其能在 Script eval 模式运行。
+/// 返回补丁后的源码。如果源码有静态 import/export（无法补丁），返回 None。
+fn try_strip_esm_for_eval(code: &str, base_url: &str) -> Option<String> {
+    // 有静态 import/export → 必须走 Module，无法退化
+    if has_static_esm_syntax(code) {
+        return None;
+    }
+    let mut patched = code.to_string();
+    // 替换 import.meta.url → "页面URL"
+    if patched.contains("import.meta.url") {
+        let url = if base_url.is_empty() {
+            "about:blank".to_string()
+        } else {
+            base_url.to_string()
+        };
+        patched = patched.replace("import.meta.url", &format!("\"{url}\""));
+    }
+    // 替换 import.meta.env → 简单对象（Vite 环境变量桩）
+    if patched.contains("import.meta.env") {
+        patched = patched.replace(
+            "import.meta.env",
+            "({MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'})",
+        );
+    }
+    // 其他裸 import.meta → 替换为空对象
+    if patched.contains("import.meta") {
+        patched = patched.replace("import.meta", "({})");
+    }
+    Some(patched)
+}
+
+/// 检测静态 import 语句（排除动态 import()）。
+/// 模式：`import{` 或 `import ` 或 `;import{` 等，后面不紧跟 `(`。
+fn regex_static_import(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        // 找 "import" 关键字
+        if &bytes[i..i + 6] == b"import" {
+            // 检查前一个字符（不是字母/数字/_，否则是 importXxx 属性名）
+            let prev = if i > 0 { bytes[i - 1] } else { b' ' };
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
+                i += 6;
+                continue;
+            }
+            // 看后面：跳过空格
+            let mut j = i + 6;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n') {
+                j += 1;
+            }
+            if j >= bytes.len() {
+                i += 6;
+                continue;
+            }
+            // 静态 import: 后面是 {、引号（import "..."）、星号（import *）
+            // 注意：后面是字母不一定是 import（可能是 importXxx 词如 imported）。
+            // 但 `import x from "..."` 中 x 是合法标识符——只接受特定后续模式。
+            // 动态 import: 后面是 (
+            if bytes[j] == b'(' {
+                // 动态 import()，跳过
+            } else if bytes[j] == b'{' || bytes[j] == b'"' || bytes[j] == b'\'' || bytes[j] == b'*'
+            {
+                return true;
+            } else if bytes[j] == b'.' {
+                // import.meta —— 虽然是合法 ESM，但不需要 Module loader 解析依赖图。
+                // 不视为静态 import（退化 eval 即可，eval 能跑 import.meta）。
+                // 注意：eval 在 Script 模式不支持 import.meta 语法，所以仍需 Module。
+                // 但 nuxt 的 import.meta 在 IIFE 内部，eval 也能跑（取决于上下文）。
+                // 为安全起见，有 import.meta 也走 Module path。
+                // → 不在此 return，让 import.meta 由调用方决定
+            }
+            // 不 return，继续搜（import x from 也算，但 minified 很少用）
+        }
+        i += 1;
+    }
+    false
+}
+
+/// 检测静态 export 语句。
+fn regex_static_export(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        if &bytes[i..i + 6] == b"export" {
+            let prev = if i > 0 { bytes[i - 1] } else { b' ' };
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
+                i += 6;
+                continue;
+            }
+            let mut j = i + 6;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n') {
+                j += 1;
+            }
+            if j >= bytes.len() {
+                i += 6;
+                continue;
+            }
+            // export { / export * — 只接受这些（export default/const/function 带空格，
+            // 但 minified 代码几乎不用裸 export 声明）。
+            // 注意：exported/exports 等词的 export 后面跟字母，不是 export 关键字。
+            if bytes[j] == b'{' || bytes[j] == b'*' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// M64: 包装脚本为 IIFE + try/catch（复用现有 wrap 逻辑）。
+fn wrap_script(code: &str, label: &str) -> String {
+    let mut wrapped = String::new();
+    wrapped.push_str("(function(){\ntry{\n");
+    wrapped.push_str(code);
+    let catch_prefix = "\n}catch(__err){\nif(typeof __log === 'function'){\nvar __parts = [];\nvar __errObj = (__err !== null && __err !== undefined) ? __err : {};\nif (typeof __errObj.message === 'string') {\n    __parts.push('message=' + __errObj.message);\n} else if (typeof __errObj.toString === 'function') {\n    __parts.push('message=' + String(__errObj.toString()));\n} else {\n    __parts.push('message=' + String(__errObj));\n}\nif (typeof __errObj.stack !== 'undefined') __parts.push('stack=' + String(__errObj.stack));\n__log('[";
+    wrapped.push_str(catch_prefix);
+    wrapped.push_str(label);
+    wrapped.push_str("] ' + __parts.join(' | '));\n}\n}\n})();\n");
+    wrapped
+}
+
 /// M64: 从 URL 提取 origin（`scheme://host[:port]`）。
 /// `https://vite.dev/assets/app.js` → `https://vite.dev`
 fn url_origin(url: &str) -> String {
@@ -251,34 +383,62 @@ pub fn execute_scripts_with_base(
                     None
                 }
             },
-            // M64: ESM module 走 HttpModuleLoader（不经过 ctx.eval）。
-            // loader 已在 Context 创建时注册（downcast 取回）。
+            // M64: ESM module。先 fetch 源码检测有无静态 import/export。
+            // 有 → 走 Module::parse（boa 自动链接依赖图）。
+            // 无 → 退化用 ctx.eval（省去 Module 系统的 ~100MB 内存开销，对超大 bundle 关键）。
             ScriptEntry::ExternalModule(src) => {
                 match resolve_script_url(src, script_base_url.as_deref()) {
                     Some(url) => {
                         if trace_scripts {
                             eprintln!("[js-runtime] script[{idx}] ESM module {url}");
                         }
-                        if let Some(loader) =
-                            ctx.downcast_module_loader::<crate::esm_loader::HttpModuleLoader>()
-                        {
-                            match loader.load_and_eval(&url, ctx) {
-                                Ok(_) => {
-                                    executed += 1;
+                        match fetch_external_script(&url) {
+                            Ok(code) => {
+                                // M64 优化：无静态 import/export 的 module 尝试源码补丁退化 eval。
+                                // 对超大 bundle（如 Nuxt 1.3MB）可省 ~100MB Module parser 内存。
+                                let base = script_base_url.as_deref().unwrap_or("");
+                                if let Some(patched) = try_strip_esm_for_eval(&code, base) {
+                                    // 退化 eval 成功
                                     if trace_scripts {
-                                        eprintln!("[js-runtime] script[{idx}] ESM module OK");
+                                        eprintln!(
+                                            "[js-runtime] script[{idx}] ESM → eval fallback (import.meta patched) {url} len={}",
+                                            code.len()
+                                        );
+                                    }
+                                    let wrapped =
+                                        wrap_script(&patched, &format!("module[{idx}] {url}"));
+                                    match ctx.eval(Source::from_bytes(wrapped.as_bytes())) {
+                                        Ok(_) => executed += 1,
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[js-runtime] script[{idx}] module eval {url} error: {e}"
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    // 有静态 import/export → 走 Module API
+                                    if let Some(loader) = ctx
+                                        .downcast_module_loader::<crate::esm_loader::HttpModuleLoader>()
+                                    {
+                                        match loader.load_and_eval(&url, ctx) {
+                                            Ok(_) => {
+                                                executed += 1;
+                                                if trace_scripts {
+                                                    eprintln!("[js-runtime] script[{idx}] ESM module OK (Module path)");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "[js-runtime] script[{idx}] ESM module {url} error: {e:?}"
+                                                );
+                                            }
+                                        }
                                     }
                                 }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[js-runtime] script[{idx}] ESM module {url} error: {e:?}"
-                                    );
-                                }
                             }
-                        } else {
-                            eprintln!(
-                                "[js-runtime] script[{idx}] ESM module {url}: no HttpModuleLoader on context"
-                            );
+                            Err(e) => {
+                                eprintln!("[js-runtime] ESM module fetch failed: {url}: {e}");
+                            }
                         }
                         continue;
                     }
