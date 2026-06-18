@@ -128,10 +128,6 @@ enum Cmd {
         /// Skip <script> execution (faster for known-static pages).
         #[arg(long)]
         no_js: bool,
-        /// Smart mode: try --no-js first (fast SSR), fall back to full JS if
-        /// content is too sparse. Best of both worlds for unknown sites.
-        #[arg(long)]
-        smart: bool,
         /// Output structured JSON {url, title, content} instead of raw content.
         #[arg(long)]
         json: bool,
@@ -397,53 +393,15 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             selector,
             only_main_content,
             no_js,
-            smart,
             json,
             width: _width,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
             let html = fetch_with_jar(&url).await?;
-            // M61: --smart 模式。先 no-js 快速提 SSR（<1s），内容够就直接返回，
-            // 不够再跑完整 JS。对有 SSR 的站点省去 JS 执行（快 + 省 memory），
-            // 对纯 CSR 站点自动回退跑 JS。兼顾速度和覆盖率。
-            let effective_no_js = if smart {
-                let quick = extract_fetch(
-                    &html,
-                    &url,
-                    &format,
-                    &selector,
-                    only_main_content,
-                    true,
-                    json,
-                )?;
-                // 阈值：no-js 提取出的可见内容 < 500 字符认为「太稀疏」，需跑 JS。
-                if quick.chars().count() >= 500 {
-                    eprintln!(
-                        "[smart] SSR content sufficient ({} chars), skipping JS",
-                        quick.chars().count()
-                    );
-                    print!("{quick}");
-                    println!();
-                    use std::io::Write;
-                    let _ = std::io::stdout().flush();
-                    return Ok(());
-                }
-                eprintln!(
-                    "[smart] SSR too sparse ({} chars < 500), falling back to full JS render",
-                    quick.chars().count()
-                );
-                false // 跑 JS
-            } else {
-                no_js
-            };
-            let base = if effective_no_js {
-                None
-            } else {
-                Some(url.clone())
-            };
+            let base = if no_js { None } else { Some(url.clone()) };
             let tree = parse_html(&html);
-            let shared: browser_js_runtime::SharedTree = if effective_no_js {
+            let shared: browser_js_runtime::SharedTree = if no_js {
                 use std::cell::RefCell;
                 use std::rc::Rc;
                 Rc::new(RefCell::new(tree))
@@ -865,39 +823,6 @@ fn extract_style_text(tree: &browser_dom::Tree) -> String {
         }
     }
     buf
-}
-
-/// M61: 提取 fetch 内容的辅助函数，供 --smart 模式复用。
-/// 跑 fetch 管线（可选 JS），返回提取后的内容字符串（非 json 包装）。
-fn extract_fetch(
-    html: &str,
-    url: &str,
-    format: &str,
-    selector: &Option<String>,
-    only_main_content: bool,
-    no_js: bool,
-    _json: bool,
-) -> Result<String, anyhow::Error> {
-    let base = if no_js { None } else { Some(url.to_string()) };
-    let tree = parse_html(html);
-    let shared: browser_js_runtime::SharedTree = if no_js {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        Rc::new(RefCell::new(tree))
-    } else {
-        let (shared, _) = browser_js_runtime::run_scripts_with_base(tree, base.clone());
-        shared
-    };
-    let out_format = browser_extractor::OutputFormat::parse(format)
-        .map_err(|e| anyhow!("invalid --format: {e}"))?;
-    let opts = browser_extractor::FetchOptions {
-        format: out_format,
-        selector: selector.clone(),
-        only_main_content,
-    };
-    let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
-        .map_err(|e| anyhow!("extract failed: {e}"))?;
-    Ok(result.content)
 }
 
 fn main() -> ExitCode {

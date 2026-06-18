@@ -3,7 +3,7 @@
 #
 # 四维度：速度(wall) / 内存(peak RSS) / 内容质量(可见文本字节+关键词) / 判定。
 # 公平性：
-#   - 我们：browser fetch --smart --format markdown（自动 SSR 优先，不够跑 JS）
+#   - 我们：browser fetch --format markdown（强制跑 JS）
 #   - Chrome：headless --dump-dom 拿渲染后 HTML，再用通用过滤器去标签算可见文本
 #   - 两边都提取「可见文本」对比，不是比原始 HTML
 #
@@ -71,10 +71,10 @@ peak_rss() {
 }
 
 TSV="$OUT_DIR/compare.tsv"
-echo -e "tag\turl\tkeyword\tours_smart_ms\tours_rss_mb\tours_bytes\tours_kw\tchrome_ms\tchrome_rss_mb\tchrome_bytes\tchrome_kw\tverdict" > "$TSV"
+echo -e "tag\turl\tkeyword\tours_ms\tours_rss_mb\tours_bytes\tours_kw\tchrome_ms\tchrome_rss_mb\tchrome_bytes\tchrome_kw\tverdict" > "$TSV"
 
 echo "=========================================="
-echo "M62 SPA 公平对比（browser fetch --smart vs Chrome headless）"
+echo "M62 SPA 公平对比（browser fetch（强制 JS）vs Chrome headless）"
 echo "rounds=$ROUNDS group=$GROUP sites=${#SITES[@]}"
 echo "=========================================="
 
@@ -83,11 +83,11 @@ for entry in "${SITES[@]}"; do
   echo ""
   echo "--- $tag: $url (kw=$kw) ---"
 
-  # === 我们：browser fetch --smart --format markdown ===
+  # === 我们：browser fetch --format markdown ===
   ours_md="$OUT_DIR/$tag.ours.md"
   ours_time="$OUT_DIR/$tag.ours.time"
   start=$(python3 -c 'import time;print(int(time.time()*1000))')
-  /usr/bin/time -lp "$BROWSER_BIN" fetch "$url" --format markdown --smart > "$ours_md" 2> "$ours_time"
+  /usr/bin/time -lp "$BROWSER_BIN" fetch "$url" --format markdown > "$ours_md" 2> "$ours_time"
   ours_rc=$?
   end=$(python3 -c 'import time;print(int(time.time()*1000))')
   ours_ms=$((end - start))
