@@ -1676,6 +1676,23 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             globalThis.Prism = { highlight: function(code) { return code; }, languages: {}, tokenize: function(t) { return t; } };
         }
 
+        // M62: Prism.languages.DFS null guard（docsify/bark 崩溃根因）。
+        // Prism 的 DFS 遍历语言定义时对 null 调 objId 崩。
+        // 延迟 patch（Prism 在 docsify 加载后才存在）。
+        var __origDFS = null;
+        function __patchPrismDFS() {
+            if (typeof Prism === 'object' && Prism.languages && typeof Prism.languages.DFS === 'function' && !Prism.languages.__dfsPatched) {
+                __origDFS = Prism.languages.DFS;
+                Prism.languages.DFS = function(o, callback, parent) {
+                    if (o === null || o === undefined) return;
+                    return __origDFS.call(this, o, callback, parent);
+                };
+                Prism.languages.__dfsPatched = true;
+            }
+        }
+        // 多次尝试（Prism 可能在不同时机加载）
+        if (typeof setTimeout === 'function') { setTimeout(__patchPrismDFS, 0); setTimeout(__patchPrismDFS, 50); }
+
         // M62: ga（Google Analytics no-op）。base.js 等库直接调 ga()，
         // 若 hostname 检查失败（boa getter 是方法形式）则 ga 未初始化 → not a callable。
         if (typeof globalThis.ga !== 'function') {

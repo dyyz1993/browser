@@ -14,7 +14,8 @@ browser-cookie = { path = "../cookie" }
 browser-eventloop = { path = "../eventloop" }
 browser-net = { path = "../net" }
 browser-ws = { path = "../ws" }
-boa_engine = "0.21"
+# M62: 用 git main 分支（crates.io 0.21.1 的 Error.stack 未完整，main 已修）
+boa_engine = { git = "https://github.com/boa-dev/boa", branch = "main" }
 tokio = { workspace = true, features = ["rt", "net"] }
 url = "2"
 
