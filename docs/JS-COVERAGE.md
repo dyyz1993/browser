@@ -209,9 +209,10 @@
 ### 已知天花板（不硬刚）
 
 - **纯 CSR 无 SSR**（bark/vue-playground）：boa 跑不出数据，需 Chrome
-  - bark（docsify）：boa 引擎内部 `cannot convert null to object`（非 Object.keys，
-    是引擎层 for...in/spread/解构 null）。已试 Object.keys null guard 无效。
-    docsify 初始化链复杂（路由+fetch md+compiler+Vue 集成），属 boa 引擎天花板。
+  - bark（docsify）：深层排查确认——boa 行为 spec 正确（null.foo 触发 to_object
+    at value/mod.rs:1001，V8 也一样）。JS 层 null guard 全 patch 无效，querySelector
+    null-safe 也无效。根因是 docsify 某处对 null 做属性访问，但 boa 错误不带行号无法
+    定位。给 boa 的 PR 方向：给 TypeError 加行号报告（改善可调试性）。处置 --no-js。
   - vue-playground：`SyntaxError: expected ';'`（boa 解析器不支持 Vue bundle 某语法）
 - **boa 引擎 panic**（owid）：catch_unwind 兜底降级（M62 已修）
 - **base.js/lodash _.template 深层报错**：不影响核心功能，停止深挖
