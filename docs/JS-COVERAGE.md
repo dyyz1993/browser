@@ -80,26 +80,49 @@
 | API | 状态 | 测试 |
 |------|------|------|
 | appendChild | ✅ | lazy-load fixture |
+| **append / prepend (ParentNode)** | ✅ M63（svelte.dev `document.body.append(div)`，接受多参数+字符串） | integration_js_features |
 | insertBefore | ✅ | |
 | removeChild | ✅ | |
 | setAttribute/getAttribute | ✅ | |
 | textContent | ✅ | |
-| innerHTML | ✅ | async-data fixture |
-| **querySelectorAll** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features |
+| innerHTML | ✅ M62（html5ever 解析为真实 DOM 节点，支持 querySelector 后续查找） | bark.day.app |
+| outerHTML | ✅ M62（简化实现 = innerHTML，docsify initRender 用） | bark.day.app |
+| **querySelector (Element)** | ✅ M62（Vue/React createElement 后查找子元素） | integration_js_features |
+| **querySelectorAll (Element)** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features |
 | cloneNode | ✅ | |
-| classList | ✅ | M62（真实现 add/remove/contains/toggle） | |
-| dataset | ✅ | M62（动态遍历常见 key + 驼峰转 kebab） | |
+| classList | ✅ M62（真实现 add/remove/contains/toggle） | |
+| dataset | ✅ M62（动态遍历常见 key + 驼峰转 kebab） | |
+| **反射 IDL 属性 (href/src/value 等)** | ✅ M63（docsify sidebar sort 读 a.href.length；24 个常用属性） | integration_js_features |
 | style | ⚠️ 部分 | getPropertyValue/setProperty 有，CSS 不影响渲染 | |
+| **getBoundingClientRect** | ✅ M63（返回零值 DOMRect，docsify K() scroll handler 读 rect.height） | integration_js_features |
 | getClientRects | ⚠️ 返回 [] | 布局尺寸，爬虫不需要 | |
 | addEventListener | ✅ 存回调 | integration_js_features |
+| dispatchEvent | ✅ M62 | window_shim 测试 |
+| removeEventListener | ✅ M62 | window_shim 测试 |
 
 ### 网络
 | API | 状态 | 测试 |
 |------|------|------|
 | fetch（Promise） | ✅ | integration_fetch |
 | XMLHttpRequest | ✅ | integration_xhr |
+| XMLHttpRequest.addEventListener | ✅ M62（docsify X().then 用 addEventListener('load', cb)） | bark.day.app |
+| XMLHttpRequest.addEventListener this 绑定 | ✅ M63（回调内 this 绑定 XHR 实例，否则 this.status === undefined） | integration_js_features |
+| XMLHttpRequest.response | ✅ M62（docsify onload 读 xhr.response） | bark.day.app |
+| XMLHttpRequest.getResponseHeader | ✅ M62（返回 null，docsify 读 last-modified 做 cache） | bark.day.app |
+| XMLHttpRequest.getAllResponseHeaders | ✅ M62（返回 ''） | bark.day.app |
 | WebSocket | ✅ | integration_ws |
 | setRequestHeader(XHR) | ⚠️ no-op | 爬虫场景 headers 不关键 | |
+
+### 全局函数/构造器
+| API | 状态 | 测试 |
+|------|------|------|
+| **escape/unescape** | ✅ M62（deprecated 但 builder.io 等第三方依赖） | integration_js_features |
+| **URL（接受 location/对象作 base）** | ✅ M63（svelte SvelteKit `new URL(".", location)`；修复 href getter 无限递归） | integration_js_features |
+| **TextEncoderStream/TextDecoderStream** | ✅ M62（Stream API，构造器存在即可） | integration_js_features |
+| **document.createElementNS** | ✅ M62（Vue/React SVG/MathML，忽略 namespace） | integration_js_features |
+| TextEncoder/TextDecoder | ✅ M62 | integration_js_features |
+| atob/btoa | ✅ M62（真 Base64 实现） | |
+| encodeURI/decodeURI | ✅ boa 原生 | |
 
 ### 存储/导航/定时器
 | API | 状态 | 测试 |

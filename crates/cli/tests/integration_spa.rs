@@ -18,6 +18,21 @@ fn bin() -> Command {
     Command::cargo_bin("browser").expect("browser binary not found")
 }
 
+/// M63: At least N scripts executed. The reported count includes built-in
+/// install scripts (compat_shim/element_shim/etc.), which vary by boa version,
+/// so we assert a floor rather than an exact count.
+fn at_least_n_scripts(n: usize) -> impl Predicate<str> {
+    predicate::function(move |s: &str| {
+        s.lines()
+            .filter_map(|l| l.strip_prefix("[browser] "))
+            .filter_map(|l| l.strip_suffix(" script(s) executed"))
+            .filter_map(|c| c.parse::<usize>().ok())
+            .next()
+            .unwrap_or(0)
+            >= n
+    })
+}
+
 fn spa_shell_html(base: &str) -> String {
     format!(
         r#"<!doctype html>
@@ -77,7 +92,7 @@ async fn spa_shell_renders_combined_api_output() {
         .stdout(predicate::str::contains("Post C | Post D"))
         // "Loading..." placeholder must be gone — JS replaced it.
         .stdout(predicate::str::contains("Loading...").not())
-        .stderr(predicate::str::contains("1 script(s) executed"));
+        .stderr(at_least_n_scripts(1));
 }
 
 #[tokio::test]
@@ -225,7 +240,7 @@ async fn spa_shell_relative_urls_resolve_against_page_url() {
     );
     assert!(stdout.contains("C1|C2"), "missing C1|C2 in {stdout}");
     assert!(
-        stderr.contains("1 script(s) executed"),
+        at_least_n_scripts(1).eval(&stderr),
         "missing script count in {stderr}"
     );
 }

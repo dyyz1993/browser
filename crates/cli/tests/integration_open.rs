@@ -15,6 +15,21 @@ fn bin() -> Command {
     Command::cargo_bin("browser").expect("browser binary not found")
 }
 
+/// M63: At least N scripts executed. The reported count includes built-in
+/// install scripts (compat_shim/element_shim/etc.), which vary by boa version,
+/// so we assert a floor rather than an exact count.
+fn at_least_n_scripts(n: usize) -> impl Predicate<str> {
+    predicate::function(move |s: &str| {
+        s.lines()
+            .filter_map(|l| l.strip_prefix("[browser] "))
+            .filter_map(|l| l.strip_suffix(" script(s) executed"))
+            .filter_map(|c| c.parse::<usize>().ok())
+            .next()
+            .unwrap_or(0)
+            >= n
+    })
+}
+
 const STATIC_HTML: &str = r#"<!doctype html>
 <html>
 <head><title>Static Page</title></head>
@@ -64,7 +79,7 @@ async fn open_check_with_js_runs_scripts() {
         // JS replaced the placeholder.
         .stdout(predicate::str::contains("rendered by JS"))
         .stdout(predicate::str::contains("Loading...").not())
-        .stderr(predicate::str::contains("1 script(s) executed"));
+        .stderr(at_least_n_scripts(1));
 }
 
 #[tokio::test]

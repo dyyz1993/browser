@@ -18,9 +18,10 @@ browser-ws = { path = "../ws" }
 boa_engine = { git = "https://github.com/boa-dev/boa", branch = "main" }
 tokio = { workspace = true, features = ["rt", "net"] }
 url = "2"
+# M62: innerHTML setter 解析 HTML 为真实 DOM 节点（docsify 渲染管线必需）。
+browser-html-parser = { path = "../html-parser" }
 
 [dev-dependencies]
-browser-html-parser = { path = "../html-parser" }
 wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 assert_cmd.workspace = true

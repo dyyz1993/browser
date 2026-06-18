@@ -230,6 +230,10 @@ pub fn install(ctx: &mut Context) {
     register_fn1(ctx, "__click", click as NativeFn);
     // M8.4: form submit bridge.
     register_fn1(ctx, "__submit", submit as NativeFn);
+    // M62: innerHTML/outerHTML 支持——解析 HTML 字符串为真实 DOM 元素。
+    // docsify 等框架用 innerHTML/outerHTML 设置完整页面结构，再用 querySelector
+    // 查找元素（.markdown-section, .sidebar-nav 等）。必须解析 HTML 创建真实节点。
+    register_fn2(ctx, "__parseHtml", parse_html as NativeFn);
     // M13.2: localStorage / sessionStorage bridges.
     register_fn1(ctx, "__storageGet", storage_get_bridge as NativeFn);
     register_fn2(ctx, "__storageSet", storage_set_bridge as NativeFn);
@@ -571,6 +575,59 @@ fn set_body_inner_html(tree: &mut Tree, html: &str) {
     };
     tree.get_mut(body).children.clear();
     tree.insert(Some(body), NodeData::Text(html.into()));
+}
+
+/// M62: `__parseHtml(nodeId, html)` — 解析 HTML 字符串为真实 DOM 节点，替换目标元素子节点。
+/// 用于 innerHTML setter 实现。使用 html5ever 解析 HTML，递归创建 DOM 元素。
+fn parse_html(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let node_id = match arg_usize(args, 0) {
+        Some(id) => id,
+        None => return Ok(JsValue::undefined()),
+    };
+    let html = arg_string(args, 1).unwrap_or_default();
+    with_tree(|t| {
+        if node_id >= t.len() {
+            return;
+        }
+        // 使用 html5ever 解析 HTML
+        let parsed = browser_html_parser::parse(&html);
+        // 找到 body（html5ever 总是生成完整 html/head/body 结构）
+        let body_id = find_first_element(&parsed, "body");
+        if let Some(body_id) = body_id {
+            // 清空目标元素子节点
+            t.get_mut(node_id).children.clear();
+            // 复制 body 下所有子节点到目标元素
+            let children = parsed.children_of(body_id).to_vec();
+            for &child in &children {
+                copy_subtree(&parsed, child, t, node_id);
+            }
+        } else {
+            // fallback: 无 body 则用文本插入
+            t.get_mut(node_id).children.clear();
+            t.insert(Some(node_id), NodeData::Text(html));
+        }
+    });
+    Ok(JsValue::undefined())
+}
+
+/// 递归复制 parsed tree 的节点到目标 tree。
+fn copy_subtree(src: &Tree, src_id: NodeId, dst: &mut Tree, dst_parent: NodeId) {
+    let node = src.get(src_id);
+    let new_id = match &node.data {
+        NodeData::Element { tag, attrs } => dst.insert(
+            Some(dst_parent),
+            NodeData::Element {
+                tag: tag.clone(),
+                attrs: attrs.clone(),
+            },
+        ),
+        NodeData::Text(text) => dst.insert(Some(dst_parent), NodeData::Text(text.clone())),
+        NodeData::Comment(text) => dst.insert(Some(dst_parent), NodeData::Comment(text.clone())),
+        NodeData::Document | NodeData::Doctype { .. } => return,
+    };
+    for &child in src.children_of(src_id) {
+        copy_subtree(src, child, dst, new_id);
+    }
 }
 
 /// M-cls.3: pub(crate) —— 给 spa_fallback 注入正文用。

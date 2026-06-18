@@ -43,6 +43,7 @@ function XMLHttpRequest() {
     this.status = 0;
     this.statusText = '';
     this.responseText = '';
+    this.response = '';        // M62: docsify onload 读 xhr.response（非 responseText）
     this.responseType = '';
     this.responseURL = '';
     this._method = 'GET';
@@ -67,6 +68,7 @@ XMLHttpRequest.prototype.send = function(body) {
     __xhrSend(this.__xhrId);
     var raw = __xhrGetResponseText(this.__xhrId);
     this.responseText = raw;
+    this.response = raw;       // M62: 同步 response（docsify 等读 xhr.response）
     // 解析 status（__fetchSync 编码格式 "status\nbody"，__xhrSend 后端可能
     // 只存 body。对兼容性：尝试解析 status 行，失败则默认 200）
     var parsed = this._parseStatus(raw);
@@ -79,18 +81,46 @@ XMLHttpRequest.prototype.send = function(body) {
     // 异步触发 onload（setTimeout 0，复用 M16 event loop）
     setTimeout(function() {
         self.responseText = __xhrGetResponseText(self.__xhrId);
+        self.response = self.responseText;  // M62: 同步 response
         var p = self._parseStatus(self.responseText);
         self.status = p.status;
         self.statusText = p.statusText;
+        // M62: 触发 addEventListener 注册的回调（docsify X().then 用 addEventListener('load', cb)）。
+        var ev = { type: 'load', target: self, currentTarget: self,
+                   status: self.status, response: self.responseText,
+                   responseText: self.responseText };
+        // 先触发 addEventListener 回调，再触发 onload（顺序对齐浏览器行为）。
+        // M63: 回调必须以 XHR 实例为 this（规范要求），否则 cb 内 this.responseText 为 undefined。
+        if (self.__xhrListeners && self.__xhrListeners['load']) {
+            for (var _i = 0; _i < self.__xhrListeners['load'].length; _i++) {
+                try { self.__xhrListeners['load'][_i].call(self, ev); } catch(e) {
+                    if (typeof __log === 'function') __log('[xhr] load listener threw: ' + e.message + (e.stack ? (' | stack=' + e.stack.split('\\n').slice(0,3).join(' | ')) : ''));
+                }
+            }
+        }
         if (typeof self.onload === 'function') {
-            // M62: 构造事件对象传入（docsify 等库期望 ref.target = XHR 对象）。
-            // 之前 onload.call(self) 没传参数 → ref 为 undefined → ref.target 崩。
-            var ev = { type: 'load', target: self, currentTarget: self,
-                       status: self.status, response: self.responseText,
-                       responseText: self.responseText };
             self.onload.call(self, ev);
         }
     }, 0);
+};
+XMLHttpRequest.prototype.getResponseHeader = function(name) {
+    // M62: 爬虫场景不解析响应头（docsify 读 last-modified 做 cache，null 安全）。
+    return null;
+};
+XMLHttpRequest.prototype.getAllResponseHeaders = function() {
+    return '';
+};
+// M62: XMLHttpRequest 继承 EventTarget，框架（docsify 等）用 addEventListener
+// 注册 progress/load/error 回调。我们的 XHR 是简化版，存回调但不触发（onload
+// 已直接 dispatch），只需要 addEventListener 不崩溃。
+XMLHttpRequest.prototype.addEventListener = function(type, cb) {
+    if (!this.__xhrListeners) this.__xhrListeners = {};
+    if (!this.__xhrListeners[type]) this.__xhrListeners[type] = [];
+    this.__xhrListeners[type].push(cb);
+};
+XMLHttpRequest.prototype.removeEventListener = function(type, cb) {
+    if (!this.__xhrListeners || !this.__xhrListeners[type]) return;
+    this.__xhrListeners[type] = this.__xhrListeners[type].filter(function(f) { return f !== cb; });
 };
 XMLHttpRequest.prototype.getResponseText = function() {
     return __xhrGetResponseText(this.__xhrId);

@@ -672,6 +672,218 @@ document.getElementById('out').textContent = 'COUNT_' + divs.length;
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn web_api_element_query_selector() {
+    // M62: Element.prototype.querySelector（Vue/React createElement 后查找子元素）
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var el = document.createElement('div');
+el.innerHTML = '<span class="x">hello</span><p>world</p>';
+var span = el.querySelector('span');
+document.getElementById('out').textContent = 'QS_' + (span ? span.textContent : 'null');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("QS_hello"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_create_element_ns() {
+    // M62: document.createElementNS（Vue/React SVG/MathML 元素创建）
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+document.getElementById('out').textContent = 'NS_' + svg.tagName;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NS_SVG"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_escape_unescape() {
+    // M62: escape/unescape（deprecated 但 builder.io 等第三方依赖）
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var e = escape('<test>&');
+document.getElementById('out').textContent = 'ESC_' + e;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ESC_%3Ctest%3E%26"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_text_encoder_stream() {
+    // M62: TextEncoderStream/TextDecoderStream（Stream API，builder.io）
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var te = new TextEncoderStream();
+document.getElementById('out').textContent = 'TES_' + te.encoding;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("TES_utf-8"));
+    let _ = std::fs::remove_file(&path);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// M63: 真实站点报错驱动的回归测试（bark/svelte/nextjs 自愈循环）
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn web_api_element_append_node() {
+    // M63: Element.prototype.append（svelte.dev inline script: document.body.append(div)）
+    // 报错「not a callable function」。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var div = document.createElement('div');
+div.id = 'appended';
+document.body.append(div);
+var found = document.getElementById('appended');
+document.getElementById('out').textContent = found ? 'APPEND_OK' : 'APPEND_FAIL';
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("APPEND_OK"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_element_append_string() {
+    // M63: append 接受字符串参数（自动转文本节点）。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var div = document.createElement('div');
+div.id = 'txt';
+document.body.append(div);
+document.getElementById('txt').append('hello', ' ', 'world');
+document.getElementById('out').textContent = 'APPEND_STR_' + document.getElementById('txt').textContent;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("APPEND_STR_hello world"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_url_with_location_base() {
+    // M63: new URL(".", location)（svelte.dev SvelteKit bootstrap）
+    // 报错「cannot convert null/undefined to object」（URL.href getter 无限递归）。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var u = new URL(".", "https://example.com/path/");
+document.getElementById('out').textContent = 'URL_' + u.protocol + '|' + u.pathname;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("URL_https:|/path/."));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_anchor_href_reflected() {
+    // M63: a.href 反射属性（docsify sidebar sort: b.href.length - a.href.length）
+    // 报错「cannot convert null/undefined to object in sort」。
+    let html = r##"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<nav id="nav">
+<a href="#/short">S</a>
+<a href="#/longer-path">L</a>
+</nav>
+<script>
+var nav = document.getElementById('nav');
+var links = [].slice.call(nav.querySelectorAll('a'));
+// docsify 模式：按 href 长度排序（降序）
+links.sort(function(a, b) { return b.href.length - a.href.length; });
+document.getElementById('out').textContent = 'HREF_' + links[0].href + '|' + links[1].href;
+</script></body></html>"##;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("HREF_#/longer-path|#/short"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_get_bounding_client_rect() {
+    // M63: Element.prototype.getBoundingClientRect（docsify K() scroll handler）
+    // 报错「not a callable function」。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<div id="target">x</div>
+<script>
+var rect = document.getElementById('target').getBoundingClientRect();
+var ok = typeof rect === 'object' && typeof rect.height === 'number' && typeof rect.top === 'number';
+document.getElementById('out').textContent = ok ? 'RECT_OK' : 'RECT_FAIL';
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RECT_OK"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_xhr_load_listener_this_binding() {
+    // M63: XHR addEventListener('load', cb) 回调内 this 应为 XHR 实例（docsify）
+    // 修复前 cb 内 this.status === undefined。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var xhr = new XMLHttpRequest();
+xhr.addEventListener('load', function(ev) {
+  // this 应绑定到 xhr（规范），能读 status
+  var ok = (this === xhr) && (typeof this.status === 'number');
+  document.getElementById('out').textContent = ok ? 'XHR_THIS_OK' : 'XHR_THIS_FAIL_' + typeof this;
+});
+xhr.open('GET', '/nonexistent');
+xhr.send();
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("XHR_THIS_OK"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

@@ -126,10 +126,19 @@ Object.defineProperty(Element.prototype, 'tagName', {
             enumerable: true, configurable: true,
         });
 
-        // ── innerHTML: MVP 简化为 textContent（爬虫够用）──
+        // ── innerHTML: 解析 HTML 为真实 DOM 节点（docsify/React 等框架依赖
+        // querySelector 查找设置的元素）。M62: 从 __setText（纯文本）升级为
+        // __parseHtml（html5ever 解析 + 创建真实元素）。
         Object.defineProperty(Element.prototype, 'innerHTML', {
             get: function() { return __getText(this.__nodeId); },
-            set: function(v) { __setText(this.__nodeId, String(v)); },
+            set: function(v) { __parseHtml(this.__nodeId, String(v)); },
+            enumerable: true, configurable: true,
+        });
+        // M62: outerHTML setter（docsify 等用 outerHTML 替换整节点）。
+        // 爬虫场景实现为 innerHTML 语义（内容写在原节点内，不影响提取）。
+        Object.defineProperty(Element.prototype, 'outerHTML', {
+            get: function() { return __getText(this.__nodeId); },
+            set: function(v) { __parseHtml(this.__nodeId, String(v)); },
             enumerable: true, configurable: true,
         });
         Object.defineProperty(Element.prototype, 'parentNode', {
@@ -284,12 +293,90 @@ Object.defineProperty(Element.prototype, 'tagName', {
             enumerable: true, configurable: true,
         });
 
+        // M63: 反射 IDL 属性（HTML 标准）—— 框架直接读 el.href / el.src / el.value 等，
+        // 不走 getAttribute。这些属性 getter/setter 反射到同名 attribute。
+        // 关键场景：docsify 用 a.href.length 排序 sidebar 链接（href 缺失 → undefined.length 崩）。
+        // 注意：对 a[href] 浏览器返回绝对 URL；我们简化返回 attribute 原值（爬虫够用）。
+        var __reflectedAttrs = ['href','src','value','name','type','placeholder',
+            'checked','disabled','selected','readonly','required','multiple',
+            'alt','title','width','height','target','rel','action','method',
+            'colspan','rowspan','label','for','pattern','min','max','step'];
+        for (var _ri = 0; _ri < __reflectedAttrs.length; _ri++) {
+            (function(attrName) {
+                // value/checked 对应 defaultValue/defaultChecked 语义略不同，爬虫场景统一反射。
+                Object.defineProperty(Element.prototype, attrName, {
+                    get: function() {
+                        var v = (typeof __attrGet === 'function')
+                            ? __attrGet(this.__nodeId, attrName) : null;
+                        return (v === null || v === undefined) ? '' : String(v);
+                    },
+                    set: function(v) {
+                        if (typeof __attrSet === 'function') {
+                            __attrSet(this.__nodeId, attrName, v);
+                        }
+                    },
+                    enumerable: true, configurable: true,
+                });
+            })(__reflectedAttrs[_ri]);
+        }
+
         // ── 方法 ──
         Element.prototype.appendChild = function(child) {
             if (child && typeof child.__nodeId === 'number') {
                 __appendChild(this.__nodeId, child.__nodeId);
             }
             return child;
+        };
+        // M63: ParentNode.append/prepend（现代框架 svelte/react/vue 用 document.body.append(div)）。
+        // 与 appendChild 区别：append 接受多参数 + 字符串（自动转文本节点）+ 无返回值。
+        Element.prototype.append = function() {
+            for (var i = 0; i < arguments.length; i++) {
+                var node = arguments[i];
+                if (node === null || node === undefined) continue;
+                if (typeof node === 'string' || typeof node === 'number') {
+                    var tn = __makeElement(__createEl('__text__'));
+                    if (tn && typeof __setText === 'function') {
+                        __setText(tn.__nodeId, String(node));
+                    }
+                    if (tn) __appendChild(this.__nodeId, tn.__nodeId);
+                } else if (typeof node.__nodeId === 'number') {
+                    __appendChild(this.__nodeId, node.__nodeId);
+                }
+            }
+        };
+        Element.prototype.prepend = function() {
+            // 插到第一个子节点之前；若无子节点则 append。
+            var refId = undefined;
+            if (typeof __children === 'function') {
+                var cs = __children(this.__nodeId);
+                if (typeof cs === 'string' && cs.length > 0) {
+                    var arr = cs.split(',');
+                    if (arr.length > 0) refId = parseInt(arr[0], 10);
+                }
+            }
+            for (var i = 0; i < arguments.length; i++) {
+                var node = arguments[i];
+                if (node === null || node === undefined) continue;
+                if (typeof node === 'string' || typeof node === 'number') {
+                    var tn = __makeElement(__createEl('__text__'));
+                    if (tn && typeof __setText === 'function') {
+                        __setText(tn.__nodeId, String(node));
+                    }
+                    if (tn) {
+                        if (typeof refId === 'number' && typeof __insertBefore === 'function') {
+                            __insertBefore(this.__nodeId, tn.__nodeId, refId);
+                        } else {
+                            __appendChild(this.__nodeId, tn.__nodeId);
+                        }
+                    }
+                } else if (typeof node.__nodeId === 'number') {
+                    if (typeof refId === 'number' && typeof __insertBefore === 'function') {
+                        __insertBefore(this.__nodeId, node.__nodeId, refId);
+                    } else {
+                        __appendChild(this.__nodeId, node.__nodeId);
+                    }
+                }
+            }
         };
         Element.prototype.insertBefore = function(child, reference) {
             if (child && typeof child.__nodeId === 'number') {
@@ -318,8 +405,15 @@ Object.defineProperty(Element.prototype, 'tagName', {
                 ? __findChild(this.__nodeId, id) : undefined;
             return (typeof nid === 'number') ? new Element(nid) : null;
         };
-        // M62: Element 级 querySelectorAll（之前写死返回 []）。
+        // M62: Element 级 querySelector / querySelectorAll。
+        // Vue/React 等框架用 el.querySelector('span') 查找动态创建的子元素。
         // 注：Element 级搜索需要从该元素子树开始，简化版仍从 document 根搜索。
+        Element.prototype.querySelector = function(sel) {
+            if (!sel) return null;
+            var ids = (typeof __qsAll === 'function') ? __qsAll(sel) : [];
+            return (ids.length > 0 && typeof ids[0] === 'number' && ids[0] >= 0)
+                ? __makeElement(ids[0]) : null;
+        };
         Element.prototype.querySelectorAll = function(sel) {
             if (!sel) return [];
             var ids = (typeof __qsAll === 'function') ? __qsAll(sel) : [];
@@ -356,6 +450,14 @@ Object.defineProperty(Element.prototype, 'tagName', {
         };
         Element.prototype.scrollIntoView = function() {};
         Element.prototype.getClientRects = function() { return []; };
+        // M63: getBoundingClientRect（单数）—— docsify/React/框架读 rect.height/top 做布局
+        // 判断。我们没有真实布局，返回零值 DOMRect（爬虫够用，避免 .height undefined 崩）。
+        Element.prototype.getBoundingClientRect = function() {
+            return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0,
+                     width: 0, height: 0, toJSON: function() {
+                         return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 };
+                     } };
+        };
         Element.prototype.cloneNode = function() {
             var copy = __makeElement(__createEl(String(this.tagName || '').toLowerCase()));
             if (!copy) return null;

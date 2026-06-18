@@ -84,6 +84,17 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
             createElement: function(tag) {
                 return __makeElement(__createEl(tag));
             },
+            // M62: createElementNS（Vue/React SVG/MathML 元素创建）。
+            // 爬虫场景：忽略 namespace，按普通元素创建。
+            createElementNS: function(ns, tag) {
+                // 处理带前缀的 tag（如 svg:svg → svg）
+                var cleanTag = (tag || 'div').split(':').pop();
+                return __makeElement(__createEl(cleanTag));
+            },
+            createDocumentFragment: function() {
+                // M62: React/Vue 虚拟 DOM 批量操作必需。
+                return __makeElement(__createEl('div'));
+            },
             getElementsByTagName: function(tag) {
                 // M62: 返回全部匹配（之前只返回首个）。复用 __qsAll tag 选择器。
                 if (typeof __qsAll === 'function') {
@@ -104,10 +115,6 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
                     __setText(node.__nodeId, String(text));
                 }
                 return node;
-            },
-            createDocumentFragment: function() {
-                // M62: React/Vue 虚拟 DOM 批量操作必需。
-                return __makeElement(__createEl('div'));
             },
             createComment: function(text) {
                 // M62: React 用 comment 节点做锚点。

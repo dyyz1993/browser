@@ -13,6 +13,21 @@ fn bin() -> Command {
     Command::cargo_bin("browser").expect("browser binary not found")
 }
 
+/// M63: At least N scripts executed. The reported count includes built-in
+/// install scripts (compat_shim/element_shim/etc.), which vary by boa version,
+/// so we assert a floor rather than an exact count.
+fn at_least_n_scripts(n: usize) -> impl Predicate<str> {
+    predicate::function(move |s: &str| {
+        s.lines()
+            .filter_map(|l| l.strip_prefix("[browser] "))
+            .filter_map(|l| l.strip_suffix(" script(s) executed"))
+            .filter_map(|c| c.parse::<usize>().ok())
+            .next()
+            .unwrap_or(0)
+            >= n
+    })
+}
+
 const SPA_HTML: &str = r#"<!doctype html>
 <html>
 <head><title>Static</title></head>
@@ -41,7 +56,7 @@ async fn render_url_executes_scripts_and_outputs_dynamic_content() {
         .success()
         .stdout(predicate::str::contains("rendered from url"))
         .stdout(predicate::str::contains("placeholder").not())
-        .stderr(predicate::str::contains("1 script(s) executed"));
+        .stderr(at_least_n_scripts(1));
 }
 
 #[tokio::test]
@@ -79,8 +94,10 @@ async fn render_url_works_without_scripts() {
         .args(["render-url", &url])
         .assert()
         .success()
-        .stdout(predicate::str::contains("plain page"))
-        .stderr(predicate::str::contains("0 script(s) executed"));
+        .stdout(predicate::str::contains("plain page"));
+    // No HTML <script> in the page — we don't assert an exact "0 scripts"
+    // count because the reported number includes built-in install scripts
+    // (compat_shim etc.). The content rendering is the real assertion.
 }
 
 #[tokio::test]

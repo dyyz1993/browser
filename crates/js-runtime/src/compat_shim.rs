@@ -1335,14 +1335,13 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                 this.searchParams = new globalThis.URLSearchParams(this.search);
             };
             globalThis.URL.prototype = {
-                get href() {
-                    return this.toString();
-                },
                 toString: function() {
+                    // M63: 注意 href 在构造器里已设为普通 own property（非 getter），
+                    // 不能在这里读 this.href 否则若被覆盖会递归。直接拼已有字段。
                     return String(this.href || '');
                 },
                 toJSON: function() {
-                    return this.toString();
+                    return String(this.href || '');
                 }
             };
         }
@@ -1591,6 +1590,54 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
                     }
                 }
                 return out;
+            };
+        }
+        // M62: escape/unescape（deprecated 全局函数，但部分旧库/混淆代码仍用）。
+        // builder.io persist-attribution 等第三方依赖 escape()。
+        if (typeof globalThis.escape !== 'function') {
+            globalThis.escape = function escape(str) {
+                str = String(str);
+                var out = '';
+                for (var i = 0; i < str.length; i++) {
+                    var c = str.charAt(i);
+                    var cc = str.charCodeAt(i);
+                    if ((cc >= 0x30 && cc <= 0x39) ||  // 0-9
+                        (cc >= 0x41 && cc <= 0x5a) ||  // A-Z
+                        (cc >= 0x61 && cc <= 0x7a) ||  // a-z
+                        c === '@' || c === '*' || c === '_' || c === '+' ||
+                        c === '-' || c === '.' || c === '/') {
+                        out += c;
+                    } else if (cc < 256) {
+                        out += '%' + (cc < 16 ? '0' : '') + cc.toString(16).toUpperCase();
+                    } else {
+                        out += '%u' + cc.toString(16).toUpperCase().padStart(4, '0');
+                    }
+                }
+                return out;
+            };
+        }
+        if (typeof globalThis.unescape !== 'function') {
+            globalThis.unescape = function unescape(str) {
+                str = String(str);
+                return decodeURIComponent(str.replace(/%u([0-9a-fA-F]{4})/g, function(_, hex) {
+                    return '%u' + hex;
+                }).replace(/%([0-9a-fA-F]{2})/g, '%$1'));
+            };
+        }
+        // M62: TextEncoderStream/TextDecoderStream（Stream API，builder.io 等）。
+        // 爬虫场景：构造器存在即可，不需要真流式编码。
+        if (typeof globalThis.TextEncoderStream !== 'function') {
+            globalThis.TextEncoderStream = function TextEncoderStream() {
+                this.encoding = 'utf-8';
+                this.readable = { locked: false, getReader: function() { return { read: function() { return Promise.resolve({ done: true }); } }; } };
+                this.writable = { locked: false, getWriter: function() { return { write: function() {}, close: function() { return Promise.resolve(); } }; } };
+            };
+        }
+        if (typeof globalThis.TextDecoderStream !== 'function') {
+            globalThis.TextDecoderStream = function TextDecoderStream(label) {
+                this.encoding = (label || 'utf-8').toLowerCase();
+                this.readable = { locked: false, getReader: function() { return { read: function() { return Promise.resolve({ done: true }); } }; } };
+                this.writable = { locked: false, getWriter: function() { return { write: function() {}, close: function() { return Promise.resolve(); } }; } };
             };
         }
         // M62: Headers（fetch 配套，键值对存储）。

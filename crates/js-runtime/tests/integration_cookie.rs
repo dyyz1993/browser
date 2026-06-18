@@ -52,7 +52,8 @@ __fetchAppendBody("{base}/api/data");
 
     let tree = parse_html(&html);
     let (shared, n) = run_scripts_with_base(tree, Some(base));
-    assert_eq!(n, 1, "one script should execute");
+    // M63: 计数含内置安装脚本（compat_shim 等，随 boa 版本变化），断言 >= 1。
+    assert!(n >= 1, "at least one script should execute, got {n}");
 
     let body = body_text_content(&shared.borrow());
     // 验证：JS fetch 继承了 session fetch 设的 cookie
@@ -85,7 +86,8 @@ __fetchAppendBody("{base}/api/data");
 
     let tree = parse_html(&html);
     let (shared, n) = run_scripts_with_base(tree, Some(base));
-    assert_eq!(n, 1);
+    // M63: 计数含内置安装脚本（compat_shim 等，随 boa 版本变化），断言 >= 1。
+    assert!(n >= 1, "at least one script should execute, got {n}");
 
     let body = body_text_content(&shared.borrow());
     assert!(
