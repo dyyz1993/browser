@@ -223,6 +223,69 @@ fn regex_static_export(code: &str) -> bool {
     false
 }
 
+/// M65: 从 Vite bundle 源码提取 __vite__mapDeps 的 chunk 列表，并行预取到缓存。
+/// Vite 用 __vite__mapDeps 注册所有动态 import() 的 chunk 路径，eval 时 JS fetch()
+/// 会串行请求它们。预取后 __fetchSync 命中缓存（0ms），避免 24 × 1s = 24s 串行。
+fn prefetch_vite_chunks(code: &str, entry_url: &str) {
+    // 找 __vite__mapDeps=(...m.f||(m.f=["./xxx.js","./yyy.js",...])
+    let marker = ".f=[";
+    let Some(start) = code.find(marker) else {
+        return;
+    };
+    let arr_start = start + marker.len() - 1; // 指向 '['
+    // 找匹配的 ']'
+    let bytes = code.as_bytes();
+    let mut depth = 0;
+    let mut end = arr_start;
+    for (i, &b) in bytes.iter().enumerate().skip(arr_start) {
+        match b {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if end <= arr_start {
+        return;
+    }
+    let arr_str = &code[arr_start + 1..end];
+    // 提取所有 "./xxx.js" 字符串
+    let mut chunks: Vec<String> = Vec::new();
+    let mut in_str = false;
+    let mut cur = String::new();
+    for ch in arr_str.chars() {
+        if ch == '"' {
+            if in_str && !cur.is_empty() {
+                chunks.push(cur.clone());
+                cur.clear();
+            }
+            in_str = !in_str;
+        } else if in_str {
+            cur.push(ch);
+        }
+    }
+    if chunks.is_empty() {
+        return;
+    }
+    // 把相对路径解析成绝对 URL
+    let base_dir = entry_url
+        .rfind('/')
+        .map(|i| &entry_url[..i])
+        .unwrap_or(entry_url);
+    let urls: Vec<String> = chunks
+        .iter()
+        .filter_map(|c| c.strip_prefix("./").map(|s| format!("{base_dir}/{s}")))
+        .collect();
+    if !urls.is_empty() {
+        crate::bridge::prefetch_to_cache(&urls);
+    }
+}
+
 /// M64: 包装脚本为 IIFE + try/catch（复用现有 wrap 逻辑）。
 fn wrap_script(code: &str, label: &str) -> String {
     let mut wrapped = String::new();
@@ -398,6 +461,12 @@ pub fn execute_scripts_with_base(
                                 // 对超大 bundle（如 Nuxt 1.3MB）可省 ~100MB Module parser 内存。
                                 let base = script_base_url.as_deref().unwrap_or("");
                                 if let Some(patched) = try_strip_esm_for_eval(&code, base) {
+                                    // M65: Vite chunk 预取——提取 __vite__mapDeps 的 chunk 列表，
+                                    // 并行 fetch 到 bridge 缓存，让后续 __fetchSync 命中缓存。
+                                    // 这些 chunk 是 Vite 动态 import() 的懒加载组件，
+                                    // eval 时 JS fetch() 会串行请求它们（~1s/个）。
+                                    // 预取后 __fetchSync 直接返回缓存（0ms）。
+                                    prefetch_vite_chunks(&patched, &url);
                                     // 退化 eval 成功
                                     if trace_scripts {
                                         eprintln!(

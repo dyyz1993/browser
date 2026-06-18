@@ -461,7 +461,57 @@ fn fetch_sync_method_bridge(
 /// Set-Cookie 存入 jar（同主请求共享会话）。jar 是 `Rc<RefCell<>>`
 /// 不跨线程，所以在主线程读出 header、写入 jar；新线程只拿 String。
 pub(crate) fn fetch_sync(url: &str) -> Result<String, String> {
+    // M65: 检查预取缓存（Vite chunk prefetch 写入）
+    if let Some(cached) = FETCH_CACHE.with(|c| c.borrow_mut().remove(url)) {
+        return Ok(cached);
+    }
     fetch_sync_with_method(url, "GET", None, None).map(|(_status, body)| body)
+}
+
+// M65: 预取缓存——URL → 响应体。fetch_sync 命中后移除（一次性）。
+thread_local! {
+    static FETCH_CACHE: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// M65: 批量预取 URL 到缓存（并行 fetch）。
+pub(crate) fn prefetch_to_cache(urls: &[String]) {
+    use std::sync::mpsc;
+    if urls.is_empty() {
+        return;
+    }
+    let (tx, rx) = mpsc::channel();
+    let handles: Vec<_> = urls
+        .iter()
+        .filter_map(|url| {
+            let url = url.clone();
+            let tx = tx.clone();
+            // 跳过已在缓存的
+            if FETCH_CACHE.with(|c| c.borrow().contains_key(&url)) {
+                return None;
+            }
+            Some(std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .ok()?;
+                let client = browser_net::HttpClient::new();
+                let bytes = rt.block_on(client.get(&url)).ok()?;
+                let body = String::from_utf8(bytes).ok()?;
+                let _ = tx.send((url, body));
+                Some(())
+            }))
+        })
+        .collect();
+    drop(tx);
+    for (url, body) in rx.iter() {
+        FETCH_CACHE.with(|c| {
+            c.borrow_mut().insert(url, body);
+        });
+    }
+    for h in handles {
+        let _ = h.join();
+    }
 }
 
 /// M65: 持久化的网络线程——复用 tokio runtime + HttpClient 连接池。
