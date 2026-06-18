@@ -126,26 +126,70 @@ browser spa http://localhost:8765/async-spa.html --wait networkidle
 
 ---
 
+## 基础原则（宪法级，优先于一切）
+
+> 这是项目维护者确立的四条基础原则。所有架构决策、功能取舍、技术选型
+> 都必须服从这四条。冲突时**基础原则 > 决策原则 > 个人偏好**。
+
+### 原则一：SPA/CSR 尽可能全覆盖（项目存在的理由）
+
+**尽可能解决所有 SPA、CSR 场景。** 这是本项目的 North Star。
+- 遇到渲染不了的 SPA → 走 AGENTS.md 第六章「JS 报错自愈循环」补 API
+- 纯 CSR 无 SSR 兜底的站（bark/vue-playground）是 boa 引擎天花板，标注需 Chrome，
+  但不放弃——持续补 API 缩小失败面
+- 覆盖率是核心 KPI：`csr_compare.sh` 评分 + `spa_compare.sh` 覆盖率持续追踪
+
+### 原则二：自研优先（学习 + 可控）
+
+**整个架构尽可能手写，不用别人的库。** 例外只有白名单（html5ever/hyper/
+boa/clap/fontdue 等「≥10 万行底层库」）。
+- JS Web API 桥、事件系统、Base64、Markdown 转换、内容提取器 → 全手写
+- 补 API 用纯 JS polyfill（compat_shim），不引 Rust 依赖（保二进制不涨）
+- 新增依赖必须：登记白名单 + 写 ADR + commit（禁止偷偷加）
+
+### 原则三：低内存、快运行（核心卖点）
+
+**保证低内存、运行快的特征。** 这是对标 Chrome 的核心优势（实测内存 1/11、
+速度 6 倍）。
+- 不启动 Chromium/V8（13MB 单文件，不引重型引擎）
+- 任何改动后监控基线：二进制大小 + 峰值 RSS（补 API 不应让这俩涨）
+- `--smart` 模式（先 SSR 后 JS）是有 SSR 站的杀手锏，持续优化
+
+### 原则四：反爬不重点处理（明确边界）
+
+**针对反爬不需要重点处理。** 本项目是「基本能用」的渲染引擎，不做指纹伪造/
+验证码/行为模拟。
+- 反爬太强的站（需签名/验证码）走 `--no-js` 兜底或标注为已知局限
+- 不为绕过检测做 canvas 指纹/WebGL 伪造等（AGENTS.md 已写死）
+- 但**不等于不处理任何防护**——brotli 解码、cookie 持久化、UA 伪装这些基础
+  的「让请求能成功」的能力要做（M58 brotli、M15 cookie 都是）
+
+---
+
 ## 决策原则（当 "要不要做 X" 有争议时）
 
 1. **爬虫价值优先**：X 能让更多 SPA 被正确爬取吗？是 → 做；否 → 跳过。
 2. **学习价值次之**：X 能加深对浏览器原理的理解吗？是 → 做；否 → 跳过。
 3. **复杂度门槛**：X 的实现成本（行数/API 复杂度）超过收益吗？是 → defer。
 4. **自研优先**：能用 < 1000 行手写实现吗？是 → 手写；否 → 评估白名单 crate。
-5. **不破坏既有**：X 会让现有 260 tests 变红吗？是 → 不做或重构。
+5. **不破坏既有**：X 会让现有测试变红吗？是 → 不做或重构。
+6. **测试全覆盖**：每个 JS 功能点都有单独测试用例。报错就继续补测试，
+   直到零问题（详见 AGENTS.md 第六章自愈循环 + `docs/JS-COVERAGE.md`）。
 
 ---
 
-## 当前状态快照（2026-06-06）
+## 当前状态快照（2026-06-18）
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | `3afbcbb`（M14.3 navigation/location shim） |
-| 总 commits | 97 |
-| 测试 | 260 passed, 0 clippy warnings |
-| Crates | 12（net/dom/html-parser/css-engine/layout/render/js-runtime/page/cli/gui/storage/navigation） |
-| CLI 子命令 | 8（get/parse/render-file/render-script/render-url/open/image-ascii/help） |
-| 核心目标 G1 | ✅ 已达成（M4） |
+| HEAD | M62（boa 0.21 + JS 覆盖矩阵 + fetch 命令） |
+| 总 commits | 200+ |
+| 测试 | **776+ passed**（含 30 项 JS 特性入库测试），0 clippy warnings |
+| Crates | 16（含 extractor 后置过滤器） |
+| boa 版本 | 0.21（async/await 运行时落地） |
+| 二进制 | 14MB（单文件，零运行时依赖） |
+| SPA 覆盖率 | 有 SSR 站 80%，纯 CSR 站 39%（详见 assessment） |
+| 核心目标 G1 | ✅ 已达成（M4），fetch 命令 M59 当 curl 用 |
 | 截图 G2 | ✅ 已达成（M12.1） |
 | 跨平台 G3 | ✅ 已达成 |
 
