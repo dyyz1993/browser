@@ -50,8 +50,79 @@ impl HttpModuleLoader {
         }
     }
 
+    /// M65: 预扫描入口模块的依赖图，并行 fetch 所有 chunk 到缓存。
+    /// 解析入口源码找 `from"./xxx"` 引用，递归扫描（最多 3 层），收集所有 URL，
+    /// 然后用线程池并行 fetch + 写临时文件。后续 Module::parse 的 load_imported_module
+    /// 全部缓存命中（无需串行 fetch）。
+    pub fn prefetch_dependencies(&self, entry_url: &str) {
+        use std::sync::mpsc;
+        let mut to_fetch = vec![entry_url.to_string()];
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        visited.insert(entry_url.to_string());
+        let mut all_urls: Vec<String> = Vec::new();
+        // BFS 扫描依赖图（fetch 入口 → 找 import → fetch 子 chunk → 找 import...）
+        let max_depth = 4;
+        for _depth in 0..max_depth {
+            if to_fetch.is_empty() {
+                break;
+            }
+            let batch: Vec<String> = std::mem::take(&mut to_fetch);
+            let (tx, rx) = mpsc::channel();
+            // 并行 fetch 当前批次
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|url| {
+                    let url = url.clone();
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        // M65: prefetch 用独立 HttpClient（并行是重点，
+                        // 连接复用由主线程的 net worker 负责）。
+                        let result = (|| {
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .map_err(|e| format!("tokio: {e}"))?;
+                            let client = browser_net::HttpClient::new();
+                            let bytes = rt
+                                .block_on(client.get(&url))
+                                .map_err(|e| format!("{e:?}"))?;
+                            String::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))
+                        })();
+                        let _ = tx.send((url, result));
+                    })
+                })
+                .collect();
+            drop(tx);
+            for (url, result) in rx.iter() {
+                if let Ok(source) = result {
+                    all_urls.push(url.clone());
+                    // 扫描子依赖
+                    for spec in extract_import_specifiers(&source) {
+                        let child_url = self.resolve_url(&spec, Some(&url));
+                        if !visited.contains(&child_url) {
+                            visited.insert(child_url.clone());
+                            to_fetch.push(child_url);
+                        }
+                    }
+                    // 预写临时文件（load_module 会缓存命中）
+                    let temp_path = self.url_to_temp_path(&url);
+                    if let Some(parent) = temp_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&temp_path, &source);
+                }
+            }
+            for h in handles {
+                let _ = h.join();
+            }
+        }
+    }
+
     /// 加载入口模块 + load_link_evaluate。
+    /// M65: 先并行预取所有 chunk，再 Module::parse（避免串行 fetch）。
     pub fn load_and_eval(&self, entry_url: &str, context: &mut Context) -> JsResult<()> {
+        // M65: 并行预取依赖图（BFS 扫描 import → 线程池并行 fetch）
+        self.prefetch_dependencies(entry_url);
         let module = self.load_module(entry_url, context)?;
         let promise = module.load_link_evaluate(context);
         context.run_jobs()?;
@@ -99,16 +170,26 @@ impl HttpModuleLoader {
     }
 
     /// 加载单个模块：fetch → 写临时文件 → parse → 缓存。返回 Module。
+    /// M65: 如果 prefetch_dependencies 已预写临时文件，直接读文件（跳过 fetch）。
     fn load_module(&self, url: &str, context: &mut Context) -> JsResult<Module> {
         // 缓存命中
         if let Some(m) = self.modules.borrow().get(url).cloned() {
             return Ok(m);
         }
 
-        let source_text = fetch_sync(url)
-            .map_err(|e| JsNativeError::typ().with_message(format!("esm fetch `{url}`: {e}")))?;
+        // M65: 检查临时文件是否已由 prefetch 预写
+        let temp_path = self.url_to_temp_path(url);
+        let source_text = if temp_path.exists() {
+            std::fs::read_to_string(&temp_path).unwrap_or_else(|_| {
+                // 预写文件读取失败，退回 fetch
+                fetch_sync(url).unwrap_or_default()
+            })
+        } else {
+            fetch_sync(url)
+                .map_err(|e| JsNativeError::typ().with_message(format!("esm fetch `{url}`: {e}")))?
+        };
 
-        // 写临时文件，保留 path 供 referrer 解析。
+        // 写临时文件（如果 prefetch 没写过）
         // URL → 相对 path → 临时文件路径。
         let temp_path = self.url_to_temp_path(url);
         if let Some(parent) = temp_path.parent() {
@@ -217,7 +298,7 @@ impl ModuleLoader for HttpModuleLoader {
     }
 }
 
-/// 同步 HTTP fetch（spawn 线程 + 独立 tokio runtime，与 fetch_external_script 同模式）。
+/// 同步 HTTP fetch（独立 spawn + 新 HttpClient，避免 net worker 的压缩解码问题）。
 fn fetch_sync(url: &str) -> Result<String, String> {
     let url = url.to_string();
     let handle = std::thread::spawn(move || {
@@ -234,6 +315,40 @@ fn fetch_sync(url: &str) -> Result<String, String> {
     handle
         .join()
         .map_err(|_| "esm fetch thread panicked".to_string())?
+}
+
+/// M65: 从 JS 源码提取静态 import 的 specifier（`from"./xxx"`）。
+/// 用于 prefetch_dependencies 的依赖图扫描。只找相对路径的 import。
+fn extract_import_specifiers(source: &str) -> Vec<String> {
+    let mut specs = Vec::new();
+    // 匹配 from"./xxx" 或 from'./xxx'（minified ESM 标准）
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        if &bytes[i..i + 4] == b"from" {
+            // 跳过空格
+            let mut j = i + 4;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                let quote = bytes[j];
+                let start = j + 1;
+                let mut end = start;
+                while end < bytes.len() && bytes[end] != quote {
+                    end += 1;
+                }
+                if end < bytes.len() {
+                    let spec = &source[start..end];
+                    if spec.starts_with("./") || spec.starts_with("../") {
+                        specs.push(spec.to_string());
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    specs
 }
 
 // 避免未使用警告

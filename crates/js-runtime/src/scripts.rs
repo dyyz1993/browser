@@ -542,7 +542,14 @@ pub fn execute_scripts_with_base(
     // M16.3: pump the event loop. 执行完所有 script 后，drain 到期 timer
     // 回调，回调可能 schedule 新 timer（或本身 schedule），重复直到 idle。
     // 防死循环：最多迭代 MAX_TICKS 次（防止 setTimeout 无限递归卡死爬虫）。
+    let t0 = std::time::Instant::now();
     executed += pump_event_loop(ctx);
+    if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+        eprintln!(
+            "[profile] pump_event_loop #1 took {:.2}s (invoked={executed})",
+            t0.elapsed().as_secs_f64()
+        );
+    }
     // M62: dispatch DOMContentLoaded + load 事件。SPA 框架（React/Vue/jQuery）
     // 常在 document.addEventListener('DOMContentLoaded', init) 里初始化，
     // 爬虫场景脚本执行完即可视为 DOM 就绪。best-effort，失败不阻断。
@@ -562,7 +569,15 @@ pub fn execute_scripts_with_base(
         "#,
     ));
     // dispatch 后可能 schedule 了新 timer（框架初始化逻辑），再 pump 一次。
+    let t1 = std::time::Instant::now();
     executed += pump_event_loop(ctx);
+    if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+        eprintln!(
+            "[profile] pump_event_loop #2 took {:.2}s",
+            t1.elapsed().as_secs_f64()
+        );
+    }
+    let _ = t1;
     executed
 }
 
@@ -581,6 +596,9 @@ fn resolve_script_url(src: &str, base_url: Option<&str>) -> Option<String> {
 }
 
 fn fetch_external_script(url: &str) -> Result<String, String> {
+    // M65: 外部脚本用独立 spawn + 新 HttpClient（而非 net worker）。
+    // 原因：大 bundle（如 nuxt 1.3MB）经 brotli 压缩，持久化 client 的
+    // 连接复用偶尔出解码问题。spawn + 新 client 更可靠。
     let url = url.to_string();
     let handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -607,12 +625,20 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
     const MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
     const MAX_SLEEP_MS: u64 = 200;
+    // M65: networkidle 检测——连续 IDLE_ROUNDS 轮无任何事件（timer/WS/Promise）
+    // 就提前退出。大多数 SPA 在 DOMContentLoaded 后 1-2 秒就稳定了，
+    // 不必等满 8 秒 hard timeout。Puppeteer 的 networkidle0/2 也是类似策略。
+    const IDLE_ROUNDS: u32 = 2;
+    // M65: idle 检测的宽限期——允许页面初始的 setTimeout 链跑完再开始计数。
+    // 太短会导致 docsify 的 XHR 还在飞就退出（拿不到 markdown 内容）。
+    const IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(800);
     let started_at = std::time::Instant::now();
     let mut invoked = 0;
     // M23.5: WS 是长连接异步，握手/收消息在后台线程。即使 timer idle，
     // 也要 poll WS 事件直到所有连接关闭（否则 onopen/onmessage 永不触发）。
     let mut ws_idle_polls = 0u32;
     const WS_MAX_IDLE_POLLS: u32 = 500; // ~2.5s（500 × 5ms）安全裕度
+    let mut idle_rounds: u32 = 0;
     for _ in 0..MAX_TICKS {
         if started_at.elapsed() >= MAX_TOTAL {
             eprintln!(
@@ -647,8 +673,9 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
             tick_invoked += 1;
         }
         if tick_invoked > 0 {
-            // 有事件触发（可能 schedule 新操作），重置 WS idle 计数继续。
+            // 有事件触发（可能 schedule 新操作），重置 idle 计数继续。
             ws_idle_polls = 0;
+            idle_rounds = 0;
             continue;
         }
         // M37: 没事件。但可能有 pending timer 尚未到期。
@@ -667,6 +694,15 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
                 }
             }
             ws_idle_polls = 0;
+            // M65: networkidle 检测。过了宽限期后，连续 IDLE_ROUNDS 轮只有
+            // pending timer 但无到期 timer 也无新事件 → 页面已稳定，提前退出。
+            // pending timer 的 setTimeout 回调大多是 UI 动画/轮询，爬虫不需要。
+            if started_at.elapsed() >= IDLE_GRACE {
+                idle_rounds += 1;
+                if idle_rounds >= IDLE_ROUNDS {
+                    break;
+                }
+            }
             continue; // sleep 后回到循环顶部 drain 到期 timer
         }
         // 没有 pending timer。判断是否还有活跃 WS 连接。

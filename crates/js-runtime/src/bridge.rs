@@ -460,8 +460,75 @@ fn fetch_sync_method_bridge(
 /// M15.3: 如果安装了 cookie jar，自动带 Cookie 请求头并把响应
 /// Set-Cookie 存入 jar（同主请求共享会话）。jar 是 `Rc<RefCell<>>`
 /// 不跨线程，所以在主线程读出 header、写入 jar；新线程只拿 String。
-fn fetch_sync(url: &str) -> Result<String, String> {
+pub(crate) fn fetch_sync(url: &str) -> Result<String, String> {
     fetch_sync_with_method(url, "GET", None, None).map(|(_status, body)| body)
+}
+
+/// M65: 持久化的网络线程——复用 tokio runtime + HttpClient 连接池。
+/// 之前每次 fetch_sync 都 spawn 新线程 + 新 runtime + 新 HttpClient，
+/// 导致每个请求都重新 TLS 握手（~1.5s/次）。复用后同 host 连接池命中。
+/// 用 channel 把请求发到网络线程，等结果回来。
+struct NetWorker {
+    tx: std::sync::mpsc::Sender<NetRequest>,
+}
+
+struct NetRequest {
+    url: String,
+    method: String,
+    body: Option<String>,
+    content_type: Option<String>,
+    cookie_header: Option<String>,
+    reply: std::sync::mpsc::Sender<NetResult>,
+}
+
+type NetResult = Result<(u16, Vec<u8>, Vec<(String, String)>), String>;
+
+thread_local! {
+    static NET_WORKER: std::cell::OnceCell<NetWorker> = const { std::cell::OnceCell::new() };
+}
+
+fn with_net_worker<F, R>(f: F) -> R
+where
+    F: FnOnce(&std::sync::mpsc::Sender<NetRequest>) -> R,
+{
+    NET_WORKER.with(|cell| {
+        let worker = cell.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<NetRequest>();
+            let _handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("net worker runtime");
+                // M65: HttpClient 复用——reqwest 内部有连接池，同 host 的
+                // 后续请求复用 TLS 连接（省 ~1.5s/次握手）。
+                let client = browser_net::HttpClient::new();
+                for req in rx {
+                    let result = rt.block_on(client.request_full_str(
+                        &req.url,
+                        &req.method,
+                        req.body.as_deref(),
+                        req.content_type.as_deref(),
+                        req.cookie_header.as_deref(),
+                    ));
+                    let reply = match result {
+                        Ok((status, bytes, headers)) => {
+                            let hdrs: Vec<(String, String)> = headers
+                                .iter()
+                                .map(|(k, v)| {
+                                    (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
+                                })
+                                .collect();
+                            Ok((status, bytes, hdrs))
+                        }
+                        Err(e) => Err(format!("{e:?}")),
+                    };
+                    let _ = req.reply.send(reply);
+                }
+            });
+            NetWorker { tx }
+        });
+        f(&worker.tx)
+    })
 }
 
 /// M20.3: 通用同步 fetch（任意 method + body + content_type）。
@@ -497,33 +564,28 @@ fn fetch_sync_with_method(
             }
         })
     });
-    let url_clone = url.clone();
-    let handle = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        let client = browser_net::HttpClient::new();
-        let result = rt.block_on(client.request_full_str(
-            &url_clone,
-            &method,
-            body.as_deref(),
-            content_type.as_deref(),
-            cookie_header.as_deref(),
-        ));
-        let (status, bytes, headers) = result.map_err(|e| format!("{e:?}"))?;
-        // 收集所有 Set-Cookie 行返回给主线程写 jar。
-        let set_cookies: Vec<String> = headers
-            .get_all("set-cookie")
-            .iter()
-            .filter_map(|v| v.to_str().ok().map(String::from))
-            .collect();
-        let body = String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))?;
-        Ok::<_, String>((status, body, set_cookies))
+    // M65: 通过持久化网络线程复用 HttpClient 连接池（省 TLS 握手）。
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    with_net_worker(|tx| {
+        let _ = tx.send(NetRequest {
+            url: url.clone(),
+            method: method.clone(),
+            body: body.clone(),
+            content_type: content_type.clone(),
+            cookie_header: cookie_header.clone(),
+            reply: reply_tx,
+        });
     });
-    let (status, body, set_cookies) = handle
-        .join()
-        .map_err(|_| "fetch thread panicked".to_string())??;
+    let (status, bytes, headers) = reply_rx
+        .recv()
+        .map_err(|_| "net worker channel closed".to_string())??;
+    // 收集 Set-Cookie 返回给主线程写 jar。
+    let set_cookies: Vec<String> = headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+        .map(|(_, v)| v.clone())
+        .collect();
+    let body = String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))?;
     // 主线程写回 jar。
     if !set_cookies.is_empty() {
         CURRENT_COOKIE.with(|slot| {
