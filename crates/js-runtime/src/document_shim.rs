@@ -85,7 +85,15 @@ pub fn install_document(ctx: &mut Context) -> JsResult<()> {
                 return __makeElement(__createEl(tag));
             },
             getElementsByTagName: function(tag) {
-                // MVP: 返回数组，含第一个匹配的 Element 或空数组
+                // M62: 返回全部匹配（之前只返回首个）。复用 __qsAll tag 选择器。
+                if (typeof __qsAll === 'function') {
+                    var ids = __qsAll(tag);
+                    var out = [];
+                    for (var i = 0; i < ids.length; i++) {
+                        if (typeof ids[i] === 'number' && ids[i] >= 0) out.push(__makeElement(ids[i]));
+                    }
+                    return out;
+                }
                 var first = __getTag(tag);
                 return typeof first === 'number' && first >= 0 ? [__makeElement(first)] : [];
             },

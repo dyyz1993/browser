@@ -171,35 +171,65 @@ Object.defineProperty(Element.prototype, 'tagName', {
             },
             enumerable: true, configurable: true,
         });
+        // M62: classList 真实现（之前 no-op）。框架 class 切换需要。
         Object.defineProperty(Element.prototype, 'classList', {
             get: function() {
+                var nodeId = this.__nodeId;
                 return {
-                    add: function() {},
-                    remove: function() {},
-                    contains: function() { return false; }
+                    add: function() {
+                        var cls = __attrGet(nodeId, 'class') || '';
+                        var parts = cls ? cls.split(/\s+/) : [];
+                        for (var i = 0; i < arguments.length; i++) {
+                            var c = String(arguments[i]);
+                            if (parts.indexOf(c) < 0) parts.push(c);
+                        }
+                        __attrSet(nodeId, 'class', parts.join(' '));
+                    },
+                    remove: function() {
+                        var cls = __attrGet(nodeId, 'class') || '';
+                        var parts = cls ? cls.split(/\s+/) : [];
+                        for (var i = 0; i < arguments.length; i++) {
+                            var idx = parts.indexOf(String(arguments[i]));
+                            if (idx >= 0) parts.splice(idx, 1);
+                        }
+                        __attrSet(nodeId, 'class', parts.join(' '));
+                    },
+                    contains: function(c) {
+                        var cls = __attrGet(nodeId, 'class') || '';
+                        return cls ? cls.split(/\s+/).indexOf(String(c)) >= 0 : false;
+                    },
+                    toggle: function(c, force) {
+                        var has = this.contains(c);
+                        if (has && force !== true) { this.remove(c); return false; }
+                        if (!has && force !== false) { this.add(c); return true; }
+                        return has;
+                    }
                 };
             },
             enumerable: true, configurable: true,
         });
+        // M62: dataset 动态遍历常见 data-* key（之前只硬编码 2 个）。
         Object.defineProperty(Element.prototype, 'dataset', {
             get: function() {
                 var nodeId = this.__nodeId;
                 var ds = {};
+                // M62: 驼峰 → kebab-case（dplId → data-dpl-id，dataset 标准）。
+                function dataAttrName(name) {
+                    return 'data-' + name.replace(/([A-Z])/g, '-$1').toLowerCase();
+                }
                 function defineDatasetProp(name) {
                     Object.defineProperty(ds, name, {
                         get: function() {
-                            var v = __attrGet(nodeId, __dataAttrName(name));
+                            var v = __attrGet(nodeId, dataAttrName(name));
                             return (v === null || v === undefined) ? undefined : String(v);
                         },
-                        set: function(v) {
-                            __attrSet(nodeId, __dataAttrName(name), v);
-                        },
-                        enumerable: true,
-                        configurable: true
+                        set: function(v) { __attrSet(nodeId, dataAttrName(name), v); },
+                        enumerable: true, configurable: true
                     });
                 }
-                defineDatasetProp('dplId');
-                defineDatasetProp('scrollBehavior');
+                var commonKeys = ['id', 'index', 'url', 'src', 'type', 'name', 'value', 'target',
+                    'action', 'method', 'controller', 'dplId', 'scrollBehavior', 'reactRoot'];
+                for (var i = 0; i < commonKeys.length; i++) defineDatasetProp(commonKeys[i]);
                 return ds;
             },
             enumerable: true, configurable: true,

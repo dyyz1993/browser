@@ -602,6 +602,76 @@ document.getElementById('out').textContent = 'OK ' + mql.media + ' ' + mo.__obse
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn web_api_class_list_real_implementation() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<div id="t" class="foo bar"></div>
+<script>
+var el = document.getElementById('t');
+var r = [];
+r.push('contains_foo:' + el.classList.contains('foo'));
+r.push('contains_missing:' + el.classList.contains('missing'));
+el.classList.add('baz');
+r.push('after_add:' + el.classList.contains('baz'));
+el.classList.remove('foo');
+r.push('after_remove:' + el.classList.contains('foo'));
+document.getElementById('out').textContent = r.join(',');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("contains_foo:true"))
+        .stdout(predicate::str::contains("after_add:true"))
+        .stdout(predicate::str::contains("after_remove:false"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_dataset_dynamic_read() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<div id="el" data-id="42" data-url="/api/x"></div>
+<script>
+var el = document.getElementById('el');
+var r = [];
+r.push('id:' + el.dataset.id);
+r.push('url:' + el.dataset.url);
+el.dataset.value = 'set';
+r.push('set_value:' + el.dataset.value);
+document.getElementById('out').textContent = r.join(',');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("id:42"))
+        .stdout(predicate::str::contains("url:/api/x"))
+        .stdout(predicate::str::contains("set_value:set"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn web_api_get_elements_by_tag_name_all() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<div>a</div><div>b</div><div>c</div>
+<script>
+var divs = document.getElementsByTagName('div');
+document.getElementById('out').textContent = 'COUNT_' + divs.length;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("COUNT_4"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

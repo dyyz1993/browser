@@ -19,7 +19,7 @@
 | 二进制大小（release） | 14MB | 14MB（28 项测试 + 5 API polyfill，仍不变） |
 | 静态站峰值 RSS（example.com） | 14MB | _待测_ |
 | CSR 站峰值 RSS（seo.box） | 95MB | _待测_ |
-| 测试总数 | 774（+28 JS 特性全入库） | 稳定增长 |
+| 测试总数 | 781（+34 JS 特性） | 稳定增长 |
 
 ---
 
@@ -56,7 +56,7 @@
 | **Reflect** | ✅ 原生 | 无测试 | M62 移除包装 |
 | 迭代器协议 | ✅ | for...of 隐式验证 | |
 | 生成器 function* | ✅ | integration_js_features | |
-| ES Modules import | ⚠️ 未测 | 静态 import 需模块加载器 | |
+| ES Modules import() | ❌ | boa 0.21 动态 import 需 ModuleLoader，卡死，defer | |
 
 ---
 
@@ -70,7 +70,7 @@
 | querySelectorAll | ✅ 全部（M62） | |
 | createElement | ✅ | lazy-load fixture |
 | createTextNode | ✅ | |
-| getElementsByTagName | ⚠️ 仅首个 | |
+| getElementsByTagName | ✅ 全部（M62） | integration_js_features |
 | addEventListener | ✅ 存回调 | integration_js_features |
 | removeEventListener | ✅ | integration_js_features |
 | write | ⚠️ no-op | 低频，现代 SPA 不用 | |
@@ -87,8 +87,8 @@
 | innerHTML | ✅ | async-data fixture |
 | **querySelectorAll** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features |
 | cloneNode | ✅ | |
-| classList | ⚠️ no-op | add/remove/contains 空实现 | |
-| dataset | ⚠️ 部分 | 仅硬编码 dplId/scrollBehavior | |
+| classList | ✅ | M62（真实现 add/remove/contains/toggle） | |
+| dataset | ✅ | M62（动态遍历常见 key + 驼峰转 kebab） | |
 | style | ⚠️ 部分 | getPropertyValue/setProperty 有，CSS 不影响渲染 | |
 | getClientRects | ⚠️ 返回 [] | 布局尺寸，爬虫不需要 | |
 | addEventListener | ✅ 存回调 | integration_js_features |
