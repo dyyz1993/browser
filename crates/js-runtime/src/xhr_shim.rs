@@ -83,7 +83,12 @@ XMLHttpRequest.prototype.send = function(body) {
         self.status = p.status;
         self.statusText = p.statusText;
         if (typeof self.onload === 'function') {
-            self.onload.call(self);
+            // M62: 构造事件对象传入（docsify 等库期望 ref.target = XHR 对象）。
+            // 之前 onload.call(self) 没传参数 → ref 为 undefined → ref.target 崩。
+            var ev = { type: 'load', target: self, currentTarget: self,
+                       status: self.status, response: self.responseText,
+                       responseText: self.responseText };
+            self.onload.call(self, ev);
         }
     }, 0);
 };
