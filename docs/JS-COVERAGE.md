@@ -209,6 +209,10 @@
 ### 已知天花板（不硬刚）
 
 - **纯 CSR 无 SSR**（bark/vue-playground）：boa 跑不出数据，需 Chrome
+  - bark（docsify）：boa 引擎内部 `cannot convert null to object`（非 Object.keys，
+    是引擎层 for...in/spread/解构 null）。已试 Object.keys null guard 无效。
+    docsify 初始化链复杂（路由+fetch md+compiler+Vue 集成），属 boa 引擎天花板。
+  - vue-playground：`SyntaxError: expected ';'`（boa 解析器不支持 Vue bundle 某语法）
 - **boa 引擎 panic**（owid）：catch_unwind 兜底降级（M62 已修）
 - **base.js/lodash _.template 深层报错**：不影响核心功能，停止深挖
-- **ES Modules import**：需模块加载器，boa 0.21 部分支持未测
+- **ES Modules import()**：boa 0.21 动态 import 卡死（需 ModuleLoader），defer

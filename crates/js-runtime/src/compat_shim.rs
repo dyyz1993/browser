@@ -1645,6 +1645,37 @@ pub fn install_compat_shims(ctx: &mut Context) -> JsResult<()> {
             };
         }
 
+        // M62: marked（markdown 解析器桩）。docsify/vuepress 等文档框架依赖
+        // 全局 marked。爬虫场景给最小实现（标题/段落/链接/列表/代码），让框架不崩。
+        if (typeof globalThis.marked !== 'function') {
+            globalThis.marked = function(src) {
+                if (src == null) return '';
+                src = String(src);
+                var html = src
+                    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\[(.+?)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+                    .replace(/`(.+?)`/g, '<code>$1</code>')
+                    .replace(/^\* (.+)$/gm, '<li>$1</li>')
+                    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+                    .replace(/\n\n/g, '</p><p>');
+                return '<p>' + html + '</p>';
+            };
+            globalThis.marked.parse = globalThis.marked;
+            globalThis.marked.parseInline = function(src) {
+                if (src == null) return '';
+                return String(src).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\[(.+?)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+            };
+            globalThis.marked.setOptions = function() { return globalThis.marked; };
+        }
+        // M62: Prism（代码高亮桩，no-op）。爬虫不需要语法高亮。
+        if (typeof globalThis.Prism !== 'object') {
+            globalThis.Prism = { highlight: function(code) { return code; }, languages: {}, tokenize: function(t) { return t; } };
+        }
+
         // M62: ga（Google Analytics no-op）。base.js 等库直接调 ga()，
         // 若 hostname 检查失败（boa getter 是方法形式）则 ga 未初始化 → not a callable。
         if (typeof globalThis.ga !== 'function') {
