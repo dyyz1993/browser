@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M63（CSR 自愈循环第 3 轮：append/prepend + 反射 IDL + getBoundingClientRect + URL 递归修复） |
-| 总 commits | ~200 |
-| 测试 | 800+ pass（含 43 项 JS 特性入库测试）, 0 clippy warnings |
+| HEAD | M64（ESM 支持：HttpModuleLoader，vuejs.org/vite.dev/nuxt.com ESM bundle 全部渲染） |
+| 总 commits | ~210 |
+| 测试 | 810+ pass（含 43 JS 特性 + 3 ESM module 测试）, 0 clippy warnings |
 | Crates | 16（含 extractor 后置过滤器） |
 | CLI 子命令 | 8 |
 | 核心目标 G1（SPA 爬虫）| ✅ 达成（M4）—— bark.day.app（docsify）CSR 0 错误渲染 |
@@ -23,6 +23,32 @@
 ---
 
 ## 最近变更（倒序）
+
+### M64 — ESM 支持（HttpModuleLoader：boa Module API + 同步 HTTP fetch chunk）✅
+
+**解决 CSR 最后一道墙：ES Modules（静态 import/export + import.meta）**
+
+之前 vuejs.org/vite.dev/nuxt.com 的 `<script type="module">` 在 parse 阶段就 SyntaxError
+（`import{...}from"..."` 语法 boa Script 模式不认），只拿到 SSR 静态壳。
+
+**实现**：
+- `crates/js-runtime/src/esm_loader.rs`：`HttpModuleLoader` 实现 boa `ModuleLoader` trait。
+  `load_imported_module` 时同步 HTTP fetch chunk → 写临时文件（保留 path 供 referrer 解析）
+  → `Module::parse`（Module 模式接受 import/export/import.meta）。boa 自动处理依赖图
+  解析、实例化、链接、循环依赖。
+- `scripts.rs`：`<script type="module">` 检测 → 走 Module 路径（非 ctx.eval）。
+  预扫描有 module 脚本时用 `Context::builder().module_loader(...)` 创建 Context。
+- `window/Element.addEventListener` null listener guard（Vue/React passive 检测模式）。
+
+**验证**（全部 0 ESM 错误，真实 CSR 渲染，非静态壳）：
+- **vite.dev**：102 行 markdown（"# The Build Tool for the Web" + features + npm 命令）
+- **vuejs.org**：73 行（"# The Progressive JavaScript Framework" + features + sponsors）
+- **nuxt.com**：323 行（"# The Full-Stack Vue Framework" + 代码示例 + 路由）
+- **svelte.dev**：27 行
+
+**入库测试**（4 项）：
+- `integration_esm_module`：3 项（链式依赖 a→b→c + 循环依赖 + import.meta 语法）
+- `integration_js_features`：web_api_null_event_listener_ignored（Vue passive 检测）
 
 ### M63 — CSR 自愈循环第 3 轮（append/prepend + 反射 IDL 属性 + getBoundingClientRect + URL 递归修复）✅
 

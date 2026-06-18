@@ -884,6 +884,35 @@ xhr.send();
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn web_api_null_event_listener_ignored() {
+    // M64: Vue/React 用 addEventListener('test', null, {get passive(){...}})
+    // 检测 passive 事件支持。null listener 应静默忽略，不抛 "cannot convert null to object"。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+try {
+  // Vue passive 检测模式：null listener + 带 getter 的 options
+  var detected = false;
+  var opts = { get passive() { detected = true; return false; } };
+  window.addEventListener('testPassive', null, opts);
+  window.removeEventListener('testPassive', null, opts);
+  // Element 上也一样
+  document.body.addEventListener('testEl', null);
+  document.getElementById('out').textContent = 'NULL_LISTENER_OK';
+} catch(e) {
+  document.getElementById('out').textContent = 'NULL_LISTENER_ERR_' + e.message;
+}
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NULL_LISTENER_OK"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

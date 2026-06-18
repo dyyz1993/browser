@@ -10,6 +10,7 @@ pub mod bridge;
 mod compat_shim;
 pub mod document_shim;
 pub mod element_shim;
+pub mod esm_loader;
 pub mod fetch_shim;
 pub mod image_shim;
 pub mod navigation_shim;

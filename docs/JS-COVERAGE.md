@@ -56,7 +56,8 @@
 | **Reflect** | ✅ 原生 | 无测试 | M62 移除包装 |
 | 迭代器协议 | ✅ | for...of 隐式验证 | |
 | 生成器 function* | ✅ | integration_js_features | |
-| ES Modules import() | ❌ | boa 0.21 动态 import 需 ModuleLoader，卡死，defer | |
+| **ES Modules（import/export/import.meta）** | ✅ M64 | integration_esm_module（3 测试） | vuejs.org/vite.dev/nuxt.com |
+| ES Modules 动态 import() | ⚠️ 部分 | boa 需 ModuleLoader（M64 已实现 HttpModuleLoader，动态 import 走同 loader） | |
 
 ---
 
@@ -243,4 +244,4 @@
   - vue-playground：`SyntaxError: expected ';'`（boa 解析器不支持 Vue bundle 某语法）
 - **boa 引擎 panic**（owid）：catch_unwind 兜底降级（M62 已修）
 - **base.js/lodash _.template 深层报错**：不影响核心功能，停止深挖
-- **ES Modules import()**：boa 0.21 动态 import 卡死（需 ModuleLoader），defer
+- ~~**ES Modules import()**：boa 0.21 动态 import 卡死（需 ModuleLoader），defer~~ → **M64 已解决**：实现 `HttpModuleLoader`（boa Module API + 同步 HTTP fetch chunk），vuejs.org/vite.dev/nuxt.com ESM bundle 全部渲染

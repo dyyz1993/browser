@@ -545,6 +545,7 @@ dependencies = [
  "browser-net",
  "browser-storage",
  "browser-ws",
+ "tempfile",
  "tokio",
  "url",
  "wiremock",

@@ -25,3 +25,4 @@ browser-html-parser = { path = "../html-parser" }
 wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 assert_cmd.workspace = true
+tempfile = "3"

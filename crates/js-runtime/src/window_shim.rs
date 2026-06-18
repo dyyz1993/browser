@@ -64,6 +64,9 @@ pub fn install_window(ctx: &mut Context) -> JsResult<()> {
             // 监听器存独立对象（避免与 globalThis 属性名冲突）。
             if (!g.__winListeners) g.__winListeners = {{}};
             g.addEventListener = function(type, cb) {{
+                // M64: Vue/React 用 addEventListener('test', null, opts)
+                // 检测 passive 支持。null listener 应静默忽略。
+                if (cb === null || cb === undefined) return;
                 if (!g.__winListeners) g.__winListeners = {{}};
                 if (!g.__winListeners[type]) g.__winListeners[type] = [];
                 var self = g;

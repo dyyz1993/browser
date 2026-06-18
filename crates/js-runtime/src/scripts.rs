@@ -5,7 +5,7 @@
 //! (with the bridge installed). The DOM mutations made by JS become
 //! visible to the subsequent layout + render passes.
 
-use boa_engine::{Context, JsValue, Source};
+use boa_engine::{Context, JsValue, Module, Source};
 use browser_dom::{NodeData, NodeId, Tree};
 
 use crate::bridge::install;
@@ -25,6 +25,10 @@ const JS_RECURSION_LIMIT: usize = 256;
 enum ScriptEntry {
     Inline(String),
     External(String),
+    /// M64: ESM module（`<script type="module">`）。URL 是绝对/可解析的 script src。
+    ExternalModule(String),
+    /// M64: 内联 module（`<script type="module">code</script>`）。
+    InlineModule(String),
 }
 
 /// Collect the text content of every `<script>` element in `tree`,
@@ -34,8 +38,8 @@ pub fn extract_scripts(tree: &Tree) -> Vec<String> {
     extract_script_entries(tree)
         .into_iter()
         .filter_map(|entry| match entry {
-            ScriptEntry::Inline(script) => Some(script),
-            ScriptEntry::External(_) => None,
+            ScriptEntry::Inline(script) | ScriptEntry::InlineModule(script) => Some(script),
+            ScriptEntry::External(_) | ScriptEntry::ExternalModule(_) => None,
         })
         .collect()
 }
@@ -50,8 +54,13 @@ fn extract_script_entries(tree: &Tree) -> Vec<ScriptEntry> {
                 if !script_tag_has_executable_type(attrs) {
                     continue;
                 }
+                let is_module = script_is_module(attrs);
                 if let Some(src) = script_src(attrs) {
-                    scripts.push(ScriptEntry::External(src));
+                    if is_module {
+                        scripts.push(ScriptEntry::ExternalModule(src));
+                    } else {
+                        scripts.push(ScriptEntry::External(src));
+                    }
                     continue;
                 }
                 let mut text = String::new();
@@ -61,7 +70,11 @@ fn extract_script_entries(tree: &Tree) -> Vec<ScriptEntry> {
                     }
                 }
                 if !text.trim().is_empty() {
-                    scripts.push(ScriptEntry::Inline(text));
+                    if is_module {
+                        scripts.push(ScriptEntry::InlineModule(text));
+                    } else {
+                        scripts.push(ScriptEntry::Inline(text));
+                    }
                 }
                 // Don't recurse into scripts (no nested scripts allowed by HTML5).
                 continue;
@@ -74,6 +87,32 @@ fn extract_script_entries(tree: &Tree) -> Vec<ScriptEntry> {
         }
     }
     scripts
+}
+
+/// M64: 检测 `<script type="module">`。
+fn script_is_module(attrs: &[(String, String)]) -> bool {
+    for (name, value) in attrs {
+        if name.eq_ignore_ascii_case("type") {
+            let mut token = value.trim();
+            if let Some((head, _)) = token.split_once(';') {
+                token = head;
+            }
+            return token.trim().eq_ignore_ascii_case("module");
+        }
+    }
+    false
+}
+
+/// M64: 从 URL 提取 origin（`scheme://host[:port]`）。
+/// `https://vite.dev/assets/app.js` → `https://vite.dev`
+fn url_origin(url: &str) -> String {
+    // 简单解析：找 scheme:// 然后到下一个 /
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        let host_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+        return format!("{}://{}", &url[..scheme_end], &after_scheme[..host_end]);
+    }
+    url.to_string()
 }
 
 fn script_src(attrs: &[(String, String)]) -> Option<String> {
@@ -212,6 +251,85 @@ pub fn execute_scripts_with_base(
                     None
                 }
             },
+            // M64: ESM module 走 HttpModuleLoader（不经过 ctx.eval）。
+            // loader 已在 Context 创建时注册（downcast 取回）。
+            ScriptEntry::ExternalModule(src) => {
+                match resolve_script_url(src, script_base_url.as_deref()) {
+                    Some(url) => {
+                        if trace_scripts {
+                            eprintln!("[js-runtime] script[{idx}] ESM module {url}");
+                        }
+                        if let Some(loader) =
+                            ctx.downcast_module_loader::<crate::esm_loader::HttpModuleLoader>()
+                        {
+                            match loader.load_and_eval(&url, ctx) {
+                                Ok(_) => {
+                                    executed += 1;
+                                    if trace_scripts {
+                                        eprintln!("[js-runtime] script[{idx}] ESM module OK");
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[js-runtime] script[{idx}] ESM module {url} error: {e:?}"
+                                    );
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "[js-runtime] script[{idx}] ESM module {url}: no HttpModuleLoader on context"
+                            );
+                        }
+                        continue;
+                    }
+                    None => {
+                        eprintln!("[js-runtime] ESM module skipped: {src}");
+                        continue;
+                    }
+                }
+            }
+            // M64: 内联 module（`<script type="module">code</script>`）。
+            ScriptEntry::InlineModule(code) => {
+                if trace_scripts {
+                    eprintln!(
+                        "[js-runtime] script[{idx}] inline module len={}",
+                        code.len()
+                    );
+                }
+                // 写临时文件，用 Module::parse（Module 模式接受 import/export/import.meta）
+                let temp_file = std::env::temp_dir().join(format!(
+                    "browser_inline_module_{idx}_{}.mjs",
+                    std::process::id()
+                ));
+                if std::fs::write(&temp_file, code).is_ok() {
+                    let source = Source::from_filepath(&temp_file);
+                    if let Ok(source) = source {
+                        if let Ok(module) = Module::parse(source, None, ctx) {
+                            let promise = module.load_link_evaluate(ctx);
+                            let _ = ctx.run_jobs();
+                            match promise.state() {
+                                boa_engine::builtins::promise::PromiseState::Fulfilled(_) => {
+                                    executed += 1;
+                                }
+                                boa_engine::builtins::promise::PromiseState::Rejected(err) => {
+                                    let msg = err
+                                        .to_string(ctx)
+                                        .map(|s| s.to_std_string_escaped())
+                                        .unwrap_or_default();
+                                    eprintln!(
+                                        "[js-runtime] script[{idx}] inline module error: {msg}"
+                                    );
+                                }
+                                _ => {}
+                            }
+                            let _ = std::fs::remove_file(&temp_file);
+                            continue;
+                        }
+                    }
+                    let _ = std::fs::remove_file(&temp_file);
+                }
+                continue;
+            }
         };
         let Some((script_code, script_label)) = script_code else {
             continue;
@@ -441,7 +559,33 @@ pub fn run_scripts_with_base(
     use std::cell::RefCell;
     use std::rc::Rc;
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
-    let mut ctx = Context::default();
+    // M64: 预扫描是否有 ESM module 脚本。如果有，用 HttpModuleLoader 创建 Context。
+    let has_module = {
+        let borrowed = shared.borrow();
+        extract_script_entries(&borrowed).iter().any(|e| {
+            matches!(
+                e,
+                ScriptEntry::ExternalModule(_) | ScriptEntry::InlineModule(_)
+            )
+        })
+    };
+    let origin = base_url
+        .as_deref()
+        .map(url_origin)
+        .unwrap_or_else(|| "about:blank".to_string());
+    let module_loader = if has_module {
+        Some(Rc::new(crate::esm_loader::HttpModuleLoader::new(&origin)))
+    } else {
+        None
+    };
+    let mut ctx = if let Some(loader) = module_loader {
+        Context::builder()
+            .module_loader(loader)
+            .build()
+            .unwrap_or_else(|_| Context::default())
+    } else {
+        Context::default()
+    };
     let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
     {
         let limits = ctx.runtime_limits_mut();

@@ -426,6 +426,9 @@ Object.defineProperty(Element.prototype, 'tagName', {
             return out;
         };
         Element.prototype.addEventListener = function(type, cb) {
+            // M64: Vue/React 用 addEventListener('test', null, {get passive(){...}})
+            // 检测 passive 事件支持。null listener 应静默忽略（规范允许）。
+            if (cb === null || cb === undefined) return;
             if (!this.__listeners) this.__listeners = {};
             if (!this.__listeners[type]) this.__listeners[type] = [];
             var self = this;
