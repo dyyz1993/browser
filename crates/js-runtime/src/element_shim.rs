@@ -334,7 +334,14 @@ Object.defineProperty(Element.prototype, 'tagName', {
         Element.prototype.addEventListener = function(type, cb) {
             if (!this.__listeners) this.__listeners = {};
             if (!this.__listeners[type]) this.__listeners[type] = [];
-            this.__listeners[type].push(cb);
+            var self = this;
+            // M62: 包装回调——确保事件对象 target 不为 undefined（防 null.nodeName 崩溃）。
+            this.__listeners[type].push(function(ev) {
+                if (!ev) ev = {};
+                if (ev.target === undefined) ev.target = self;
+                if (ev.currentTarget === undefined) ev.currentTarget = self;
+                return cb.call(self, ev);
+            });
         };
         Element.prototype.removeEventListener = function(type, cb) {
             if (!this.__listeners || !this.__listeners[type]) return;

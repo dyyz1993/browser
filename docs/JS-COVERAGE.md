@@ -209,10 +209,14 @@
 ### 已知天花板（不硬刚）
 
 - **纯 CSR 无 SSR**（bark/vue-playground）：boa 跑不出数据，需 Chrome
-  - bark（docsify）：深层排查确认——boa 行为 spec 正确（null.foo 触发 to_object
-    at value/mod.rs:1001，V8 也一样）。JS 层 null guard 全 patch 无效，querySelector
-    null-safe 也无效。根因是 docsify 某处对 null 做属性访问，但 boa 错误不带行号无法
-    定位。给 boa 的 PR 方向：给 TypeError 加行号报告（改善可调试性）。处置 --no-js。
+  - bark（docsify）：**精确定位完成**——克隆 boa 源码编译 CLI 获得行号：
+    docsify 第 975 行 `ref.target.nodeName`（collapse 函数的 click 事件回调）。
+    调用栈：documentReady → new Docsify() → asyncMatchNextRoute → on/then。
+    根因：事件回调参数 `ref` 的 `target` 属性为 null/undefined（Promise 微任务
+    调度链里事件对象未正确设 target），触发 to_object(null)。
+    已修：addEventListener 回调包装设 ev.target 默认值。但 bark 仍崩（同步路径
+    另有 null 来源）。深层是 boa Promise/事件调度与 docsify 异步初始化的交互。
+    给 boa 的 PR 方向：①给 TypeError 加行号；②审查 Promise 微任务对事件的影响。
   - vue-playground：`SyntaxError: expected ';'`（boa 解析器不支持 Vue bundle 某语法）
 - **boa 引擎 panic**（owid）：catch_unwind 兜底降级（M62 已修）
 - **base.js/lodash _.template 深层报错**：不影响核心功能，停止深挖
