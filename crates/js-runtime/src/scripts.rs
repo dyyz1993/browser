@@ -896,6 +896,24 @@ if (typeof console === 'undefined') {
     window.console = { log: function(){}, error: function(){}, warn: function(){}, info: function(){} };
 }
 
+// window EventTarget 方法（很多框架在 window 上注册事件）
+// 用全局变量存监听器，避免 this 绑定问题
+var __winListeners = {};
+window.addEventListener = function(type, cb) {
+    if (cb === null || cb === undefined) return;
+    if (!__winListeners[type]) __winListeners[type] = [];
+    __winListeners[type].push(cb);
+};
+window.removeEventListener = function(type, cb) {};
+window.dispatchEvent = function(ev) {
+    if (ev && __winListeners[ev.type]) {
+        var cbs = __winListeners[ev.type];
+        for (var i = 0; i < cbs.length; i++) {
+            try { cbs[i].call(window, ev); } catch(e) {}
+        }
+    }
+};
+
 // performance API（cloudflare beacon / 框架性能检测用）
 window.performance = {
     timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
@@ -1069,6 +1087,130 @@ Object.defineProperty(Element.prototype, 'children', {
     },
     enumerable: true, configurable: true
 });
+Object.defineProperty(Element.prototype, 'className', {
+    get: function() { return __getAttr(this.__nodeId, 'class') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'class', String(v)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'classList', {
+    get: function() {
+        var self = this;
+        var cls = (__getAttr(self.__nodeId, 'class') || '').split(/\s+/).filter(function(s) { return s; });
+        return {
+            add: function() {
+                for (var i = 0; i < arguments.length; i++) {
+                    var c = String(arguments[i]);
+                    if (cls.indexOf(c) < 0) cls.push(c);
+                }
+                __setAttr(self.__nodeId, 'class', cls.join(' '));
+            },
+            remove: function() {
+                for (var i = 0; i < arguments.length; i++) {
+                    var idx = cls.indexOf(String(arguments[i]));
+                    if (idx >= 0) cls.splice(idx, 1);
+                }
+                __setAttr(self.__nodeId, 'class', cls.join(' '));
+            },
+            toggle: function(c, force) {
+                c = String(c);
+                var has = cls.indexOf(c) >= 0;
+                if (force === true || (!has && force !== false)) {
+                    if (!has) cls.push(c);
+                } else if (has) {
+                    cls.splice(cls.indexOf(c), 1);
+                }
+                __setAttr(self.__nodeId, 'class', cls.join(' '));
+                return cls.indexOf(c) >= 0;
+            },
+            contains: function(c) { return cls.indexOf(String(c)) >= 0; },
+            item: function(i) { return cls[i] || null; },
+            get length() { return cls.length; }
+        };
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'firstChild', {
+    get: function() {
+        var cs = __children(this.__nodeId);
+        if (!cs) return null;
+        var ids = cs.split(',').filter(function(s) { return s; });
+        return ids.length > 0 ? __makeElement(parseInt(ids[0], 10)) : null;
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'lastChild', {
+    get: function() {
+        var cs = __children(this.__nodeId);
+        if (!cs) return null;
+        var ids = cs.split(',').filter(function(s) { return s; });
+        return ids.length > 0 ? __makeElement(parseInt(ids[ids.length-1], 10)) : null;
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'nextSibling', {
+    get: function() { return null; },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'previousSibling', {
+    get: function() { return null; },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'parentNode', {
+    get: function() {
+        var pid = __getParent(this.__nodeId);
+        return (pid >= 0) ? __makeElement(pid) : null;
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'nodeType', {
+    get: function() { return 1; },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'style', {
+    get: function() {
+        var self = this;
+        return {
+            getPropertyValue: function(p) { return ''; },
+            setProperty: function(p, v) {},
+            removeProperty: function(p) {},
+            get cssText() { return __getAttr(self.__nodeId, 'style') || ''; },
+            set cssText(v) { __setAttr(self.__nodeId, 'style', String(v)); }
+        };
+    },
+    enumerable: true, configurable: true
+});
+Element.prototype.querySelector = function(sel) {
+    // 简化：全局 qs（爬虫够用）
+    var id = __qs(String(sel));
+    return (id >= 0) ? __makeElement(id) : null;
+};
+Element.prototype.querySelectorAll = function(sel) {
+    var ids = __qsAll(String(sel));
+    if (!ids) return [];
+    return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
+};
+Element.prototype.contains = function(node) { return false; };
+Element.prototype.removeEventListener = function(type, cb) {};
+Element.prototype.dispatchEvent = function(ev) {
+    if (this.__listeners && ev && this.__listeners[ev.type]) {
+        var cbs = this.__listeners[ev.type];
+        for (var i = 0; i < cbs.length; i++) {
+            try { cbs[i].call(this, ev); } catch(e) {}
+        }
+    }
+};
+Element.prototype.insertAdjacentHTML = function(pos, html) {
+    // 简化：只支持 beforeend（最常用）
+    if (pos === 'beforeend' && html) {
+        __setAttr(this.__nodeId, 'innerHTML', (__getAttr(this.__nodeId, 'innerHTML') || '') + html);
+    }
+};
+Element.prototype.getBoundingClientRect = function() {
+    return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 };
+};
+Element.prototype.focus = function() {};
+Element.prototype.blur = function() {};
+Element.prototype.scrollIntoView = function() {};
 undefined;
 "#;
 
