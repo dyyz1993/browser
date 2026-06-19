@@ -567,6 +567,7 @@ dependencies = [
  "browser-storage",
  "browser-ws",
  "rquickjs",
+ "rquickjs-core",
  "tempfile",
  "tokio",
  "url",

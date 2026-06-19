@@ -5,10 +5,57 @@
 //! Rust bridge 函数用 Function::new 注册，调同样的 thread_local 后端。
 
 use rquickjs::function::Rest;
-use rquickjs::module::Module;
+use rquickjs::module::{Declared, Module};
 use rquickjs::{Context, Ctx, Function, Runtime, Value};
 
 use crate::bridge;
+
+/// M66: HTTP Resolver —— 把相对路径解析成绝对 URL。
+pub struct HttpResolver {
+    base: String,
+}
+
+impl rquickjs_core::loader::Resolver for HttpResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &Ctx<'js>,
+        base: &str,
+        name: &str,
+        _attributes: Option<rquickjs_core::loader::ImportAttributes<'js>>,
+    ) -> rquickjs_core::Result<String> {
+        if name.starts_with("http://") || name.starts_with("https://") {
+            return Ok(name.to_string());
+        }
+        let base_dir = base.rfind('/').map(|i| &base[..i]).unwrap_or(base);
+        if let Some(stripped) = name.strip_prefix("./") {
+            Ok(format!("{base_dir}/{stripped}"))
+        } else if let Some(stripped) = name.strip_prefix("../") {
+            let parent = base_dir
+                .rfind('/')
+                .map(|i| &base_dir[..i])
+                .unwrap_or(base_dir);
+            Ok(format!("{parent}/{stripped}"))
+        } else {
+            Ok(format!("{base_dir}/{name}"))
+        }
+    }
+}
+
+/// M66: HTTP Loader —— 用 fetch_sync 拉取远程 JS chunk，声明为 Module。
+pub struct HttpLoader;
+
+impl rquickjs_core::loader::Loader for HttpLoader {
+    fn load<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        name: &str,
+        _attributes: Option<rquickjs_core::loader::ImportAttributes<'js>>,
+    ) -> rquickjs_core::Result<Module<'js, Declared>> {
+        let source = crate::bridge::fetch_sync(name)
+            .map_err(|e| rquickjs_core::Error::new_loading(&format!("{name}: {e}")))?;
+        Module::declare(ctx.clone(), name, source.as_bytes())
+    }
+}
 
 /// M66: QuickJsEngine 的 JsEngine trait 包装器。
 /// ctx_mut() 会 panic——scripts.rs 通过 name() == "quickjs" 检测后走专用路径。
@@ -54,13 +101,22 @@ impl crate::engine::JsEngine for QuickJsEngineWrapper {
 pub struct QuickJsEngine {
     rt: Runtime,
     ctx: Context,
+    base_url: String,
 }
 
 impl QuickJsEngine {
-    pub fn new(_esm_origin: Option<&str>) -> Self {
+    pub fn new(esm_origin: Option<&str>) -> Self {
         let rt = Runtime::new().expect("QuickJS runtime");
+        // M66: 不在这里 set_loader——会导致 GC assertion（runtime drop 时 module 相关
+        // GC 对象未释放）。Module loader 只在真正需要时按需注册。
+        // 目前 QuickJS 跳过所有有 import/import.meta 的 module（GC 安全）。
+        let base = esm_origin.unwrap_or("about:blank").to_string();
         let ctx = Context::full(&rt).expect("QuickJS context");
-        let mut engine = Self { rt, ctx };
+        let mut engine = Self {
+            rt,
+            ctx,
+            base_url: base,
+        };
         engine.install_bridge();
         engine
     }
@@ -212,14 +268,18 @@ impl QuickJsEngine {
 
     /// M66: 执行 ESM module 源码（支持 import/export/import.meta）。
     pub fn eval_module(&mut self, name: &str, source: &str) -> Result<(), String> {
-        self.ctx
-            .with(|ctx: Ctx| match Module::evaluate(ctx, name, source) {
-                Ok(promise) => match promise.finish::<Value>() {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(format!("module rejected: {e:?}")),
+        self.ctx.with(
+            |ctx: Ctx| match Module::declare(ctx.clone(), name, source) {
+                Ok(module) => match module.eval() {
+                    Ok((_module, promise)) => {
+                        let _ = promise.finish::<Value>();
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("module eval: {e:?}")),
                 },
-                Err(e) => Err(format!("module eval: {e:?}")),
-            })
+                Err(e) => Err(format!("module declare: {e:?}")),
+            },
+        )
     }
 
     /// 运行微任务队列。
