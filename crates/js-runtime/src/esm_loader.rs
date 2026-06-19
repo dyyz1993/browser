@@ -67,32 +67,48 @@ impl HttpModuleLoader {
                 break;
             }
             let batch: Vec<String> = std::mem::take(&mut to_fetch);
+            // M65: 单 runtime + 单 client 并发 fetch（HTTP/2 多路复用）
             let (tx, rx) = mpsc::channel();
-            // 并行 fetch 当前批次
-            let handles: Vec<_> = batch
-                .iter()
-                .map(|url| {
-                    let url = url.clone();
-                    let tx = tx.clone();
-                    std::thread::spawn(move || {
-                        // M65: prefetch 用独立 HttpClient（并行是重点，
-                        // 连接复用由主线程的 net worker 负责）。
-                        let result = (|| {
-                            let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .map_err(|e| format!("tokio: {e}"))?;
-                            let client = browser_net::HttpClient::new();
-                            let bytes = rt
-                                .block_on(client.get(&url))
-                                .map_err(|e| format!("{e:?}"))?;
-                            String::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))
-                        })();
-                        let _ = tx.send((url, result));
-                    })
-                })
-                .collect();
-            drop(tx);
+            let origin = self.origin.clone();
+            let batch_clone = batch.clone();
+            let _join = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("esm prefetch runtime");
+                let client = browser_net::HttpClient::new();
+                let tx = std::sync::Arc::new(std::sync::Mutex::new(tx));
+                rt.block_on(async {
+                    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+                    let mut tasks = Vec::new();
+                    for url in &batch_clone {
+                        let permit = sem.clone().acquire_owned().await.unwrap();
+                        let client = client.clone();
+                        let tx = tx.clone();
+                        let url = url.clone();
+                        tasks.push(tokio::spawn(async move {
+                            let _permit = permit;
+                            if let Ok(bytes) = client.get(&url).await {
+                                if let Ok(body) = String::from_utf8(bytes) {
+                                    if let Ok(t) = tx.lock() {
+                                        let _ = t.send((url, Ok(body)));
+                                    }
+                                    return;
+                                }
+                            }
+                            if let Ok(t) = tx.lock() {
+                                let _ = t.send((url, Err("fetch failed".to_string())));
+                            }
+                        }));
+                    }
+                    for t in tasks {
+                        let _ = t.await;
+                    }
+                });
+            })
+            .join();
+            let _ = origin;
+            // tx 被 thread move 走了，thread 结束时 drop → rx.iter() 退出
             for (url, result) in rx.iter() {
                 if let Ok(source) = result {
                     all_urls.push(url.clone());
@@ -111,9 +127,6 @@ impl HttpModuleLoader {
                     }
                     let _ = std::fs::write(&temp_path, &source);
                 }
-            }
-            for h in handles {
-                let _ = h.join();
             }
         }
     }

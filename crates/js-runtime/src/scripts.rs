@@ -233,7 +233,7 @@ fn prefetch_vite_chunks(code: &str, entry_url: &str) {
         return;
     };
     let arr_start = start + marker.len() - 1; // 指向 '['
-    // 找匹配的 ']'
+                                              // 找匹配的 ']'
     let bytes = code.as_bytes();
     let mut depth = 0;
     let mut end = arr_start;

@@ -474,44 +474,64 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// M65: 批量预取 URL 到缓存（并行 fetch）。
+/// M65: 批量预取 URL 到缓存（单 runtime + 单 client 并发 fetch）。
+/// 关键：用一个 reqwest::Client 在同一个 tokio runtime 里并发请求，
+/// reqwest + hyper 自动对同 host 的请求做 HTTP/2 多路复用（一个 TCP 连接
+/// 并发多个请求），而非每个请求独立 TLS 握手。
 pub(crate) fn prefetch_to_cache(urls: &[String]) {
     use std::sync::mpsc;
     if urls.is_empty() {
         return;
     }
-    let (tx, rx) = mpsc::channel();
-    let handles: Vec<_> = urls
+    // 过滤掉已在缓存的
+    let to_fetch: Vec<String> = urls
         .iter()
-        .filter_map(|url| {
-            let url = url.clone();
-            let tx = tx.clone();
-            // 跳过已在缓存的
-            if FETCH_CACHE.with(|c| c.borrow().contains_key(&url)) {
-                return None;
-            }
-            Some(std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .ok()?;
-                let client = browser_net::HttpClient::new();
-                let bytes = rt.block_on(client.get(&url)).ok()?;
-                let body = String::from_utf8(bytes).ok()?;
-                let _ = tx.send((url, body));
-                Some(())
-            }))
-        })
+        .filter(|url| !FETCH_CACHE.with(|c| c.borrow().contains_key(*url)))
+        .cloned()
         .collect();
-    drop(tx);
+    if to_fetch.is_empty() {
+        return;
+    }
+    let (tx, rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("prefetch runtime");
+        let client = browser_net::HttpClient::new();
+        let tx = std::sync::Arc::new(std::sync::Mutex::new(tx));
+        rt.block_on(async {
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+            let mut tasks = Vec::new();
+            for url in &to_fetch {
+                let permit = sem.clone().acquire_owned().await.unwrap();
+                let client = client.clone();
+                let tx = tx.clone();
+                let url = url.clone();
+                tasks.push(tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Ok(bytes) = client.get(&url).await {
+                        if let Ok(body) = String::from_utf8(bytes) {
+                            if let Ok(t) = tx.lock() {
+                                let _ = t.send((url, body));
+                            }
+                        }
+                    }
+                }));
+            }
+            for t in tasks {
+                let _ = t.await;
+            }
+        });
+        // tx (Arc) drops here → rx.iter() 收到 channel 关闭信号退出
+    });
+    // 先 drain rx（等待所有响应 + channel 关闭），再 join
     for (url, body) in rx.iter() {
         FETCH_CACHE.with(|c| {
             c.borrow_mut().insert(url, body);
         });
     }
-    for h in handles {
-        let _ = h.join();
-    }
+    let _ = handle.join();
 }
 
 /// M65: 持久化的网络线程——复用 tokio runtime + HttpClient 连接池。
