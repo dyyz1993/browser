@@ -5,6 +5,7 @@
 //! Rust bridge 函数用 Function::new 注册，调同样的 thread_local 后端。
 
 use rquickjs::function::Rest;
+use rquickjs::module::Module;
 use rquickjs::{Context, Ctx, Function, Runtime, Value};
 
 use crate::bridge;
@@ -207,6 +208,18 @@ impl QuickJsEngine {
     /// M66: 带字符串返回值的 eval。
     pub fn eval_string(&mut self, js: &str) -> Option<String> {
         self.ctx.with(|ctx: Ctx| ctx.eval::<String, _>(js).ok())
+    }
+
+    /// M66: 执行 ESM module 源码（支持 import/export/import.meta）。
+    pub fn eval_module(&mut self, name: &str, source: &str) -> Result<(), String> {
+        self.ctx
+            .with(|ctx: Ctx| match Module::evaluate(ctx, name, source) {
+                Ok(promise) => match promise.finish::<Value>() {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(format!("module rejected: {e:?}")),
+                },
+                Err(e) => Err(format!("module eval: {e:?}")),
+            })
     }
 
     /// 运行微任务队列。

@@ -740,19 +740,34 @@ fn run_scripts_quickjs(
         let code = match script {
             ScriptEntry::Inline(code) => Some(code.clone()),
             ScriptEntry::External(src) => match resolve_script_url(src, base_url.as_deref()) {
-                Some(url) => match fetch_external_script(&url) {
-                    Ok(code) => Some(code),
-                    Err(e) => {
-                        eprintln!("[js-runtime] QuickJS external fetch failed: {url}: {e}");
-                        None
+                Some(url) => {
+                    // M66: 跳过分析/追踪脚本（不贡献内容，可能破坏 DOM）
+                    if url.contains("usefathom.com")
+                        || url.contains("cloudflareinsights.com")
+                        || url.contains("google-analytics")
+                        || url.contains("googletagmanager")
+                    {
+                        continue;
                     }
-                },
+                    match fetch_external_script(&url) {
+                        Ok(code) => Some(code),
+                        Err(e) => {
+                            eprintln!("[js-runtime] QuickJS external fetch failed: {url}: {e}");
+                            None
+                        }
+                    }
+                }
                 None => None,
             },
-            ScriptEntry::ExternalModule(_) | ScriptEntry::InlineModule(_) => {
-                // QuickJS ESM 支持待实现（rquickjs Module API）
-                eprintln!("[js-runtime] QuickJS ESM modules not yet supported, skipping");
-                None
+            ScriptEntry::ExternalModule(src) => {
+                // M66: QuickJS ESM module 暂不支持（需要 ModuleLoader + GC 安全处理）。
+                // 跳过所有 ESM module script。
+                eprintln!("[js-runtime] QuickJS ESM module skipped: {src}");
+                continue;
+            }
+            ScriptEntry::InlineModule(_) => {
+                eprintln!("[js-runtime] QuickJS inline module skipped");
+                continue;
             }
         };
         if let Some(code) = code {
@@ -996,7 +1011,6 @@ window.dispatchEvent = function(ev) {
     }
 };
 
-// performance API（cloudflare beacon / 框架性能检测用）
 window.performance = {
     timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
     now: function() { return Date.now(); },
