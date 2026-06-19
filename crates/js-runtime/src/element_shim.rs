@@ -284,6 +284,37 @@ Object.defineProperty(Element.prototype, 'tagName', {
             set: function(v) { __attrSet(this.__nodeId, 'nonce', v); },
             enumerable: true, configurable: true,
         });
+        // M65: HTMLTemplateElement.content —— 返回包含 template 子节点的 DocumentFragment。
+        // SolidJS/Vue/lit-html 等框架用 <template> 做客户端模板克隆，
+        // 读 template.content.firstChild 获取模板内容。之前 content 是 undefined → 崩。
+        Object.defineProperty(Element.prototype, 'content', {
+            get: function() {
+                var tag = __getTagName(this.__nodeId);
+                if (!tag || String(tag).toUpperCase() !== 'TEMPLATE') return undefined;
+                // 缓存：重复访问返回同一个 fragment（规范要求 content 是只读 live fragment）
+                if (this.__contentFrag) return this.__contentFrag;
+                var frag = document.createDocumentFragment();
+                var cs = __children(this.__nodeId);
+                if (cs) {
+                    var ids = String(cs).split(',');
+                    for (var i = 0; i < ids.length; i++) {
+                        var id = parseInt(ids[i], 10);
+                        if (!isNaN(id)) {
+                            var child = __makeElement(id);
+                            if (child && typeof child.cloneNode === 'function') {
+                                var clone = child.cloneNode(true);
+                                if (clone) {
+                                    try { __appendChild(frag.__nodeId, clone.__nodeId); } catch(e) {}
+                                }
+                            }
+                        }
+                    }
+                }
+                this.__contentFrag = frag;
+                return frag;
+            },
+            enumerable: true, configurable: true,
+        });
         Object.defineProperty(Element.prototype, 'nodeName', {
             get: function() { return this.tagName; },
             enumerable: true, configurable: true,
@@ -461,7 +492,7 @@ Object.defineProperty(Element.prototype, 'tagName', {
                          return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 };
                      } };
         };
-        Element.prototype.cloneNode = function() {
+        Element.prototype.cloneNode = function(deep) {
             var copy = __makeElement(__createEl(String(this.tagName || '').toLowerCase()));
             if (!copy) return null;
             if (this.id) copy.id = this.id;
@@ -470,8 +501,28 @@ Object.defineProperty(Element.prototype, 'tagName', {
             if (styleText) copy.setAttribute('style', styleText);
             var className = this.getAttribute('class');
             if (className) copy.setAttribute('class', className);
-            var text = this.textContent;
-            if (text) copy.textContent = text;
+            // M65: 深拷贝——递归克隆子节点（SolidJS/Vue template 需要 cloneNode(true)）
+            if (deep) {
+                var cs = __children(this.__nodeId);
+                if (cs) {
+                    var ids = String(cs).split(',');
+                    for (var i = 0; i < ids.length; i++) {
+                        var cid = parseInt(ids[i], 10);
+                        if (!isNaN(cid)) {
+                            var child = __makeElement(cid);
+                            if (child) {
+                                var childClone = child.cloneNode(true);
+                                if (childClone) {
+                                    try { __appendChild(copy.__nodeId, childClone.__nodeId); } catch(e) {}
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                var text = this.textContent;
+                if (text) copy.textContent = text;
+            }
             return copy;
         };
         Element.prototype.isEqualNode = function(other) {
