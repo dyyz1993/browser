@@ -198,6 +198,11 @@ impl QuickJsEngine {
         self.ctx.with(|ctx: Ctx| ctx.eval::<bool, _>(js).ok())
     }
 
+    /// M66: 带字符串返回值的 eval。
+    pub fn eval_string(&mut self, js: &str) -> Option<String> {
+        self.ctx.with(|ctx: Ctx| ctx.eval::<String, _>(js).ok())
+    }
+
     /// 运行微任务队列。
     pub fn run_jobs(&mut self) {
         // rquickjs 微任务在 ctx.with 闭包退出时自动 drain。

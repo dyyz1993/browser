@@ -770,11 +770,20 @@ fn run_scripts_quickjs(
     let _ = engine.eval(
         r#"try {
             if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
-                document.dispatchEvent({type:'DOMContentLoaded'});
-                document.dispatchEvent({type:'load'});
+                var ev1 = new Event('DOMContentLoaded');
+                document.dispatchEvent(ev1);
+                var ev2 = new Event('load');
+                document.dispatchEvent(ev2);
+                if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+                    window.dispatchEvent(ev1);
+                    window.dispatchEvent(ev2);
+                }
             }
-        } catch(e) {}"#,
+        } catch(e) { if (typeof __log === 'function') __log('[dcl] ' + e.message); }"#,
     );
+
+    // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
+    let _ = engine.eval_i32("__drainDueTimers()");
 
     // M66: QuickJS event loop —— 异步 drain timer 回调。
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
@@ -872,8 +881,14 @@ window.__drainDueTimers = function() {
         } else {
             __pendingTimers.splice(i, 1);
         }
-        try { t.cb(); } catch(e) {
-            if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)));
+        try {
+            if (typeof t.cb !== 'function') {
+                if (typeof __log === 'function') __log('[timer] callback is ' + typeof t.cb + ', not function');
+            } else {
+                t.cb();
+            }
+        } catch(e) {
+            if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)) + (e.stack ? (' | ' + String(e.stack).split('\\n').slice(0,2).join(' | ')) : ''));
         }
         fired++;
     }
@@ -1104,6 +1119,19 @@ Element.prototype.appendChild = function(child) {
     if (child && typeof child.__nodeId === 'number') __appendChild(this.__nodeId, child.__nodeId);
     return child;
 };
+Element.prototype.insertBefore = function(child, ref) {
+    if (child && typeof child.__nodeId === 'number') {
+        var refId = (ref && typeof ref.__nodeId === 'number') ? ref.__nodeId : -1;
+        __insertBefore(this.__nodeId, child.__nodeId, refId);
+    }
+    return child;
+};
+Element.prototype.removeChild = function(child) {
+    if (child && typeof child.__nodeId === 'number') {
+        __removeChild(this.__nodeId, child.__nodeId);
+    }
+    return child;
+};
 Element.prototype.append = function() {
     for (var i = 0; i < arguments.length; i++) {
         var n = arguments[i];
@@ -1139,8 +1167,33 @@ Object.defineProperty(Element.prototype, 'textContent', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'innerHTML', {
-    get: function() { return __getAttr(this.__nodeId, 'innerHTML') || ''; },
-    set: function(v) { __setAttr(this.__nodeId, 'innerHTML', String(v)); },
+    get: function() {
+        // 从 Rust Tree 读子节点的文本拼接（近似 innerHTML）
+        var cs = __children(this.__nodeId);
+        if (!cs) return '';
+        var ids = cs.split(',').filter(function(s) { return s; });
+        var out = '';
+        for (var i = 0; i < ids.length; i++) {
+            var id = parseInt(ids[i], 10);
+            var tag = __getTag(id);
+            var text = __getText(id);
+            if (tag === '__text__') {
+                out += text;
+            } else {
+                out += '<' + tag + '>' + text + '</' + tag + '>';
+            }
+        }
+        return out;
+    },
+    set: function(v) {
+        // M66: 简化版 innerHTML setter——直接设为文本内容。
+        // 完整版需要 html5ever 解析（__parseHtml），但 QuickJS bridge 的 __parseHtml 是 no-op。
+        // 爬虫场景：大部分框架设 innerHTML 后用 querySelector 查找元素，
+        // 文本内容提取不依赖精确的 DOM 结构。
+        __setAttr(this.__nodeId, 'innerHTML', String(v));
+        // 同时设 textContent（让 extractor 能读到内容）
+        __setText(this.__nodeId, String(v).replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').trim());
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'id', {
@@ -1393,6 +1446,7 @@ XMLHttpRequest.prototype.setRequestHeader = function(key, val) {};
 XMLHttpRequest.prototype.send = function(body) {
     // 同步 fetch（和 boa 版本一样的模式）
     var raw = (typeof __fetchSync === 'function') ? __fetchSync(this.__url) : null;
+    if (typeof __log === 'function') __log('[xhr] send ' + this.__url + ' → ' + (raw ? raw.length + ' bytes' : 'null'));
     if (raw) {
         this.responseText = raw;
         this.response = raw;
