@@ -776,6 +776,29 @@ fn run_scripts_quickjs(
         } catch(e) {}"#,
     );
 
+    // M66: QuickJS event loop —— 异步 drain timer 回调。
+    // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
+    // 直到 pending timer 清空或超时（8s 上限，和 boa 一致）。
+    // 每轮 tick 之间 sleep 20ms（模拟 50fps 的 event loop 节奏），
+    // 让 Promise microtask 充分 drain。
+    const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
+    const EL_TICK_MS: u64 = 20;
+    let el_start = std::time::Instant::now();
+    loop {
+        let fired = engine.eval_i32("__drainDueTimers()").unwrap_or(0);
+        if fired == 0 {
+            let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
+            if !has {
+                break;
+            }
+        }
+        if el_start.elapsed() >= EL_MAX_TOTAL {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(EL_TICK_MS));
+    }
+    engine.gc();
+
     (shared, executed)
 }
 
@@ -805,22 +828,68 @@ var parent = globalThis;
 // navigator
 window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
 
-// setTimeout（同步执行回调——QuickJS event loop 后续完善）
+// M66: 异步 event loop —— setTimeout/setInterval 不立刻执行，
+// 存到 __pendingTimers 队列，脚本执行完后由 Rust event loop 逐条触发。
+// 这样 Promise.then 微任务能正确 drain，框架的异步渲染流程完整。
 var __timerSeq = 0;
+var __pendingTimers = [];
 window.setTimeout = function(cb, delay) {
+    if (typeof cb !== 'function') return 0;
     __timerSeq++;
-    try { cb(); } catch(e) { if (typeof __log === 'function') __log('[timer] ' + e.message); }
+    __pendingTimers.push({ id: __timerSeq, cb: cb, type: 'timeout',
+                           fireAt: Date.now() + (delay || 0), count: 0 }); // count 用于 interval 循环保护
     return __timerSeq;
 };
-window.clearTimeout = function(id) {};
+window.clearTimeout = function(id) {
+    for (var i = 0; i < __pendingTimers.length; i++) {
+        if (__pendingTimers[i].id === id) { __pendingTimers.splice(i, 1); break; }
+    }
+};
 window.setInterval = function(cb, delay) {
+    if (typeof cb !== 'function') return 0;
     __timerSeq++;
-    try { cb(); } catch(e) {}
+    __pendingTimers.push({ id: __timerSeq, cb: cb, type: 'interval',
+                           fireAt: Date.now() + (delay || 0), count: 0, interval: delay || 0 });
     return __timerSeq;
 };
-window.clearInterval = function(id) {};
+window.clearInterval = function(id) { window.clearTimeout(id); };
 window.requestAnimationFrame = function(cb) { return window.setTimeout(cb, 0); };
 window.cancelAnimationFrame = function(id) {};
+
+// M66: 触发到期的 timer 回调。返回本轮触发的回调数。
+// 每个回调在新 call stack 执行（通过 eval 隔离），让 Promise microtask 能 drain。
+// interval 回调触发后自动重新 schedule（最多 100 次）。
+window.__drainDueTimers = function() {
+    var now = Date.now();
+    var fired = 0;
+    for (var i = __pendingTimers.length - 1; i >= 0; i--) {
+        var t = __pendingTimers[i];
+        if (!t || now < t.fireAt) continue;
+        if (t.type === 'interval') {
+            t.count++;
+            if (t.count > 100) { __pendingTimers.splice(i, 1); continue; }
+            t.fireAt = now + t.interval;
+        } else {
+            __pendingTimers.splice(i, 1);
+        }
+        try { t.cb(); } catch(e) {
+            if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)));
+        }
+        fired++;
+    }
+    return fired;
+};
+
+// M66: 检查是否还有 pending timer（event loop 判断是否继续循环）。
+window.__hasPendingTimers = function() { return __pendingTimers.length > 0; };
+window.__pendingTimerCount = function() { return __pendingTimers.length; };
+window.__pendingTimerNames = function() {
+    var s = '';
+    for (var i = 0; i < __pendingTimers.length && i < 5; i++) {
+        s += (__pendingTimers[i].type || '?') + ',';
+    }
+    return s + '(' + __pendingTimers.length + ')';
+};
 
 // queueMicrotask
 window.queueMicrotask = function(cb) { Promise.resolve().then(cb); };

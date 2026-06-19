@@ -188,6 +188,16 @@ impl QuickJsEngine {
         Ok(())
     }
 
+    /// M66: 带整数返回值的 eval。
+    pub fn eval_i32(&mut self, js: &str) -> Option<i32> {
+        self.ctx.with(|ctx: Ctx| ctx.eval::<i32, _>(js).ok())
+    }
+
+    /// M66: 带布尔返回值的 eval。
+    pub fn eval_js_bool(&mut self, js: &str) -> Option<bool> {
+        self.ctx.with(|ctx: Ctx| ctx.eval::<bool, _>(js).ok())
+    }
+
     /// 运行微任务队列。
     pub fn run_jobs(&mut self) {
         // rquickjs 微任务在 ctx.with 闭包退出时自动 drain。
