@@ -59,6 +59,18 @@
 | **ES Modules（import/export/import.meta）** | ✅ M64 | integration_esm_module（3 测试） | vuejs.org/vite.dev/nuxt.com |
 | ES Modules 动态 import() | ⚠️ 部分 | boa 需 ModuleLoader（M64 已实现 HttpModuleLoader，动态 import 走同 loader） | |
 
+### JS 引擎双后端（M66）
+
+| 引擎 | ES 兼容 | async/await | Proxy | Generator | ESM |
+|------|---------|-------------|-------|-----------|-----|
+| **boa**（默认） | 部分 | ⚠️ | ✅ | ✅ | ✅ M64 |
+| **QuickJS**（`--features quickjs`） | ✅ ES2020 完整 | ✅ 原生 | ✅ 原生 | ✅ 原生 | ❌ 待实现 |
+
+- **速度**：QuickJS 8/12 站比 boa 快（nuxt.com 快 35x）
+- **内存**：QuickJS 中位数 19MB（boa 44MB，Chrome 262MB）
+- **兼容**：QuickJS 在 react.dev 上渲染 91%（boa 0.7%）
+- **切换**：`browser fetch <url> --js-engine quickjs`
+
 ---
 
 ## 二、Web API（手写 shim 层）

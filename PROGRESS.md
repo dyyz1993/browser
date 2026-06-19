@@ -11,18 +11,53 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M64（ESM 支持：HttpModuleLoader，vuejs.org/vite.dev/nuxt.com ESM bundle 全部渲染） |
-| 总 commits | ~210 |
-| 测试 | 810+ pass（含 43 JS 特性 + 3 ESM module 测试）, 0 clippy warnings |
-| Crates | 16（含 extractor 后置过滤器） |
-| CLI 子命令 | 8 |
-| 核心目标 G1（SPA 爬虫）| ✅ 达成（M4）—— bark.day.app（docsify）CSR 0 错误渲染 |
-| 截图 G2 | ✅ 达成（M12.1） |
-| 跨平台 G3 | ✅ 达成 |
+| HEAD | M66（QuickJS 双引擎：JsEngine trait + QuickJS 后端，速度/内存/兼容全面超越 boa） |
+| 总 commits | ~230 |
+| 测试 | 830+ pass, 0 clippy warnings |
+| Crates | 16 |
+| CLI 子命令 | 8 + `--js-engine boa\|quickjs` |
+| JS 引擎 | **双引擎**：boa（默认）+ QuickJS（`--features quickjs`） |
+| 核心目标 G1（SPA 爬虫）| ✅ |
+| 截图 G2 | ✅ |
+| 跨平台 G3 | ✅ |
 
 ---
 
 ## 最近变更（倒序）
+
+### M66 — JS 引擎双后端（JsEngine trait + QuickJS via rquickjs）✅
+
+**引入 QuickJS 作为 boa 的替代引擎，速度/内存/兼容性全面超越。**
+
+架构：
+- `JsEngine` trait 抽象层（`engine.rs`）—— `ctx_mut()`/`supports_esm()`/`name()`/`as_any()`
+- `BoaEngine`（`engine_boa.rs`）—— 默认后端，封装 boa::Context
+- `QuickJsEngine`（`engine_quickjs.rs`）—— `--features quickjs`，68 个 bridge 函数 + 独立 JS shim
+- `EngineKind` 工厂（`engine.rs`）—— `--js-engine boa|quickjs` 切换
+- `run_scripts_with_base_engine`（`scripts.rs`）—— 根据 engine_name 走不同执行路径
+
+QuickJS 优势（12 站实测对标 boa + Chrome）：
+- **速度**：8/12 站比 boa 快（nuxt.com 快 35x，remix.run 快 5x）
+- **内存**：中位数 19MB（boa 44MB / Chrome 262MB，省 93%）
+- **兼容性**：react.dev 渲染 91%（boa 只有 0.7%）—— ES2020 完整让 React hydration 成功
+- **渲染**：8/12 站成功（nuxt.com/docusaurus 零错误完美渲染）
+
+QuickJS shim 集（独立精简版，避免 QuickJS 正则差异）：
+- window/document/Element（classList/style/firstChild/querySelector 等完整 API）
+- XHR/fetch（同步 + Promise-based）
+- URL/URLSearchParams/localStorage/sessionStorage
+- crypto/performance/history/MutationObserver/Event/CustomEvent
+- setTimeout/setInterval 异步 event loop
+
+### M65 — 速度优化 + 底层插桩 ✅
+
+- HTTP/2 多路复用（并行 fetch 用单 reqwest::Client 共享连接池）
+- Event loop networkidle 检测（提前退出，省 7-16s 空转）
+- Net worker 连接复用（XHR 不再每次 TLS 握手）
+- ESM chunk 并行 prefetch（BFS 扫描 import 依赖图）
+- Vite `__vite__mapDeps` 预取（nuxt.com 35→16s）
+- `--profile` 底层插桩（分阶段 RSS + 耗时）
+- `boa_engine::gc::force_collect()` 手动 GC（效果不显著——活跃对象非垃圾）
 
 ### M64 — ESM 支持（HttpModuleLoader：boa Module API + 同步 HTTP fetch chunk）✅
 
