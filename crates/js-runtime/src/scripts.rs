@@ -883,12 +883,13 @@ window.__drainDueTimers = function() {
         }
         try {
             if (typeof t.cb !== 'function') {
-                if (typeof __log === 'function') __log('[timer] callback is ' + typeof t.cb + ', not function');
+                if (typeof __log === 'function') __log('[timer] cb is ' + typeof t.cb);
             } else {
                 t.cb();
             }
         } catch(e) {
-            if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)) + (e.stack ? (' | ' + String(e.stack).split('\\n').slice(0,2).join(' | ')) : ''));
+            var st = (e && e.stack) ? String(e.stack).split('\\n').slice(0,4).join(' | ') : '';
+            if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)) + (st ? (' | ' + st) : ''));
         }
         fired++;
     }
@@ -1186,13 +1187,13 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
         return out;
     },
     set: function(v) {
-        // M66: 简化版 innerHTML setter——直接设为文本内容。
-        // 完整版需要 html5ever 解析（__parseHtml），但 QuickJS bridge 的 __parseHtml 是 no-op。
-        // 爬虫场景：大部分框架设 innerHTML 后用 querySelector 查找元素，
-        // 文本内容提取不依赖精确的 DOM 结构。
-        __setAttr(this.__nodeId, 'innerHTML', String(v));
-        // 同时设 textContent（让 extractor 能读到内容）
-        __setText(this.__nodeId, String(v).replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').trim());
+        // M66: __parseHtml（html5ever）解析 HTML 创建真实 DOM 子节点。
+        var s = String(v);
+        if (typeof __parseHtml === 'function' && s.length > 0) {
+            __parseHtml(this.__nodeId, s);
+        }
+        // 兜底：设 textContent（extractor 能读到）
+        __setText(this.__nodeId, s.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim());
     },
     enumerable: true, configurable: true
 });

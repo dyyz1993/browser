@@ -2607,6 +2607,29 @@ pub mod qjs_bridge {
     pub fn location_href() -> String {
         with_navigation(|h| browser_navigation::current_url(&h))
     }
+
+    /// parseHtml(targetNodeId, htmlString) —— 用 html5ever 解析 HTML，
+    /// 创建真实 DOM 子节点到目标元素。复用 boa 版本的 parse_html 逻辑。
+    pub fn parse_html(target: f64, html: String) {
+        let node_id = target as usize;
+        with_tree(|t| {
+            if node_id >= t.len() {
+                return;
+            }
+            let parsed = browser_html_parser::parse(&html);
+            let body_id = super::find_first_element(&parsed, "body");
+            if let Some(body_id) = body_id {
+                t.get_mut(node_id).children.clear();
+                let children = parsed.children_of(body_id).to_vec();
+                for &child in &children {
+                    super::copy_subtree(&parsed, child, t, node_id);
+                }
+            } else {
+                t.get_mut(node_id).children.clear();
+                t.insert(Some(node_id), NodeData::Text(html));
+            }
+        });
+    }
 }
 
 #[cfg(test)]

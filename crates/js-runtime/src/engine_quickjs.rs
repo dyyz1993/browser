@@ -168,8 +168,14 @@ impl QuickJsEngine {
                 let _ = g.set("__wsSend", Function::new(ctx.clone(), |_: f64, _: String| {}).unwrap());
                 let _ = g.set("__wsClose", Function::new(ctx.clone(), |_: f64| {}).unwrap());
 
-                // === HTML 解析 ===
-                let _ = g.set("__parseHtml", Function::new(ctx.clone(), |_target: f64, _html: String| {}).unwrap());
+                // === HTML 解析（html5ever → 真实 DOM 子节点）===
+                let _ = g.set(
+                    "__parseHtml",
+                    Function::new(ctx.clone(), |target: f64, html: String| {
+                        bridge::qjs_bridge::parse_html(target, html);
+                    })
+                    .unwrap(),
+                );
 
                 // === makeElement（JS shim 工厂，返回 undefined 占位——shim JS 自己创建）===
                 // JS shim 的 __makeElement 需要返回一个带 __nodeId 的对象。
