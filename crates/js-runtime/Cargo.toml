@@ -16,6 +16,8 @@ browser-net = { path = "../net" }
 browser-ws = { path = "../ws" }
 # M62: 用 git main 分支（crates.io 0.21.1 的 Error.stack 未完整，main 已修）
 boa_engine = { git = "https://github.com/boa-dev/boa", branch = "main" }
+# M66: QuickJS 后端（rquickjs 绑定，bindgen 编译 QuickJS C 代码）
+rquickjs = { version = "0.12", features = ["bindgen"], optional = true }
 tokio = { workspace = true, features = ["rt", "net"] }
 url = "2"
 # M62: innerHTML setter 解析 HTML 为真实 DOM 节点（docsify 渲染管线必需）。
@@ -26,3 +28,8 @@ wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 assert_cmd.workspace = true
 tempfile = "3"
+
+[features]
+default = []
+# M66: QuickJS JS 引擎后端（rquickjs）
+quickjs = ["dep:rquickjs"]

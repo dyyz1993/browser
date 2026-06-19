@@ -2397,6 +2397,19 @@ mod fetch_tests {
     }
 }
 
+// ===========================================================================
+// M66-B: QuickJS 后端的公开 bridge 辅助函数。
+// 这些函数是对 with_tree / thread_local 后端的轻量封装，
+// 让 QuickJS 引擎可以复用同样的 DOM/Storage/Navigation 后端。
+// ===========================================================================
+#[cfg(feature = "quickjs")]
+mod quickjs_bridge_helpers {
+    // TODO: M66-B 完整实现时填充。
+    // 这些函数需要调用 bridge.rs 的私有 helper（set_body_inner_html 等），
+    // 但 Tree 没有高级方法（create_element 等），需要用 with_tree + 私有 helper。
+    // 暂时留空，feature=quickjs 时编译 engine_quickjs.rs 会引用这些。
+}
+
 #[cfg(test)]
 mod m7_dom_api_tests {
     use super::*;

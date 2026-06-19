@@ -12,6 +12,8 @@ pub mod document_shim;
 pub mod element_shim;
 pub mod engine;
 pub mod engine_boa;
+#[cfg(feature = "quickjs")]
+pub mod engine_quickjs;
 pub mod esm_loader;
 pub mod fetch_shim;
 pub mod image_shim;
