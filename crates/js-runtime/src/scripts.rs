@@ -825,6 +825,16 @@ pub fn run_scripts_with_base(
     tree: Tree,
     base_url: Option<String>,
 ) -> (crate::bridge::SharedTree, usize) {
+    run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::Boa)
+}
+
+/// M66: 引擎可切换版本。通过 EngineKind 选择 JS 引擎（boa / quickjs）。
+#[must_use]
+pub fn run_scripts_with_base_engine(
+    tree: Tree,
+    base_url: Option<String>,
+    engine_kind: &crate::engine::EngineKind,
+) -> (crate::bridge::SharedTree, usize) {
     use std::cell::RefCell;
     use std::rc::Rc;
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
@@ -842,19 +852,16 @@ pub fn run_scripts_with_base(
         .as_deref()
         .map(url_origin)
         .unwrap_or_else(|| "about:blank".to_string());
-    let module_loader = if has_module {
-        Some(Rc::new(crate::esm_loader::HttpModuleLoader::new(&origin)))
+    // M66: 通过 EngineKind 创建引擎（trait 抽象层）。
+    let esm_origin = if has_module {
+        Some(origin.as_str())
     } else {
         None
     };
-    let mut ctx = if let Some(loader) = module_loader {
-        Context::builder()
-            .module_loader(loader)
-            .build()
-            .unwrap_or_else(|_| Context::default())
-    } else {
-        Context::default()
-    };
+    let mut engine = engine_kind.create(esm_origin);
+    let engine_name = engine.name();
+    // M66: 获取底层 boa Context（所有 bridge/shim 仍直接操作 Context）。
+    let ctx = engine.ctx_mut();
     let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
     {
         let limits = ctx.runtime_limits_mut();
@@ -862,46 +869,46 @@ pub fn run_scripts_with_base(
         limits.set_stack_size_limit(JS_STACK_SIZE_LIMIT);
         limits.set_recursion_limit(JS_RECURSION_LIMIT);
     }
-    install(&mut ctx);
+    install(ctx);
     // M13.3: 安装 localStorage / sessionStorage 后端 + JS 对象
     let storage = browser_storage::new_storage();
     crate::bridge::install_storage(storage);
-    let _ = crate::storage_shim::install_storage_globals(&mut ctx);
+    let _ = crate::storage_shim::install_storage_globals(ctx);
     // M14.3: 安装 history / location 后端 + JS 对象（初始 URL = base_url）
     let initial_url = base_url
         .clone()
         .unwrap_or_else(|| "about:blank".to_string());
     let nav = browser_navigation::new_navigation(&initial_url);
     crate::bridge::install_navigation(nav);
-    let _ = crate::navigation_shim::install_navigation_globals(&mut ctx);
+    let _ = crate::navigation_shim::install_navigation_globals(ctx);
     // M15.3/M15.4: 安装 cookie jar 后端。如果 cli 已装（主请求）复用，否则新建。
     crate::bridge::ensure_cookie_jar();
     // M17.2: 安装 XMLHttpRequest 全局构造器。
-    let _ = crate::xhr_shim::install_xml_http_request(&mut ctx);
+    let _ = crate::xhr_shim::install_xml_http_request(ctx);
     // M19.1: 安装全局 fetch（标准 Promise-based API）。
-    let _ = crate::fetch_shim::install_fetch(&mut ctx);
+    let _ = crate::fetch_shim::install_fetch(ctx);
     // M23.5: 安装 WebSocket 全局构造器（ws:// 实时连接）。
-    let _ = crate::ws_shim::install_websocket(&mut ctx);
+    let _ = crate::ws_shim::install_websocket(ctx);
     // M28.1: 安装 navigator 全局对象（userAgent/platform/language，反爬必需）。
-    let _ = crate::navigator_shim::install_navigator(&mut ctx);
+    let _ = crate::navigator_shim::install_navigator(ctx);
     // M28.2: 安装 window 全局对象（window===globalThis 自引用 + 视口数据属性）。
     // 必须在 navigator/location 等之后，window.navigator 经 globalThis 自动可见。
-    let _ = crate::window_shim::install_window(&mut ctx);
+    let _ = crate::window_shim::install_window(ctx);
     // M28.3: 安装 document 全局对象（getElementById/querySelector/createElement
     // 包装 __* 桥 + body/head/cookie/title/location 数据属性）。必须在 window
     // 之后（document.location 指向 location 全局对象）。
-    let _ = crate::document_shim::install_document(&mut ctx);
+    let _ = crate::document_shim::install_document(ctx);
     // M37: 安装 Element 对象（包装 NodeId + textContent/id/tagName getter/setter
     // 反射到 bridge）。必须在 document 之后（document.getElementById 返回 Element）。
-    let _ = crate::element_shim::install_element(&mut ctx);
+    let _ = crate::element_shim::install_element(ctx);
     // M28.4: 安装 screen 全局对象（width/height/colorDepth/orientation，响应式布局
     // 特性检测常用）。静态默认值（无显示器环境）。
-    let _ = crate::screen_shim::install_screen(&mut ctx);
+    let _ = crate::screen_shim::install_screen(ctx);
     // M41: Image 构造器（爬虫友好——设 src 后 setTimeout(0) 假触发 onload，不 fetch）。
     // 消除 baidu SPA 实测的 `Image is not defined` 错误。
-    let _ = crate::image_shim::install_image(&mut ctx);
+    let _ = crate::image_shim::install_image(ctx);
     // M57: 基础兼容 shim，补齐常见前端运行时入口。
-    let _ = crate::compat_shim::install_compat_shims(&mut ctx);
+    let _ = crate::compat_shim::install_compat_shims(ctx);
 
     if trace_scripts {
         let diag = r#"(function() {
@@ -1046,7 +1053,9 @@ pub fn run_scripts_with_base(
             eprintln!("[js-runtime] object-diag install failed: {e}");
         }
     }
-    let count = execute_scripts_with_base(&shared, &mut ctx, base_url);
+    let count = execute_scripts_with_base(&shared, ctx, base_url);
+    let _ = engine_name; // M66: 用于 --profile 日志
+    let _ = engine; // 引擎在函数结束时 drop（释放 Context）
     (shared, count)
 }
 
