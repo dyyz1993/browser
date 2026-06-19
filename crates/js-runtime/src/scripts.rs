@@ -718,13 +718,17 @@ fn run_scripts_quickjs(
 
     let mut executed = 0;
 
-    // 安装 JS shim（复用 boa 版本的 JS 字符串——完全引擎无关）
-    // 每个 shim 是一段 JS 字符串，QuickJS eval 同样的内容。
+    // 安装 JS shim——所有 shim 拼接成一个大字符串一次 eval。
+    // QuickJS 的 ctx.eval 每次是独立 scope，var 声明不跨 eval 泄漏。
+    // 必须拼接后一次执行，让 window/document 等 var 在后续 eval 中可见。
     let shims = get_all_shim_js(&base_url);
-    for (name, js) in &shims {
-        if let Err(e) = engine.eval(js) {
-            eprintln!("[js-runtime] QuickJS shim '{name}' install failed: {e}");
-        }
+    let combined_shim: String = shims
+        .iter()
+        .map(|(_, js)| js.as_str())
+        .collect::<Vec<_>>()
+        .join("\n;\n");
+    if let Err(e) = engine.eval(&combined_shim) {
+        eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
     }
 
     // 提取并执行页面脚本
@@ -922,25 +926,36 @@ window.sessionStorage = {
     get length() { return 0; }
 };
 
-// URL 构造器（简化版——解析 protocol/host/pathname/search/hash）
+// URL 构造器（简化版——避免 QuickJS 不支持的复杂正则）
 window.URL = function(input, base) {
     input = String(input);
     if (base && input.indexOf('://') < 0) {
-        // 相对 URL 解析
         var baseURL = String(base);
-        if (input.startsWith('./')) input = baseURL.replace(/[^/]*$/, '') + input.slice(2);
-        else if (input.startsWith('/')) input = baseURL.replace(/(://[^/]*)?.*/, '$1') + input;
-        else input = baseURL.replace(/[^/]*$/, '') + input;
+        if (input.charAt(0) === '.') {
+            // 相对路径：取 base 的目录部分
+            var baseDir = baseURL.substring(0, baseURL.lastIndexOf('/') + 1);
+            input = baseDir + input.replace(/^\.\//, '');
+        } else if (input.charAt(0) === '/') {
+            // 绝对路径：取 base 的 origin
+            var protoEnd = baseURL.indexOf('://');
+            if (protoEnd > 0) {
+                var hostPart = baseURL.substring(protoEnd + 3);
+                var slashIdx = hostPart.indexOf('/');
+                input = baseURL.substring(0, protoEnd + 3) + (slashIdx > 0 ? hostPart.substring(0, slashIdx) : hostPart) + input;
+            }
+        }
     }
     this.href = input;
     this.protocol = (input.split('://')[0] || '') + ':';
-    this.host = (input.split('://')[1] || '').split('/')[0] || '';
+    var afterProto = input.split('://')[1] || '';
+    this.host = afterProto.split('/')[0] || '';
     this.hostname = this.host.split(':')[0];
-    this.port = (this.host.split(':')[1] || '');
-    this.pathname = '/' + ((input.split('://')[1] || '').split('/').slice(1).join('').split('?')[0].split('#')[0]);
-    this.search = (input.split('?')[1] || '').split('#')[0];
-    this.search = this.search ? ('?' + this.search) : '';
-    this.hash = input.indexOf('#') >= 0 ? ('#' + input.split('#')[1]) : '';
+    this.port = this.host.split(':')[1] || '';
+    var afterHost = afterProto.substring(afterProto.indexOf('/') + 1);
+    this.pathname = '/' + afterHost.split('?')[0].split('#')[0];
+    var q = input.split('?')[1];
+    this.search = q ? '?' + q.split('#')[0] : '';
+    this.hash = input.indexOf('#') >= 0 ? '#' + input.split('#')[1] : '';
     this.origin = this.protocol + '//' + this.host;
     this.toString = function() { return this.href; };
     this.toJSON = function() { return this.href; };
