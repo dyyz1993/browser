@@ -1333,6 +1333,25 @@ Element.prototype.getBoundingClientRect = function() {
 Element.prototype.focus = function() {};
 Element.prototype.blur = function() {};
 Element.prototype.scrollIntoView = function() {};
+// dataset（框架常用 data-* 属性）—— 简化版，不用 Proxy
+Object.defineProperty(Element.prototype, 'dataset', {
+    get: function() {
+        if (!this.__dataset) {
+            this.__dataset = {};
+        }
+        return this.__dataset;
+    },
+    enumerable: true, configurable: true
+});
+// outerHTML setter（docsify/框架用 outerHTML 替换节点）
+Object.defineProperty(Element.prototype, 'outerHTML', {
+    get: function() { return this.innerHTML || ''; },
+    set: function(v) {
+        // 简化：等同 innerHTML（爬虫够用）
+        this.innerHTML = v;
+    },
+    enumerable: true, configurable: true
+});
 undefined;
 "#;
 
