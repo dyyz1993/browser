@@ -699,7 +699,7 @@ fn run_scripts_quickjs(
     mut engine_box: Box<dyn crate::engine::JsEngine>,
 ) -> (crate::bridge::SharedTree, usize) {
     // downcast 到 QuickJsEngineWrapper（需要 &mut）
-    let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (&mut *engine_box)
+    let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (*engine_box)
         .as_any_mut()
         .downcast_mut::<crate::engine_quickjs::QuickJsEngineWrapper>()
         .expect("engine_name was quickjs but type mismatch");
@@ -784,6 +784,7 @@ fn get_all_shim_js(_base_url: &Option<String>) -> Vec<(&'static str, String)> {
         ("globals", QUICKJS_GLOBAL_SHIM.to_string()),
         ("element", QUICKJS_ELEMENT_SHIM.to_string()),
         ("document", QUICKJS_DOCUMENT_SHIM.to_string()),
+        ("xhr", QUICKJS_XHR_SHIM.to_string()),
     ]
 }
 
@@ -798,28 +799,133 @@ var top = globalThis;
 var parent = globalThis;
 
 // navigator
-window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US' };
+window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
 
-// setTimeout 桩（同步执行——QuickJS event loop 后续完善）
+// setTimeout（同步执行回调——QuickJS event loop 后续完善）
 var __timerSeq = 0;
-var __timerCb = {};
 window.setTimeout = function(cb, delay) {
     __timerSeq++;
-    __timerCb[__timerSeq] = cb;
+    try { cb(); } catch(e) { if (typeof __log === 'function') __log('[timer] ' + e.message); }
     return __timerSeq;
 };
-window.clearTimeout = function(id) { delete __timerCb[id]; };
-window.setInterval = function(cb, delay) { return window.setTimeout(cb, delay); };
-window.clearInterval = window.clearTimeout;
+window.clearTimeout = function(id) {};
+window.setInterval = function(cb, delay) {
+    __timerSeq++;
+    try { cb(); } catch(e) {}
+    return __timerSeq;
+};
+window.clearInterval = function(id) {};
+window.requestAnimationFrame = function(cb) { return window.setTimeout(cb, 0); };
+window.cancelAnimationFrame = function(id) {};
+
+// queueMicrotask
+window.queueMicrotask = function(cb) { Promise.resolve().then(cb); };
+
+// atob/btoa（Base64）
+window.atob = function(s) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var str = String(s).replace(/=+$/, '');
+    var out = '';
+    for (var i = 0; i < str.length; i += 4) {
+        var n = (chars.indexOf(str[i]) << 18) | (chars.indexOf(str[i+1]) << 12) |
+                ((str[i+2] ? chars.indexOf(str[i+2]) : 0) << 6) | (str[i+3] ? chars.indexOf(str[i+3]) : 0);
+        out += String.fromCharCode((n >> 16) & 255) + (str.length > i+2 ? String.fromCharCode((n >> 8) & 255) : '') + (str.length > i+3 ? String.fromCharCode(n & 255) : '');
+    }
+    return out;
+};
+window.btoa = function(s) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var out = '';
+    for (var i = 0; i < s.length; i += 3) {
+        var n = (s.charCodeAt(i) << 16) | ((i+1 < s.length ? s.charCodeAt(i+1) : 0) << 8) | (i+2 < s.length ? s.charCodeAt(i+2) : 0);
+        out += chars[(n >> 18) & 63] + chars[(n >> 12) & 63] + (i+1 < s.length ? chars[(n >> 6) & 63] : '=') + (i+2 < s.length ? chars[n & 63] : '=');
+    }
+    return out;
+};
+
+// crypto.getRandomValues（uuid 库需要）
+window.crypto = {
+    getRandomValues: function(arr) {
+        for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+        return arr;
+    }
+};
+
+// location 对象
+var __locHref = (typeof __locationHref === 'function') ? __locationHref() : 'about:blank';
+window.location = {
+    href: __locHref,
+    protocol: (__locHref.split('://')[0] || 'about') + ':',
+    host: ((__locHref.split('://')[1] || '').split('/')[0]) || '',
+    hostname: ((__locHref.split('://')[1] || '').split(':')[0].split('/')[0]) || '',
+    pathname: '/' + ((__locHref.split('://')[1] || '').split('/').slice(1).join('/')),
+    search: '', hash: '',
+    origin: (__locHref.split('://')[0] + '://' + (__locHref.split('://')[1] || '').split('/')[0]),
+    replace: function(u) { this.href = u; },
+    assign: function(u) { this.href = u; },
+    toString: function() { return this.href; }
+};
+
+// history API（docsify 路由需要 pushState/replaceState）
+window.history = {
+    length: 1,
+    state: null,
+    pushState: function(state, title, url) { this.state = state; if (url) window.location.href = url; },
+    replaceState: function(state, title, url) { this.state = state; },
+    back: function() {},
+    forward: function() {},
+    go: function(n) {},
+    scrollRestoration: 'auto'
+};
 
 // document 占位（完整 document 在 document shim 里填充）
 window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
 
-// __makeElement 工厂（Element 构造器在 element shim 里定义）
+// __makeElement 工厂
 window.__makeElement = function(nodeId) {
     if (typeof nodeId === 'number' && nodeId >= 0) return new Element(nodeId);
     return undefined;
 };
+
+// console（QuickJS 有原生 console，确保兼容）
+if (typeof console === 'undefined') {
+    window.console = { log: function(){}, error: function(){}, warn: function(){}, info: function(){} };
+}
+
+// performance API（cloudflare beacon / 框架性能检测用）
+window.performance = {
+    timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
+    now: function() { return Date.now(); },
+    getEntries: function() { return []; },
+    getEntriesByName: function() { return []; },
+    getEntriesByType: function() { return []; },
+    mark: function() {},
+    measure: function() {},
+};
+
+// MutationObserver（框架用，存回调但不触发）
+window.MutationObserver = function(cb) {
+    this.observe = function(target, opts) {};
+    this.disconnect = function() {};
+    this.takeRecords = function() { return []; };
+};
+
+// MatchMedia（CSS 媒体查询检测）
+window.matchMedia = function(query) {
+    return { matches: false, media: query, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){} };
+};
+
+// Event 构造器（提前定义，XHR shim 依赖它）
+if (typeof Event !== 'function') {
+    window.Event = function(type, opts) { this.type = type; this.target = null; this.currentTarget = null; };
+    window.Event.prototype.preventDefault = function() {};
+    window.Event.prototype.stopPropagation = function() {};
+}
+if (typeof CustomEvent !== 'function') {
+    window.CustomEvent = function(type, opts) { Event.call(this, type); this.detail = (opts && opts.detail) || null; };
+    window.CustomEvent.prototype = Object.create(window.Event.prototype);
+}
+
 undefined;
 "#;
 
@@ -898,11 +1004,14 @@ document.createElement = function(tag) {
     var id = __createEl(String(tag || 'div'));
     return __makeElement(id);
 };
+document.createElementNS = function(ns, tag) { return document.createElement(tag); };
 document.createTextNode = function(text) {
     var id = __createEl('__text__');
     __setText(id, String(text || ''));
     return __makeElement(id);
 };
+document.createDocumentFragment = function() { return document.createElement('div'); };
+document.createComment = function(text) { return document.createElement('div'); };
 document.getElementById = function(id) {
     var nodeId = __getElById(String(id));
     return (nodeId >= 0) ? __makeElement(nodeId) : null;
@@ -916,8 +1025,22 @@ document.querySelectorAll = function(sel) {
     if (!ids) return [];
     return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
 };
+document.getElementsByTagName = function(tag) {
+    return document.querySelectorAll(tag);
+};
+document.getElementsByClassName = function(cls) {
+    return document.querySelectorAll('.' + cls);
+};
 Object.defineProperty(document, 'body', {
     get: function() { return __makeElement(__getBody(0)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(document, 'documentElement', {
+    get: function() { return document.body; },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(document, 'head', {
+    get: function() { return document.body; },
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'title', {
@@ -925,8 +1048,119 @@ Object.defineProperty(document, 'title', {
     set: function(v) {},
     enumerable: true, configurable: true
 });
-document.addEventListener = function(type, cb) { /* no-op */ };
-document.dispatchEvent = function(ev) { /* no-op */ };
+Object.defineProperty(document, 'cookie', {
+    get: function() { return ''; },
+    set: function(v) {},
+    enumerable: true, configurable: true
+});
+Object.defineProperty(document, 'readyState', {
+    get: function() { return 'complete'; },
+    enumerable: true, configurable: true
+});
+document.addEventListener = function(type, cb) {
+    if (!this.__listeners) this.__listeners = {};
+    if (!this.__listeners[type]) this.__listeners[type] = [];
+    this.__listeners[type].push(cb);
+};
+document.removeEventListener = function(type, cb) {};
+document.dispatchEvent = function(ev) {
+    if (this.__listeners && this.__listeners[ev && ev.type]) {
+        var cbs = this.__listeners[ev.type];
+        for (var i = 0; i < cbs.length; i++) {
+            try { cbs[i](ev); } catch(e) {}
+        }
+    }
+};
+undefined;
+"#;
+
+/// M66-B: QuickJS XHR + Event + fetch shim（docsify 核心依赖）。
+#[cfg(feature = "quickjs")]
+const QUICKJS_XHR_SHIM: &str = r#"
+// Event 构造器
+function Event(type, opts) { this.type = type; this.target = null; this.currentTarget = null; }
+Event.prototype.preventDefault = function() {};
+Event.prototype.stopPropagation = function() {};
+function CustomEvent(type, opts) {
+    Event.call(this, type);
+    this.detail = (opts && opts.detail) || null;
+}
+CustomEvent.prototype = Object.create(Event.prototype);
+
+// XMLHttpRequest（同步 fetch 版——docsify 用它加载 markdown）
+var __xhrSeq = 0;
+function XMLHttpRequest() {
+    __xhrSeq++;
+    this.__id = __xhrSeq;
+    this.readyState = 0;
+    this.status = 0;
+    this.responseText = '';
+    this.response = '';
+    this.__listeners = {};
+}
+XMLHttpRequest.prototype.open = function(method, url) {
+    this.__url = url;
+    this.__method = method || 'GET';
+    this.readyState = 1;
+};
+XMLHttpRequest.prototype.setRequestHeader = function(key, val) {};
+XMLHttpRequest.prototype.send = function(body) {
+    // 同步 fetch（和 boa 版本一样的模式）
+    var raw = (typeof __fetchSync === 'function') ? __fetchSync(this.__url) : null;
+    if (raw) {
+        this.responseText = raw;
+        this.response = raw;
+        this.status = 200;
+    } else {
+        this.status = 0;
+    }
+    this.readyState = 4;
+    var self = this;
+    // 同步触发 onload
+    var ev = new Event('load');
+    ev.target = self;
+    ev.currentTarget = self;
+    if (self.__listeners['load']) {
+        for (var i = 0; i < self.__listeners['load'].length; i++) {
+            try { self.__listeners['load'][i].call(self, ev); } catch(e) {
+                if (typeof __log === 'function') __log('[xhr] onload threw: ' + e.message);
+            }
+        }
+    }
+    if (typeof self.onload === 'function') {
+        try { self.onload.call(self, ev); } catch(e) {}
+    }
+};
+XMLHttpRequest.prototype.abort = function() {};
+XMLHttpRequest.prototype.getResponseHeader = function(name) { return null; };
+XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ''; };
+XMLHttpRequest.prototype.addEventListener = function(type, cb) {
+    if (!this.__listeners[type]) this.__listeners[type] = [];
+    this.__listeners[type].push(cb);
+};
+XMLHttpRequest.prototype.removeEventListener = function(type, cb) {};
+XMLHttpRequest.prototype.removeEventListener = function(type, cb) {};
+
+// fetch（Promise-based，内部同步 fetch）
+window.fetch = function(input, options) {
+    var url = (typeof input === 'string') ? input : (input && input.url) || String(input);
+    return new Promise(function(resolve, reject) {
+        var raw = (typeof __fetchSync === 'function') ? __fetchSync(url) : null;
+        if (raw === null || raw === undefined) {
+            reject(new TypeError('Failed to fetch ' + url));
+        } else {
+            resolve({
+                ok: true, status: 200, statusText: 'OK',
+                url: url,
+                text: function() { return Promise.resolve(raw); },
+                json: function() { return Promise.resolve(JSON.parse(raw)); },
+                headers: { get: function(k) { return null; } },
+                clone: function() { return this; }
+            });
+        }
+    });
+};
+
 undefined;
 "#;
 

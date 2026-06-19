@@ -64,7 +64,7 @@ impl EngineKind {
                     eprintln!("[js-runtime] using QuickJS engine");
                     // QuickJS 引擎不实现 JsEngine::ctx_mut()——它走独立的执行路径。
                     // scripts.rs 通过 engine_name() == "quickjs" 检测后走 QuickJS 专用代码。
-                    return Box::new(crate::engine_quickjs::QuickJsEngineWrapper::new(esm_origin));
+                    Box::new(crate::engine_quickjs::QuickJsEngineWrapper::new(esm_origin))
                 }
                 #[cfg(not(feature = "quickjs"))]
                 {

@@ -2417,6 +2417,12 @@ mod quickjs_bridge_helpers {
 // ===========================================================================
 
 #[cfg(feature = "quickjs")]
+#[allow(
+    clippy::needless_borrow,
+    unused_variables,
+    clippy::uninlined_format_args,
+    clippy::duplicated_attributes
+)]
 pub mod qjs_bridge {
     use super::*;
 

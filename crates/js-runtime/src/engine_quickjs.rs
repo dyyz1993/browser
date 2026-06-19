@@ -4,8 +4,6 @@
 //! 5400 行 JS shim 完全复用（和 boa eval 同样的 JS 字符串）。
 //! Rust bridge 函数用 Function::new 注册，调同样的 thread_local 后端。
 
-#![cfg(feature = "quickjs")]
-
 use rquickjs::function::Rest;
 use rquickjs::{Context, Ctx, Function, Runtime, Value};
 
@@ -135,7 +133,7 @@ impl QuickJsEngine {
                 let _ = g.set("__storageKey", Function::new(ctx.clone(), |_: f64| Option::<String>::None).unwrap());
 
                 // === Location ===
-                let _ = g.set("__locationHref", Function::new(ctx.clone(), || bridge::qjs_bridge::location_href()).unwrap());
+                let _ = g.set("__locationHref", Function::new(ctx.clone(), bridge::qjs_bridge::location_href).unwrap());
                 let _ = g.set("__locationReplace", Function::new(ctx.clone(), |_: String| {}).unwrap());
                 let _ = g.set("__locationAssign", Function::new(ctx.clone(), |_: String| {}).unwrap());
 
@@ -197,12 +195,12 @@ impl QuickJsEngine {
 
     /// 手动触发 GC。
     pub fn gc(&mut self) {
-        let _ = self.rt.run_gc();
+        self.rt.run_gc();
     }
 }
 
 impl Drop for QuickJsEngine {
     fn drop(&mut self) {
-        let _ = self.rt.run_gc();
+        self.rt.run_gc();
     }
 }
