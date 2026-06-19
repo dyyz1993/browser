@@ -1460,7 +1460,6 @@ XMLHttpRequest.prototype.open = function(method, url) {
 };
 XMLHttpRequest.prototype.setRequestHeader = function(key, val) {};
 XMLHttpRequest.prototype.send = function(body) {
-    // 同步 fetch（和 boa 版本一样的模式）
     var raw = (typeof __fetchSync === 'function') ? __fetchSync(this.__url) : null;
     if (typeof __log === 'function') __log('[xhr] send ' + this.__url + ' → ' + (raw ? raw.length + ' bytes' : 'null'));
     if (raw) {
@@ -1472,11 +1471,17 @@ XMLHttpRequest.prototype.send = function(body) {
     }
     this.readyState = 4;
     var self = this;
-    // 同步触发 onload
+    // 触发 onreadystatechange（docsify marked 用它）
+    if (typeof self.onreadystatechange === 'function') {
+        try { self.onreadystatechange.call(self); } catch(e) {
+            if (typeof __log === 'function') __log('[xhr] rsc threw: ' + e.message);
+        }
+    }
+    // 触发 onload
     var ev = new Event('load');
     ev.target = self;
     ev.currentTarget = self;
-    if (self.__listeners['load']) {
+    if (self.__listeners && self.__listeners['load']) {
         for (var i = 0; i < self.__listeners['load'].length; i++) {
             try { self.__listeners['load'][i].call(self, ev); } catch(e) {
                 if (typeof __log === 'function') __log('[xhr] onload threw: ' + e.message);
