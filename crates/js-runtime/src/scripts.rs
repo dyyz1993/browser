@@ -903,6 +903,66 @@ window.performance = {
     measure: function() {},
 };
 
+// localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
+var __localStorage = {};
+window.localStorage = {
+    getItem: function(k) { return (k in __localStorage) ? __localStorage[k] : null; },
+    setItem: function(k, v) { __localStorage[k] = String(v); },
+    removeItem: function(k) { delete __localStorage[k]; },
+    clear: function() { __localStorage = {}; },
+    key: function(i) { var keys = Object.keys(__localStorage); return keys[i] || null; },
+    get length() { return Object.keys(__localStorage).length; }
+};
+window.sessionStorage = {
+    getItem: function(k) { return null; },
+    setItem: function(k, v) {},
+    removeItem: function(k) {},
+    clear: function() {},
+    key: function(i) { return null; },
+    get length() { return 0; }
+};
+
+// URL 构造器（简化版——解析 protocol/host/pathname/search/hash）
+window.URL = function(input, base) {
+    input = String(input);
+    if (base && input.indexOf('://') < 0) {
+        // 相对 URL 解析
+        var baseURL = String(base);
+        if (input.startsWith('./')) input = baseURL.replace(/[^/]*$/, '') + input.slice(2);
+        else if (input.startsWith('/')) input = baseURL.replace(/(://[^/]*)?.*/, '$1') + input;
+        else input = baseURL.replace(/[^/]*$/, '') + input;
+    }
+    this.href = input;
+    this.protocol = (input.split('://')[0] || '') + ':';
+    this.host = (input.split('://')[1] || '').split('/')[0] || '';
+    this.hostname = this.host.split(':')[0];
+    this.port = (this.host.split(':')[1] || '');
+    this.pathname = '/' + ((input.split('://')[1] || '').split('/').slice(1).join('').split('?')[0].split('#')[0]);
+    this.search = (input.split('?')[1] || '').split('#')[0];
+    this.search = this.search ? ('?' + this.search) : '';
+    this.hash = input.indexOf('#') >= 0 ? ('#' + input.split('#')[1]) : '';
+    this.origin = this.protocol + '//' + this.host;
+    this.toString = function() { return this.href; };
+    this.toJSON = function() { return this.href; };
+};
+
+// URLSearchParams（简化）
+window.URLSearchParams = function(init) {
+    var params = {};
+    if (typeof init === 'string') {
+        init.replace(/^\?/, '').split('&').forEach(function(p) {
+            var kv = p.split('=');
+            params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || '');
+        });
+    }
+    this.get = function(k) { return (k in params) ? params[k] : null; };
+    this.set = function(k, v) { params[k] = v; };
+    this.has = function(k) { return k in params; };
+    this.toString = function() {
+        return Object.keys(params).map(function(k) { return k + '=' + params[k]; }).join('&');
+    };
+};
+
 // MutationObserver（框架用，存回调但不触发）
 window.MutationObserver = function(cb) {
     this.observe = function(target, opts) {};
