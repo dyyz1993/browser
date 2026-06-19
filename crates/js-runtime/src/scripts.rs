@@ -787,8 +787,6 @@ fn run_scripts_quickjs(
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
     // 直到 pending timer 清空或超时（8s 上限，和 boa 一致）。
-    // 每轮 tick 之间 sleep 20ms（模拟 50fps 的 event loop 节奏），
-    // 让 Promise microtask 充分 drain。
     const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
     const EL_TICK_MS: u64 = 20;
     let el_start = std::time::Instant::now();
@@ -1186,13 +1184,12 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
         return out;
     },
     set: function(v) {
-        // M66: __parseHtml（html5ever）解析 HTML 创建真实 DOM 子节点。
         var s = String(v);
         if (typeof __parseHtml === 'function' && s.length > 0) {
             __parseHtml(this.__nodeId, s);
+        } else {
+            __setText(this.__nodeId, s);
         }
-        // 兜底：设 textContent（extractor 能读到）
-        __setText(this.__nodeId, s.replace(/<[^>]+>/g, ' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim());
     },
     enumerable: true, configurable: true
 });
