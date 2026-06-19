@@ -785,7 +785,6 @@ fn run_scripts_quickjs(
     // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
     let _ = engine.eval_i32("__drainDueTimers()");
 
-    // M66: QuickJS event loop —— 异步 drain timer 回调。
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
     // 直到 pending timer 清空或超时（8s 上限，和 boa 一致）。
     // 每轮 tick 之间 sleep 20ms（模拟 50fps 的 event loop 节奏），
