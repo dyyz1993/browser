@@ -134,6 +134,10 @@ enum Cmd {
         /// Render width (affects text wrapping for text/markdown).
         #[arg(long, default_value_t = 80)]
         width: usize,
+        /// M65: Profile mode——报告各阶段 RSS 内存 + 耗时到 stderr。
+        /// 阶段：fetch HTML / parse / JS eval / event loop / serialize / total
+        #[arg(long)]
+        profile: bool,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
@@ -395,12 +399,60 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             no_js,
             json,
             width: _width,
+            profile,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
             let tree = parse_html(&html);
+            // M65: profile 打点
+            let rss = || -> u64 {
+                // macOS: 用 mach_task_basic_info 拿 RSS（不依赖 /proc）
+                #[cfg(target_os = "macos")]
+                {
+                    use std::mem;
+                    let mut info: libc::mach_task_basic_info_data_t = unsafe { mem::zeroed() };
+                    let mut count = (mem::size_of_val(&info) / mem::size_of::<libc::natural_t>())
+                        as libc::mach_msg_type_number_t;
+                    unsafe {
+                        let kr = libc::task_info(
+                            task_self(),
+                            libc::MACH_TASK_BASIC_INFO,
+                            &mut info as *mut _ as libc::task_info_t,
+                            &mut count,
+                        );
+                        if kr == libc::KERN_SUCCESS {
+                            return info.resident_size as u64 / 1024 / 1024;
+                        }
+                    }
+                    0
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Linux: /proc/self/status VmRSS
+                    std::fs::read_to_string("/proc/self/status")
+                        .ok()
+                        .and_then(|s| {
+                            s.lines().find(|l| l.starts_with("VmRSS:")).and_then(|l| {
+                                l.split_whitespace()
+                                    .nth(1)
+                                    .and_then(|n| n.parse::<u64>().ok())
+                            })
+                        })
+                        .map(|kb| kb / 1024)
+                        .unwrap_or(0)
+                }
+            };
+            if profile {
+                eprintln!(
+                    "[profile] {:<20} {:>6}MB  {:>6.2}s",
+                    "fetch+parse",
+                    rss(),
+                    fetch_start.elapsed().as_secs_f64()
+                );
+            }
+            let js_start = std::time::Instant::now();
             let shared: browser_js_runtime::SharedTree = if no_js {
                 use std::cell::RefCell;
                 use std::rc::Rc;
@@ -440,6 +492,15 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     }
                 }
             };
+            if profile {
+                eprintln!(
+                    "[profile] {:<20} {:>6}MB  {:>6.2}s",
+                    "JS eval+eventloop",
+                    rss(),
+                    js_start.elapsed().as_secs_f64()
+                );
+            }
+            let extract_start = std::time::Instant::now();
             let out_format = browser_extractor::OutputFormat::parse(&format)
                 .map_err(|e| anyhow!("invalid --format: {e}"))?;
             let opts = browser_extractor::FetchOptions {
@@ -449,6 +510,21 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             };
             let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
                 .map_err(|e| anyhow!("extract failed: {e}"))?;
+            if profile {
+                eprintln!(
+                    "[profile] {:<20} {:>6}MB  {:>6.2}s",
+                    "extract+serialize",
+                    rss(),
+                    extract_start.elapsed().as_secs_f64()
+                );
+                eprintln!(
+                    "[profile] {:<20} {:>6}MB  {:>6.2}s",
+                    "TOTAL",
+                    rss(),
+                    fetch_start.elapsed().as_secs_f64()
+                );
+                eprintln!("[profile] DOM nodes: {}", shared.borrow().len());
+            }
             // M59: 启发式提示——重 JS 站 boa 渲染慢/失败时，--no-js 取 SSR 兜底常更快。
             if !no_js {
                 let content_len = result.content.trim().len();
@@ -823,6 +899,13 @@ fn extract_style_text(tree: &browser_dom::Tree) -> String {
         }
     }
     buf
+}
+
+/// M65: 获取当前进程的 mach task self port（封装 deprecated + unsafe）。
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+unsafe fn task_self() -> libc::mach_port_t {
+    libc::mach_task_self()
 }
 
 fn main() -> ExitCode {

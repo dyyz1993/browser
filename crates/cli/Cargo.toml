@@ -32,6 +32,7 @@ browser-extractor = { path = "../extractor" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 clap = { version = "4.5", features = ["derive"] }
 anyhow = { workspace = true }
+libc = "0.2"
 # M-cls.1: 内存自愈护栏。把危险的 JS eval 放进子进程，子进程启动即
 # setrlimit(RLIMIT_AS) 设硬上限，超限内核直接 SIGKILL 子进程，父进程
 # 把它当"JS 失败"优雅降级（走 CSR 兜底）。杜绝单页 SPA 把宿主吃满 40GB。

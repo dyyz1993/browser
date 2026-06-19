@@ -647,6 +647,10 @@ pub fn execute_scripts_with_base(
         );
     }
     let _ = t1;
+    // M65: JS eval + event loop 完成后，手动触发 GC 释放 AST/字节码/临时对象。
+    // 插桩数据显示 100% 的内存增长在 JS eval 阶段（boa JS heap）。
+    // force_collect 释放 eval 后不再引用的编译产物。
+    boa_engine::gc::force_collect();
     executed
 }
 

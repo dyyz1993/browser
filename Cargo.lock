@@ -472,6 +472,7 @@ dependencies = [
  "clap",
  "fontdue",
  "image",
+ "libc",
  "png 0.17.16",
  "predicates",
  "rlimit",
