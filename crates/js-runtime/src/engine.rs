@@ -18,7 +18,7 @@ use boa_engine::Context;
 ///
 /// boa 后端直接暴露 Context（bridge.rs 直接操作）。
 /// QuickJS 后端（M66-B）会重构为不依赖此 trait 的独立实现路径。
-pub trait JsEngine {
+pub trait JsEngine: std::any::Any {
     /// 获取底层 boa Context（bridge 函数注册 + eval 需要）。
     /// 仅 boa 后端实现。QuickJS 后端不实现此方法（调用时 panic）。
     fn ctx_mut(&mut self) -> &mut Context;
@@ -30,6 +30,12 @@ pub trait JsEngine {
 
     /// 引擎名称（用于 --profile 日志）。
     fn name(&self) -> &'static str;
+
+    /// 用于 downcast（QuickJS 专用路径检测）。
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// 用于 mutable downcast。
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// M66: 默认引擎选择器。根据 CLI flag 创建对应引擎。
@@ -53,9 +59,18 @@ impl EngineKind {
         match self {
             Self::Boa => Box::new(crate::engine_boa::BoaEngine::new(esm_origin)),
             Self::QuickJs => {
-                // M66-B: QuickJS 后端尚未实现，回退到 boa。
-                eprintln!("[js-runtime] QuickJS engine not yet implemented, falling back to boa");
-                Box::new(crate::engine_boa::BoaEngine::new(esm_origin))
+                #[cfg(feature = "quickjs")]
+                {
+                    eprintln!("[js-runtime] using QuickJS engine");
+                    // QuickJS 引擎不实现 JsEngine::ctx_mut()——它走独立的执行路径。
+                    // scripts.rs 通过 engine_name() == "quickjs" 检测后走 QuickJS 专用代码。
+                    return Box::new(crate::engine_quickjs::QuickJsEngineWrapper::new(esm_origin));
+                }
+                #[cfg(not(feature = "quickjs"))]
+                {
+                    eprintln!("[js-runtime] QuickJS feature not enabled, falling back to boa");
+                    Box::new(crate::engine_boa::BoaEngine::new(esm_origin))
+                }
             }
         }
     }

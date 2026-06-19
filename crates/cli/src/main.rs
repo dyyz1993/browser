@@ -138,6 +138,9 @@ enum Cmd {
         /// 阶段：fetch HTML / parse / JS eval / event loop / serialize / total
         #[arg(long)]
         profile: bool,
+        /// M66: JS engine selection (boa | quickjs). Default: boa.
+        #[arg(long, default_value = "boa")]
+        js_engine: String,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
@@ -400,6 +403,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             json,
             width: _width,
             profile,
+            js_engine,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
@@ -458,39 +462,48 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 use std::rc::Rc;
                 Rc::new(RefCell::new(tree))
             } else {
-                // M62: 用 catch_unwind 防 boa panic 杀死进程。
-                // 公网未知站点的 JS 可能触发 boa 内部 bug（如 index out of bounds），
-                // panic 后优雅降级为静态 tree（等同 --no-js）。
                 use std::panic::AssertUnwindSafe;
                 let base_for_panic = base.clone();
-                let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let engine_kind = browser_js_runtime::EngineKind::parse_str(&js_engine);
+                #[cfg(feature = "quickjs")]
+                let (shared, executed) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    browser_js_runtime::run_scripts_with_base_engine(
+                        tree,
+                        base_for_panic,
+                        &engine_kind,
+                    )
+                }))
+                .unwrap_or_else(|payload| {
+                    let msg = payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    eprintln!("[fetch] JS engine panicked: {msg}");
+                    let static_tree = parse_html(&html);
+                    use std::cell::RefCell;
+                    use std::rc::Rc;
+                    (Rc::new(RefCell::new(static_tree)), 0)
+                });
+                #[cfg(not(feature = "quickjs"))]
+                let (shared, executed) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    let _ = &engine_kind;
                     browser_js_runtime::run_scripts_with_base(tree, base_for_panic)
-                }));
-                match result {
-                    Ok((shared, executed)) => {
-                        eprintln!("[browser] {executed} script(s) executed");
-                        shared
-                    }
-                    Err(panic_payload) => {
-                        let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
-                            s.clone()
-                        } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                            (*s).to_string()
-                        } else {
-                            "unknown panic".to_string()
-                        };
-                        eprintln!(
-                            "[fetch] JS engine panicked (boa bug), falling back to static DOM: {msg}"
-                        );
-                        eprintln!(
-                            "[hint] this site triggers a boa engine bug; use --no-js for reliable extraction"
-                        );
-                        let static_tree = parse_html(&html);
-                        use std::cell::RefCell;
-                        use std::rc::Rc;
-                        Rc::new(RefCell::new(static_tree))
-                    }
-                }
+                }))
+                .unwrap_or_else(|payload| {
+                    let msg = payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    eprintln!("[fetch] JS engine panicked: {msg}");
+                    let static_tree = parse_html(&html);
+                    use std::cell::RefCell;
+                    use std::rc::Rc;
+                    (Rc::new(RefCell::new(static_tree)), 0)
+                });
+                eprintln!("[browser] {executed} script(s) executed");
+                shared
             };
             if profile {
                 eprintln!(

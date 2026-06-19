@@ -2410,6 +2410,199 @@ mod quickjs_bridge_helpers {
     // 暂时留空，feature=quickjs 时编译 engine_quickjs.rs 会引用这些。
 }
 
+// ===========================================================================
+// M66-B: QuickJS bridge 公开函数。
+// 复用 bridge.rs 的私有 helper（with_tree/find_by_selector 等），
+// 但接受 Rust 原生类型（f64/String/Option）而非 boa JsValue。
+// ===========================================================================
+
+#[cfg(feature = "quickjs")]
+pub mod qjs_bridge {
+    use super::*;
+
+    /// log(msg) —— JS 日志输出。
+    pub fn log(msg: String) {
+        eprintln!("[js] {msg}");
+    }
+
+    /// createEl(tag) -> NodeId —— 创建元素，挂到 body。
+    pub fn create_el(tag: String) -> f64 {
+        let tag = if tag.is_empty() {
+            "div".to_string()
+        } else {
+            tag
+        };
+        with_tree(|t| {
+            let parent = find_first_element(t, "body").unwrap_or_else(|| t.root());
+            t.insert(
+                Some(parent),
+                NodeData::Element {
+                    tag,
+                    attrs: Vec::new(),
+                },
+            ) as f64
+        })
+    }
+
+    /// appendChild(parent, child) —— 移动子树。
+    pub fn append_child(parent: f64, child: f64) {
+        with_tree(|t| move_subtree(t, parent as usize, child as usize));
+    }
+
+    /// insertBefore(parent, child, ref)。
+    pub fn insert_before(parent: f64, child: f64, reference: f64) {
+        with_tree(|t| {
+            insert_before_inner(t, parent as usize, child as usize, Some(reference as usize))
+        });
+    }
+
+    /// removeChild(parent, child)。
+    pub fn remove_child(parent: f64, child: f64) {
+        with_tree(|t| {
+            // 简单实现：从 parent 的 children 中移除 child
+            // Tree 没有直接 remove，用 move 到 root 的方式
+            let root = t.root();
+            move_subtree(t, root, child as usize);
+        });
+    }
+
+    /// setText(id, text) —— 设置文本内容。
+    pub fn set_text(id: f64, text: String) {
+        with_tree(|t| set_text_inner(t, id as usize, &text));
+    }
+
+    /// getText(id) -> String —— 获取文本内容。
+    pub fn get_text(id: f64) -> String {
+        with_tree(|t| collect_text(t, id as usize))
+    }
+
+    /// getTag(id) -> String —— 获取标签名。
+    pub fn get_tag(id: f64) -> String {
+        with_tree(|t| match t.data(id as usize) {
+            NodeData::Element { tag, .. } => tag.clone(),
+            _ => String::new(),
+        })
+    }
+
+    /// getAttr(id, key) -> Option<String>。
+    pub fn get_attr(id: f64, key: String) -> Option<String> {
+        with_tree(|t| {
+            if let NodeData::Element { attrs, .. } = t.data(id as usize) {
+                attrs
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(&key))
+                    .map(|(_, v)| v.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// setAttr(id, key, val)。
+    pub fn set_attr(id: f64, key: String, val: String) {
+        with_tree(|t| set_attr_inner(t, id as usize, &key, &val));
+    }
+
+    /// removeAttr(id, key)。
+    pub fn remove_attr(id: f64, key: String) {
+        with_tree(|t| remove_attr_inner(t, id as usize, &key));
+    }
+
+    /// getElById(id) -> NodeId（-1 = 未找到）。
+    pub fn get_el_by_id(id: String) -> f64 {
+        with_tree(|t| find_by_id(t, &id).map(|n| n as f64).unwrap_or(-1.0))
+    }
+
+    /// qs(selector) -> NodeId（-1 = 未找到）。
+    pub fn qs(selector: String) -> f64 {
+        with_tree(|t| {
+            find_by_selector(t, &selector)
+                .map(|n| n as f64)
+                .unwrap_or(-1.0)
+        })
+    }
+
+    /// qsAll(selector) -> 逗号分隔 NodeId 字符串。
+    pub fn qs_all(selector: String) -> String {
+        with_tree(|t| {
+            find_all_by_selector(t, &selector)
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+    }
+
+    /// getBody() -> NodeId。
+    pub fn get_body() -> f64 {
+        with_tree(|t| {
+            find_first_element(t, "body")
+                .map(|n| n as f64)
+                .unwrap_or(-1.0)
+        })
+    }
+
+    /// setTitle(title)。
+    pub fn set_title(title: String) {
+        with_tree(|t| set_title_text(t, &title));
+    }
+
+    /// getParent(id) -> NodeId。
+    pub fn get_parent(id: f64) -> f64 {
+        with_tree(|t| t.get(id as usize).parent.map(|n| n as f64).unwrap_or(-1.0))
+    }
+
+    /// children(id) -> 逗号分隔 NodeId 字符串。
+    pub fn children(id: f64) -> String {
+        with_tree(|t| {
+            t.children_of(id as usize)
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+    }
+
+    /// fetchSync(url) -> Option<String> —— 同步 HTTP fetch。
+    pub fn fetch_sync(url: String) -> Option<String> {
+        let resolved = resolve_url(&url);
+        super::fetch_sync(&resolved).ok()
+    }
+
+    /// fetchSyncMethod(url, method, body, contentType) -> Option<String>。
+    pub fn fetch_sync_method(
+        url: String,
+        method: String,
+        body: Option<String>,
+        ct: Option<String>,
+    ) -> Option<String> {
+        let resolved = resolve_url(&url);
+        super::fetch_sync_with_method(&resolved, &method, body.as_deref(), ct.as_deref())
+            .ok()
+            .map(|(_, b)| b)
+    }
+
+    /// storageGet(key) -> Option<String>。
+    pub fn storage_get(key: String) -> Option<String> {
+        with_storage(|h| browser_storage::storage_get(&h, &key))
+    }
+
+    /// storageSet(key, val)。
+    pub fn storage_set(key: String, val: String) {
+        with_storage(|h| browser_storage::storage_set(&h, &key, &val));
+    }
+
+    /// storageRemove(key)。
+    pub fn storage_remove(key: String) {
+        with_storage(|h| browser_storage::storage_remove(&h, &key));
+    }
+
+    /// locationHref() -> String。
+    pub fn location_href() -> String {
+        with_navigation(|h| browser_navigation::current_url(&h))
+    }
+}
+
 #[cfg(test)]
 mod m7_dom_api_tests {
     use super::*;

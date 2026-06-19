@@ -11,6 +11,7 @@ mod compat_shim;
 pub mod document_shim;
 pub mod element_shim;
 pub mod engine;
+pub use engine::{EngineKind, JsEngine};
 pub mod engine_boa;
 #[cfg(feature = "quickjs")]
 pub mod engine_quickjs;
@@ -40,7 +41,7 @@ pub use navigation_shim::install_navigation_globals;
 pub use runtime::JsRuntime;
 pub use scripts::{
     eval_in_tree, execute_scripts, execute_scripts_with_base, extract_scripts, run_scripts,
-    run_scripts_with_base,
+    run_scripts_with_base, run_scripts_with_base_engine,
 };
 pub use spa_fallback::try_csr_fallback;
 pub use storage_shim::install_storage_globals;

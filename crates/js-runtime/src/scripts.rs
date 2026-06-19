@@ -690,6 +690,246 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
 }
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
+/// M66-B: QuickJS 专用执行路径。
+/// 安装 bridge（已在 engine 内部完成）+ JS shim + eval 脚本 + event loop。
+#[cfg(feature = "quickjs")]
+fn run_scripts_quickjs(
+    shared: crate::bridge::SharedTree,
+    base_url: Option<String>,
+    mut engine_box: Box<dyn crate::engine::JsEngine>,
+) -> (crate::bridge::SharedTree, usize) {
+    // downcast 到 QuickJsEngineWrapper（需要 &mut）
+    let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (&mut *engine_box)
+        .as_any_mut()
+        .downcast_mut::<crate::engine_quickjs::QuickJsEngineWrapper>()
+        .expect("engine_name was quickjs but type mismatch");
+    let engine = wrapper.engine();
+
+    // 安装 thread_local DOM 后端
+    let _guard = crate::bridge::install_shared_with_base(shared.clone(), base_url.clone());
+    let storage = browser_storage::new_storage();
+    crate::bridge::install_storage(storage);
+    let initial_url = base_url
+        .clone()
+        .unwrap_or_else(|| "about:blank".to_string());
+    let nav = browser_navigation::new_navigation(&initial_url);
+    crate::bridge::install_navigation(nav);
+    crate::bridge::ensure_cookie_jar();
+
+    let mut executed = 0;
+
+    // 安装 JS shim（复用 boa 版本的 JS 字符串——完全引擎无关）
+    // 每个 shim 是一段 JS 字符串，QuickJS eval 同样的内容。
+    let shims = get_all_shim_js(&base_url);
+    for (name, js) in &shims {
+        if let Err(e) = engine.eval(js) {
+            eprintln!("[js-runtime] QuickJS shim '{name}' install failed: {e}");
+        }
+    }
+
+    // 提取并执行页面脚本
+    let scripts = {
+        let borrowed = shared.borrow();
+        extract_script_entries(&borrowed)
+    };
+    for script in &scripts {
+        let code = match script {
+            ScriptEntry::Inline(code) => Some(code.clone()),
+            ScriptEntry::External(src) => match resolve_script_url(src, base_url.as_deref()) {
+                Some(url) => match fetch_external_script(&url) {
+                    Ok(code) => Some(code),
+                    Err(e) => {
+                        eprintln!("[js-runtime] QuickJS external fetch failed: {url}: {e}");
+                        None
+                    }
+                },
+                None => None,
+            },
+            ScriptEntry::ExternalModule(_) | ScriptEntry::InlineModule(_) => {
+                // QuickJS ESM 支持待实现（rquickjs Module API）
+                eprintln!("[js-runtime] QuickJS ESM modules not yet supported, skipping");
+                None
+            }
+        };
+        if let Some(code) = code {
+            let wrapped = wrap_script(&code, "quickjs-script");
+            match engine.eval(&wrapped) {
+                Ok(_) => executed += 1,
+                Err(e) => {
+                    eprintln!("[js-runtime] QuickJS script eval error: {e}");
+                }
+            }
+        }
+    }
+
+    // dispatch DOMContentLoaded/load
+    let _ = engine.eval(
+        r#"try {
+            if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
+                document.dispatchEvent({type:'DOMContentLoaded'});
+                document.dispatchEvent({type:'load'});
+            }
+        } catch(e) {}"#,
+    );
+
+    (shared, executed)
+}
+
+/// M66-B: 获取所有 JS shim 的 JS 字符串（引擎无关）。
+/// 最小版本——只包含 QuickJS 验证所需的核心 shim。
+/// 后续需要从 boa 的 shim 模块提取完整 JS 字符串。
+#[cfg(feature = "quickjs")]
+fn get_all_shim_js(_base_url: &Option<String>) -> Vec<(&'static str, String)> {
+    vec![
+        ("globals", QUICKJS_GLOBAL_SHIM.to_string()),
+        ("element", QUICKJS_ELEMENT_SHIM.to_string()),
+        ("document", QUICKJS_DOCUMENT_SHIM.to_string()),
+    ]
+}
+
+/// M66-B: QuickJS 最小全局 shim（window/document/navigator/setTimeout 桩）。
+/// 这是验证用的最小集——后续替换为 boa 的完整 5400 行 shim。
+#[cfg(feature = "quickjs")]
+const QUICKJS_GLOBAL_SHIM: &str = r#"
+// window 全局对象
+var window = globalThis;
+var self = globalThis;
+var top = globalThis;
+var parent = globalThis;
+
+// navigator
+window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US' };
+
+// setTimeout 桩（同步执行——QuickJS event loop 后续完善）
+var __timerSeq = 0;
+var __timerCb = {};
+window.setTimeout = function(cb, delay) {
+    __timerSeq++;
+    __timerCb[__timerSeq] = cb;
+    return __timerSeq;
+};
+window.clearTimeout = function(id) { delete __timerCb[id]; };
+window.setInterval = function(cb, delay) { return window.setTimeout(cb, delay); };
+window.clearInterval = window.clearTimeout;
+
+// document 占位（完整 document 在 document shim 里填充）
+window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
+
+// __makeElement 工厂（Element 构造器在 element shim 里定义）
+window.__makeElement = function(nodeId) {
+    if (typeof nodeId === 'number' && nodeId >= 0) return new Element(nodeId);
+    return undefined;
+};
+undefined;
+"#;
+
+/// M66-B: QuickJS Element shim（和 boa element_shim 的核心逻辑相同）。
+#[cfg(feature = "quickjs")]
+const QUICKJS_ELEMENT_SHIM: &str = r#"
+function Element(nodeId) { this.__nodeId = nodeId; }
+Element.prototype.getAttribute = function(key) {
+    var v = __getAttr(this.__nodeId, key);
+    return (v === null || v === undefined) ? null : String(v);
+};
+Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); };
+Element.prototype.appendChild = function(child) {
+    if (child && typeof child.__nodeId === 'number') __appendChild(this.__nodeId, child.__nodeId);
+    return child;
+};
+Element.prototype.append = function() {
+    for (var i = 0; i < arguments.length; i++) {
+        var n = arguments[i];
+        if (n === null || n === undefined) continue;
+        if (typeof n === 'string') {
+            var tn = __createEl('__text__');
+            __setText(tn, n);
+            __appendChild(this.__nodeId, tn);
+        } else if (typeof n.__nodeId === 'number') {
+            __appendChild(this.__nodeId, n.__nodeId);
+        }
+    }
+};
+Element.prototype.remove = function() {};
+Element.prototype.addEventListener = function(type, cb) {
+    if (cb === null || cb === undefined) return;
+    if (!this.__listeners) this.__listeners = {};
+    if (!this.__listeners[type]) this.__listeners[type] = [];
+    this.__listeners[type].push(cb);
+};
+Element.prototype.cloneNode = function(deep) {
+    var copy = __makeElement(__createEl(String(__getTag(this.__nodeId) || 'div')));
+    if (!copy) return null;
+    return copy;
+};
+Object.defineProperty(Element.prototype, 'tagName', {
+    get: function() { return __getTag(this.__nodeId); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'textContent', {
+    get: function() { return __getText(this.__nodeId); },
+    set: function(v) { __setText(this.__nodeId, String(v)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'innerHTML', {
+    get: function() { return __getAttr(this.__nodeId, 'innerHTML') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'innerHTML', String(v)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'id', {
+    get: function() { return __getAttr(this.__nodeId, 'id') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'id', String(v)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'children', {
+    get: function() {
+        var cs = __children(this.__nodeId);
+        if (!cs) return [];
+        return cs.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
+    },
+    enumerable: true, configurable: true
+});
+undefined;
+"#;
+
+/// M66-B: QuickJS document shim。
+#[cfg(feature = "quickjs")]
+const QUICKJS_DOCUMENT_SHIM: &str = r#"
+document.createElement = function(tag) {
+    var id = __createEl(String(tag || 'div'));
+    return __makeElement(id);
+};
+document.createTextNode = function(text) {
+    var id = __createEl('__text__');
+    __setText(id, String(text || ''));
+    return __makeElement(id);
+};
+document.getElementById = function(id) {
+    var nodeId = __getElById(String(id));
+    return (nodeId >= 0) ? __makeElement(nodeId) : null;
+};
+document.querySelector = function(sel) {
+    var nodeId = __qs(String(sel));
+    return (nodeId >= 0) ? __makeElement(nodeId) : null;
+};
+document.querySelectorAll = function(sel) {
+    var ids = __qsAll(String(sel));
+    if (!ids) return [];
+    return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
+};
+Object.defineProperty(document, 'body', {
+    get: function() { return __makeElement(__getBody(0)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(document, 'title', {
+    get: function() { return ''; },
+    set: function(v) {},
+    enumerable: true, configurable: true
+});
+document.addEventListener = function(type, cb) { /* no-op */ };
+document.dispatchEvent = function(ev) { /* no-op */ };
+undefined;
+"#;
+
 /// safety cap is hit. Returns the number of callbacks invoked.
 /// M16.4: 每轮 tick 先 `ctx.run_jobs()`（执行 Promise then 回调 microtask），
 /// 再 drain 到期 timer。两者交叉驱动，直到都 idle。
@@ -860,6 +1100,17 @@ pub fn run_scripts_with_base_engine(
     };
     let mut engine = engine_kind.create(esm_origin);
     let engine_name = engine.name();
+
+    // M66-B: QuickJS 走独立执行路径（不经过 boa Context）。
+    #[cfg(feature = "quickjs")]
+    if engine_name == "quickjs" {
+        return run_scripts_quickjs(shared, base_url, engine);
+    }
+    #[cfg(not(feature = "quickjs"))]
+    if engine_name == "quickjs" {
+        eprintln!("[js-runtime] QuickJS requested but feature not enabled, using boa");
+    }
+
     // M66: 获取底层 boa Context（所有 bridge/shim 仍直接操作 Context）。
     let ctx = engine.ctx_mut();
     let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
