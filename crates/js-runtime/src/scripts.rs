@@ -770,22 +770,29 @@ fn run_scripts_quickjs(
                         }
                         match fetch_external_script(&url) {
                             Ok(code) => {
-                                // M66: 有静态 import 的 module 需要 HttpLoader。
-                                // Module::declare+eval 会导致 QuickJS GC assertion（C 层 abort），
-                                // 所以有 import 的 module 跳过。
-                                // 无 import 的 module 用 try_strip_esm_for_eval + 普通 eval
-                                // （安全，不触发 GC 问题）。
                                 let has_imports = code.contains("from\"./")
                                     || code.contains("from './")
                                     || code.contains("import\"./")
                                     || code.contains("import './");
                                 let has_meta = code.contains("import.meta");
-                                if has_imports || has_meta {
-                                    eprintln!("[js-runtime] QuickJS module has imports/meta, skipping: {url}");
+                                if has_imports {
+                                    // M66: 有静态 import → 用 Module::declare + eval + HttpLoader
+                                    match engine.eval_module_with_imports(&url, &code) {
+                                        Ok(_) => {
+                                            executed += 1;
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[js-runtime] QuickJS module eval failed: {url}: {e}");
+                                        }
+                                    }
                                     continue;
                                 }
-                                // 无 import.meta → 安全 eval
-                                Some(code)
+                                // 无 import → 源码补丁 import.meta 后 eval_safe
+                                let base = base_url.as_deref().unwrap_or("");
+                                match try_strip_esm_for_eval(&code, base) {
+                                    Some(patched) => Some(patched),
+                                    None => Some(code),
+                                }
                             }
                             Err(e) => {
                                 eprintln!("[js-runtime] QuickJS module fetch failed: {url}: {e}");
@@ -797,28 +804,23 @@ fn run_scripts_quickjs(
                 }
             }
             ScriptEntry::InlineModule(code) => {
-                // inline module 安全策略：
-                // - 有 import 跳过（需要 ModuleLoader）
-                // - 有 customElements.define 跳过（QuickJS GC 泄漏）
-                // - 有 import.meta 跳过（try_strip 补丁 eval 可能触发 GC assertion）
-                // - 其他 inline module 正常 eval
                 let has_imports = code.contains("from\"./") || code.contains("from './");
-                let has_custom = code.contains("customElements.define");
-                let has_meta = code.contains("import.meta");
-                if has_imports || has_custom || has_meta {
+                if has_imports {
                     continue;
                 }
-                Some(code.clone())
+                let base = base_url.as_deref().unwrap_or("");
+                match try_strip_esm_for_eval(code, base) {
+                    Some(patched) => Some(patched),
+                    None => Some(code.clone()),
+                }
             }
         };
         if let Some(code) = code {
-            // M66: QuickJS 不用 wrap_script——catch 块创建的 Error 对象
-            // 会在 runtime drop 时触发 GC assertion。
-            // 直接 eval，错误由 eval 返回。
-            match engine.eval(&code) {
+            // M66: 用 eval_safe（CatchResultExt）安全捕获错误，不泄漏 GC 对象。
+            match engine.eval_safe(&code) {
                 Ok(_) => executed += 1,
                 Err(e) => {
-                    eprintln!("[js-runtime] QuickJS script eval error: {e}");
+                    eprintln!("[js] [quickjs] {e}");
                 }
             }
         }

@@ -107,10 +107,9 @@ pub struct QuickJsEngine {
 impl QuickJsEngine {
     pub fn new(esm_origin: Option<&str>) -> Self {
         let rt = Runtime::new().expect("QuickJS runtime");
-        // M66: 不在这里 set_loader——会导致 GC assertion（runtime drop 时 module 相关
-        // GC 对象未释放）。Module loader 只在真正需要时按需注册。
-        // 目前 QuickJS 跳过所有有 import/import.meta 的 module（GC 安全）。
         let base = esm_origin.unwrap_or("about:blank").to_string();
+        // M66: 注册 HTTP Module Loader（ESM import 支持）
+        rt.set_loader(HttpResolver { base: base.clone() }, HttpLoader);
         let ctx = Context::full(&rt).expect("QuickJS context");
         let mut engine = Self {
             rt,
@@ -249,6 +248,43 @@ impl QuickJsEngine {
             .with(|ctx: Ctx| ctx.eval::<(), _>(js))
             .map_err(|e: rquickjs::Error| format!("{e:?}"))?;
         Ok(())
+    }
+
+    /// M66: 执行有静态 import 的 ESM module（需要 set_loader 预先注册）。
+    /// 用 Module::declare + eval + catch 全部在 ctx.with 闭包内完成。
+    pub fn eval_module_with_imports(&mut self, name: &str, source: &str) -> Result<(), String> {
+        use rquickjs::CatchResultExt;
+        self.ctx.with(|ctx: Ctx| {
+            match Module::declare(ctx.clone(), name, source) {
+                Ok(module) => {
+                    match module.eval() {
+                        Ok((_m, promise)) => {
+                            // drain promise（在闭包内 drop，安全）
+                            match promise.finish::<Value>() {
+                                Ok(_) => Ok(()),
+                                Err(e) => Err(format!("module promise: {e:?}")),
+                            }
+                        }
+                        Err(e) => {
+                            // eval 失败——caught error 在闭包内 drop
+                            Err(format!("module eval: {e:?}"))
+                        }
+                    }
+                }
+                Err(e) => Err(format!("module declare: {e:?}")),
+            }
+        })
+    }
+
+    /// M66: 安全 eval——用 CatchResultExt 捕获错误，不泄漏 GC 对象。
+    /// CaughtError 在 with 闭包内 drop（安全释放 JS 值）。
+    pub fn eval_safe(&mut self, js: &str) -> Result<(), String> {
+        use rquickjs::CatchResultExt;
+        self.ctx
+            .with(|ctx: Ctx| match ctx.eval::<(), _>(js).catch(&ctx) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(format!("{e}")),
+            })
     }
 
     /// M66: 带整数返回值的 eval。
