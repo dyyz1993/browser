@@ -138,9 +138,14 @@ fn try_strip_esm_for_eval(code: &str, base_url: &str) -> Option<String> {
             "({MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'})",
         );
     }
-    // 其他裸 import.meta → 替换为空对象
+    // 其他裸 import.meta → 替换为带 url 属性的对象（防 import.meta["url"] 等）
     if patched.contains("import.meta") {
-        patched = patched.replace("import.meta", "({})");
+        let url = if base_url.is_empty() {
+            "about:blank".to_string()
+        } else {
+            base_url.to_string()
+        };
+        patched = patched.replace("import.meta", &format!("({{url:\"{url}\",env:{{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}}}})"));
     }
     Some(patched)
 }
