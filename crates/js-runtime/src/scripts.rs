@@ -177,12 +177,14 @@ fn regex_static_import(code: &str) -> bool {
             // 注意：后面是字母不一定是 import（可能是 importXxx 词如 imported）。
             // 但 `import x from "..."` 中 x 是合法标识符——只接受特定后续模式。
             // 动态 import: 后面是 (
-            if bytes[j] == b'(' {
-                // 动态 import()，跳过
+            // 排除：import.meta（. 后面是 m）和 import/ （除法，/ 后面不是 ( { " ' *）
+            if bytes[j] == b'(' || bytes[j] == b'/' {
+                // 动态 import() 或除法操作 import/x → 跳过
             } else if bytes[j] == b'{' || bytes[j] == b'"' || bytes[j] == b'\'' || bytes[j] == b'*'
             {
                 return true;
             } else if bytes[j] == b'.' {
+                // import.meta —— 不视为静态 import（退化 eval + try_strip 处理）
                 // import.meta —— 虽然是合法 ESM，但不需要 Module loader 解析依赖图。
                 // 不视为静态 import（退化 eval 即可，eval 能跑 import.meta）。
                 // 注意：eval 在 Script 模式不支持 import.meta 语法，所以仍需 Module。
@@ -829,9 +831,17 @@ fn run_scripts_quickjs(
                         }
                         match fetch_external_script(&url) {
                             Ok(code) => {
-                                let has_imports =
-                                    code.contains("from\"./") || code.contains("from './");
-                                if has_imports {
+                                // M66: 有静态 import/export 的 module → Module::declare+eval
+                                // 有 import.meta 但无 import/export → try_strip 后普通 eval
+                                let has_imports = code.contains("from\"./")
+                                    || code.contains("from './")
+                                    || code.contains("import\"./")
+                                    || code.contains("import './");
+                                let has_export = code.contains("export{")
+                                    || code.contains("export {")
+                                    || code.contains("export*");
+                                if has_imports || has_export {
+                                    // Module 模式执行（支持 import/export/import.meta）
                                     match engine.eval_module_with_imports(&url, &code) {
                                         Ok(_) => executed += 1,
                                         Err(e) => eprintln!(
