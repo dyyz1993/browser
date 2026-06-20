@@ -118,7 +118,19 @@ cargo build --release -p browser-cli
 | 速度 | ⭐ 最快 | 慢 | 中等 |
 | 内存 | ⭐ 21MB 中位数 | 42MB | 270MB |
 | react.dev | **91% 覆盖率** | 0.7% | 100% |
-| 截图 | ✅ | ✅ | ✅ |
+| ESM module | ✅ HttpLoader + eval_module_with_imports | ✅ HttpModuleLoader | 原生 |
+| 截图 | ✅ ASCII + PNG | ✅ | ✅ |
+| TypeScript | 自动跳过（`: string`/`as Type` 检测） | N/A | N/A |
+
+### QuickJS 关键实现要点（大纲）
+
+- **bridge 函数**：68 个 `Function::new`，复用 `bridge.rs` 的 `qjs_bridge` 模块（调同样的 thread_local DOM 后端）
+- **ESM module**：`Module::declare` + `eval` + `promise.finish`，HttpResolver/HttpLoader 自动 fetch 远程 chunk
+- **GC 安全**：`eval_safe`（`CatchResultExt::catch`）安全捕获错误，不泄漏 JS 对象。**禁止** try/catch 包装（wrap_script）——会触发 QuickJS C 层 GC assertion
+- **TypeScript 检测**：inline/external script 含 `: string`/`: "literal" |`/`as Type` 的跳过（QuickJS 不支持 TS）
+- **import.meta 补丁**：无静态 import 的 module 用 `try_strip_esm_for_eval` 替换 `import.meta.url` → URL 字符串后普通 eval
+- **customElements**：no-op `define`（不存构造器引用，避免 GC 泄漏）
+- **代码位置**：`engine_quickjs.rs`（引擎）+ `bridge.rs qjs_bridge`（DOM 包装）+ `scripts.rs` QuickJS shim 常量
 
 ### 切换引擎
 
