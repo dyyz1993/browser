@@ -827,8 +827,6 @@ fn run_scripts_quickjs(
         };
         if let Some(code) = code {
             // M66: 检测 TypeScript 语法（QuickJS 不支持 TS）。
-            // 精确匹配 TS 类型注解：`variable: TypeAnnotation`
-            // 而非普通 JS 对象属性 `key: "value"`
             let has_ts = code.contains(": string")
                 || code.contains(": number")
                 || code.contains(": boolean")
@@ -836,7 +834,11 @@ fn run_scripts_quickjs(
                 || code.contains(": any")
                 || code.contains(" as const")
                 || code.contains(": ReturnType<")
-                || (code.contains(": \"") && code.contains(" | "));
+                || (code.contains(": \"") && code.contains(" | "))
+                || code.contains(": {")    // TS 类型 `{ key: type }`
+                || code.contains("): ")    // TS 函数返回类型 `fn(x): type`
+                || code.contains("interface ")
+                || code.contains("type ") && code.contains("=") && code.contains("{");
             if has_ts {
                 continue;
             }
@@ -1080,9 +1082,22 @@ window.dispatchEvent = function(ev) {
 };
 
 // M66: customElements + HTMLElement（no-op，不存引用避免 GC 泄漏）
-// astro.build 的 inline script 调 customElements.define，需要此 API 存在。
 window.customElements = { define: function(){}, get: function(){return undefined;}, upgrade: function(){}, whenDefined: function(){return Promise.resolve();} };
 if (typeof window.HTMLElement === 'undefined') { window.HTMLElement = Element; }
+
+// M66: 框架全局变量桩（SSR hydration key / Next.js / Qwik 等）
+// SvelteKit hydration key（svelte.dev）
+if (typeof window.__sveltekit_1ntsbtp === 'undefined') { window.__sveltekit_1ntsbtp = {}; }
+// Next.js 全局变量（react.dev / nextjs.org）
+if (typeof window._N_E === 'undefined') { window._N_E = {}; }
+// Qwik 全局变量（qwik.dev）
+if (typeof window.__QI_KEY__ === 'undefined') { window.__QI_KEY__ = ''; }
+if (typeof window.__QI_URL__ === 'undefined') { window.__QI_URL__ = ''; }
+if (typeof window.__QI_BASE__ === 'undefined') { window.__QI_BASE__ = ''; }
+
+// IntersectionObserver / ResizeObserver（no-op）
+window.IntersectionObserver = function() { this.observe = function(){}; this.unobserve = function(){}; this.disconnect = function(){}; this.takeRecords = function(){return [];}; };
+window.ResizeObserver = function() { this.observe = function(){}; this.unobserve = function(){}; this.disconnect = function(){}; };
 
 window.performance = {
     timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
@@ -1365,6 +1380,15 @@ Object.defineProperty(Element.prototype, 'parentNode', {
     get: function() {
         var pid = __getParent(this.__nodeId);
         return (pid >= 0) ? __makeElement(pid) : null;
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'parentElement', {
+    get: function() {
+        var pid = __getParent(this.__nodeId);
+        if (pid < 0) return null;
+        var tag = __getTag(pid);
+        return tag ? __makeElement(pid) : null;
     },
     enumerable: true, configurable: true
 });
