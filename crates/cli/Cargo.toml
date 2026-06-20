@@ -45,6 +45,6 @@ wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
-default = []
-# M66: QuickJS JS 引擎后端
+default = ["quickjs"]
+# M66: QuickJS JS 引擎后端（默认引擎）
 quickjs = ["browser-js-runtime/quickjs"]

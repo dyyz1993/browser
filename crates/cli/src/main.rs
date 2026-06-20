@@ -110,7 +110,7 @@ enum Cmd {
         #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
         js_memory_limit_mb: u64,
         /// M66: JS engine (boa | quickjs). Default: boa.
-        #[arg(long, default_value = "boa")]
+        #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
@@ -142,7 +142,7 @@ enum Cmd {
         #[arg(long)]
         profile: bool,
         /// M66: JS engine selection (boa | quickjs). Default: boa.
-        #[arg(long, default_value = "boa")]
+        #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
@@ -166,7 +166,7 @@ enum Cmd {
         #[arg(long)]
         check: bool,
         /// M66: JS engine (boa | quickjs). Default: boa.
-        #[arg(long, default_value = "boa")]
+        #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
     /// **M42**: Start a CDP (Chrome DevTools Protocol) server. Lets external
