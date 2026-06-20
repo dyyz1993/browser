@@ -371,7 +371,37 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
 - `crates/cli/tests/integration_spa_patterns.rs` —— 5 种 SPA 模式 fixture 测试
 
 > 详见 [`docs/JS-COVERAGE.md`](./docs/JS-COVERAGE.md)（覆盖矩阵 + 补齐计划）+
-> [`docs/assessments/M62-csr-strict-comparison.md`](./docs/assessments/M62-csr-strict-comparison.md)。
+> [`docs/assessments/M62-csr-strict-comparison.md`](./docs/assessments/M62-csr-strict-comparison.md）。
+
+### QuickJS 引擎的 CSR 自愈循环（M66）
+
+QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以下差异：
+
+1. **采集报错** —— `browser fetch <url> --format text 2>&1 | grep "message="`
+   - QuickJS 错误格式：`[js] [quickjs] Error: <message>`
+2. **定位根因** —— QuickJS 的 ES2020 支持比 boa 完整，多数错误是缺 Web API
+   - `X is not defined` → 在 QuickJS shim 补（`QUICKJS_GLOBAL_SHIM` 等常量）
+   - `not a function` → Element/document 原型缺方法
+3. **补 API** —— 在 `scripts.rs` 的 QuickJS shim 常量里补（纯 JS，不引 Rust 依赖）
+4. **GC 安全** —— 补的 API 不能存 JS 对象引用到全局变量
+   （QuickJS GC 在 runtime drop 时会 assertion 检查泄漏对象）
+5. **验证** —— `browser fetch <url> --format text | wc -c` 看字符数是否提升
+
+> 完整对标报告见 [`docs/assessments/M66-quickjs-csr-comparison.md`](./docs/assessments/M66-quickjs-csr-comparison.md)。
+
+### ⚠️ 用户重复强调的事项必须沉淀到本文件
+
+**当用户重复强调某件事（说了 2 次以上），Agent 必须将该事项写入 AGENTS.md 对应章节。**
+如果内容太长，用大纲方式（标题 + 1-2 句摘要 + 链接到详细文档）。
+
+**目的**：防止会话上下文丢失后，后续 Agent 忘记用户的关键要求。
+
+**已沉淀的用户强调事项**：
+- 「禁止用 SSR 兜底当 CSR 问题的借口」→ 第一章基础原则 1 + 第八章第 10 条
+- 「JS 报错走自愈循环，不凭猜测补 API」→ 第六章自愈循环
+- 「所有改动必须有例子、有引用、有测试」→ 第六章工作流程第 4 步
+- 「测试方法和步骤必须写入 AGENTS.md」→ 第三章 QuickJS 测试方法
+- 「对标 Chrome 是渲染质量的最终标准」→ 第三章 + M66 对标报告
 
 ---
 
@@ -389,7 +419,7 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
 | [`PROGRESS.md`](./PROGRESS.md) | 活跃日志（每 commit 更新） | 看最近变更时 |
 | [`docs/decisions/`](./docs/decisions/) | ADR（架构决策记录 0001–0004） | 理解"为什么这么选"时 |
 | [`docs/postmortems/`](./docs/postmortems/) | 里程碑复盘（M1–M6） | 学教训时 |
-| [`docs/assessments/`](./docs/assessments/) | 真实站点评估（M-cls/M40/M48/M60/M62） | 看真实场景分析时 |
+| [`docs/assessments/`](./docs/assessments/) | 真实站点评估（M-cls/M40/M48/M60/M62/**M66**） | 看真实场景分析时 |
 | [`docs/plans/`](./docs/plans/) | 实现计划（M-cls/M49-M57/M7/M60） | 看实施步骤时 |
 | ⭐ [`docs/JS-COVERAGE.md`](./docs/JS-COVERAGE.md) | **JS 能力覆盖矩阵**（ES 特性 + Web API + 实测状态） | 补 JS API 前**必读**（单一事实来源） |
 
