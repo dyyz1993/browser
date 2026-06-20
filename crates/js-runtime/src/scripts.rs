@@ -690,6 +690,31 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
 }
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
+/// M66: QuickJS TypeScript 检测——QuickJS 不支持 TS 语法。
+#[cfg(feature = "quickjs")]
+fn has_ts_syntax(code: &str) -> bool {
+    code.contains(": string")
+        || code.contains(": number")
+        || code.contains(": boolean")
+        || code.contains(": void")
+        || code.contains(": any")
+        || code.contains(" as const")
+        || code.contains(": ReturnType<")
+        || (code.contains(": \"") && code.contains(" | "))
+        || code.contains("interface ")
+}
+
+/// M66: 跳过分析/追踪脚本 + TypeScript 文件
+#[cfg(feature = "quickjs")]
+fn should_skip_script(url: &str) -> bool {
+    url.contains("usefathom.com")
+        || url.contains("cloudflareinsights.com")
+        || url.contains("google-analytics")
+        || url.contains("googletagmanager")
+        || url.ends_with(".ts")
+        || url.contains(".ts?")
+}
+
 /// M66-B: QuickJS 专用执行路径。
 /// 安装 bridge（已在 engine 内部完成）+ JS shim + eval 脚本 + event loop。
 #[cfg(feature = "quickjs")]
@@ -730,77 +755,89 @@ fn run_scripts_quickjs(
     if let Err(e) = engine.eval(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
     }
+    // M66: 设置裸全局变量——QuickJS 的 globalThis.xxx 不会被解析为裸变量 xxx。
+    // 用 eval 设置 var 让后续 eval 能用裸 document/window/navigator 等。
+    let _ = engine.eval(
+        r#"var document = globalThis.document;
+        var navigator = globalThis.navigator;
+        var location = globalThis.location;
+        var history = globalThis.history;
+        var localStorage = globalThis.localStorage;
+        var sessionStorage = globalThis.sessionStorage;
+        var Event = globalThis.Event;
+        var CustomEvent = globalThis.CustomEvent;
+        var URL = globalThis.URL;
+        var URLSearchParams = globalThis.URLSearchParams;
+        var fetch = globalThis.fetch;
+        var setTimeout = globalThis.setTimeout;
+        var clearTimeout = globalThis.clearTimeout;
+        var setInterval = globalThis.setInterval;
+        var clearInterval = globalThis.clearInterval;
+        var requestAnimationFrame = globalThis.requestAnimationFrame;
+        var queueMicrotask = globalThis.queueMicrotask;
+        var atob = globalThis.atob;
+        var btoa = globalThis.btoa;
+        var crypto = globalThis.crypto;
+        var self = globalThis;
+        "#,
+    );
 
-    // 提取并执行页面脚本
+    // M66: QuickJS —— 逐个 eval script（shim 已经通过初始 eval 设置了 globalThis 属性）
     let scripts = {
         let borrowed = shared.borrow();
         extract_script_entries(&borrowed)
     };
+
     for script in &scripts {
         let code = match script {
-            ScriptEntry::Inline(code) => Some(code.clone()),
+            ScriptEntry::Inline(code) => {
+                if has_ts_syntax(code) {
+                    continue;
+                }
+                Some(code.clone())
+            }
             ScriptEntry::External(src) => match resolve_script_url(src, base_url.as_deref()) {
                 Some(url) => {
-                    // M66: 跳过分析/追踪脚本（不贡献内容，可能破坏 DOM）
-                    if url.contains("usefathom.com")
-                        || url.contains("cloudflareinsights.com")
-                        || url.contains("google-analytics")
-                        || url.contains("googletagmanager")
-                    {
+                    if should_skip_script(&url) {
                         continue;
                     }
                     match fetch_external_script(&url) {
                         Ok(code) => {
-                            // M66: 检测 TypeScript 语法
-                            let has_ts = code.contains(": string")
-                                || code.contains(": number")
-                                || code.contains(": boolean")
-                                || (code.contains(": \"") && code.contains(" | "));
-                            if has_ts {
+                            if has_ts_syntax(&code) {
                                 continue;
                             }
                             Some(code)
                         }
                         Err(e) => {
-                            eprintln!("[js-runtime] QuickJS external fetch failed: {url}: {e}");
-                            None
+                            eprintln!("[js-runtime] QuickJS fetch failed: {url}: {e}");
+                            continue;
                         }
                     }
                 }
-                None => None,
+                None => continue,
             },
             ScriptEntry::ExternalModule(src) => {
-                // M66: QuickJS ESM module 支持——用 rquickjs Module declare+eval。
-                // Module Loader（HttpLoader）自动 fetch 远程 import 的 chunk。
                 match resolve_script_url(src, base_url.as_deref()) {
                     Some(url) => {
-                        // 跳过分析脚本
-                        if url.contains("usefathom.com") || url.contains("cloudflareinsights.com") {
+                        if should_skip_script(&url) {
                             continue;
                         }
                         match fetch_external_script(&url) {
                             Ok(code) => {
-                                let has_imports = code.contains("from\"./")
-                                    || code.contains("from './")
-                                    || code.contains("import\"./")
-                                    || code.contains("import './");
-                                let has_meta = code.contains("import.meta");
+                                let has_imports =
+                                    code.contains("from\"./") || code.contains("from './");
                                 if has_imports {
-                                    // M66: 有静态 import → 用 Module::declare + eval + HttpLoader
                                     match engine.eval_module_with_imports(&url, &code) {
-                                        Ok(_) => {
-                                            executed += 1;
-                                        }
-                                        Err(e) => {
-                                            eprintln!("[js-runtime] QuickJS module eval failed: {url}: {e}");
-                                        }
+                                        Ok(_) => executed += 1,
+                                        Err(e) => eprintln!(
+                                            "[js-runtime] QuickJS module eval failed: {url}: {e}"
+                                        ),
                                     }
                                     continue;
                                 }
-                                // 无 import → 源码补丁 import.meta 后 eval_safe
                                 let base = base_url.as_deref().unwrap_or("");
                                 match try_strip_esm_for_eval(&code, base) {
-                                    Some(patched) => Some(patched),
+                                    Some(p) => Some(p),
                                     None => Some(code),
                                 }
                             }
@@ -820,33 +857,15 @@ fn run_scripts_quickjs(
                 }
                 let base = base_url.as_deref().unwrap_or("");
                 match try_strip_esm_for_eval(code, base) {
-                    Some(patched) => Some(patched),
+                    Some(p) => Some(p),
                     None => Some(code.clone()),
                 }
             }
         };
         if let Some(code) = code {
-            // M66: 检测 TypeScript 语法（QuickJS 不支持 TS）。
-            let has_ts = code.contains(": string")
-                || code.contains(": number")
-                || code.contains(": boolean")
-                || code.contains(": void")
-                || code.contains(": any")
-                || code.contains(" as const")
-                || code.contains(": ReturnType<")
-                || (code.contains(": \"") && code.contains(" | "))
-                || code.contains(": {")    // TS 类型 `{ key: type }`
-                || code.contains("): ")    // TS 函数返回类型 `fn(x): type`
-                || code.contains("interface ")
-                || code.contains("type ") && code.contains("=") && code.contains("{");
-            if has_ts {
-                continue;
-            }
             match engine.eval_safe(&code) {
                 Ok(_) => executed += 1,
-                Err(e) => {
-                    eprintln!("[js] [quickjs] {e}");
-                }
+                Err(e) => eprintln!("[js] [quickjs] {e}"),
             }
         }
     }
@@ -1385,10 +1404,13 @@ Object.defineProperty(Element.prototype, 'parentNode', {
 });
 Object.defineProperty(Element.prototype, 'parentElement', {
     get: function() {
-        var pid = __getParent(this.__nodeId);
-        if (pid < 0) return null;
-        var tag = __getTag(pid);
-        return tag ? __makeElement(pid) : null;
+        try {
+            if (!this || typeof this.__nodeId !== 'number') return null;
+            var pid = __getParent(this.__nodeId);
+            if (pid < 0) return null;
+            var tag = __getTag(pid);
+            return tag ? __makeElement(pid) : null;
+        } catch(e) { return null; }
     },
     enumerable: true, configurable: true
 });
