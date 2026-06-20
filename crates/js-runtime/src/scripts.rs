@@ -750,7 +750,17 @@ fn run_scripts_quickjs(
                         continue;
                     }
                     match fetch_external_script(&url) {
-                        Ok(code) => Some(code),
+                        Ok(code) => {
+                            // M66: 检测 TypeScript 语法
+                            let has_ts = code.contains(": string")
+                                || code.contains(": number")
+                                || code.contains(": boolean")
+                                || (code.contains(": \"") && code.contains(" | "));
+                            if has_ts {
+                                continue;
+                            }
+                            Some(code)
+                        }
                         Err(e) => {
                             eprintln!("[js-runtime] QuickJS external fetch failed: {url}: {e}");
                             None
@@ -816,7 +826,20 @@ fn run_scripts_quickjs(
             }
         };
         if let Some(code) = code {
-            // M66: 用 eval_safe（CatchResultExt）安全捕获错误，不泄漏 GC 对象。
+            // M66: 检测 TypeScript 语法（QuickJS 不支持 TS）。
+            // 精确匹配 TS 类型注解：`variable: TypeAnnotation`
+            // 而非普通 JS 对象属性 `key: "value"`
+            let has_ts = code.contains(": string")
+                || code.contains(": number")
+                || code.contains(": boolean")
+                || code.contains(": void")
+                || code.contains(": any")
+                || code.contains(" as const")
+                || code.contains(": ReturnType<")
+                || (code.contains(": \"") && code.contains(" | "));
+            if has_ts {
+                continue;
+            }
             match engine.eval_safe(&code) {
                 Ok(_) => executed += 1,
                 Err(e) => {
@@ -1055,6 +1078,11 @@ window.dispatchEvent = function(ev) {
         }
     }
 };
+
+// M66: customElements + HTMLElement（no-op，不存引用避免 GC 泄漏）
+// astro.build 的 inline script 调 customElements.define，需要此 API 存在。
+window.customElements = { define: function(){}, get: function(){return undefined;}, upgrade: function(){}, whenDefined: function(){return Promise.resolve();} };
+if (typeof window.HTMLElement === 'undefined') { window.HTMLElement = Element; }
 
 window.performance = {
     timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
