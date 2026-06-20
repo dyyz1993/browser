@@ -182,7 +182,7 @@ browser fetch https://react.dev/ --format text --profile
 
 ---
 
-## 三、当前进度快照
+## 四、当前进度快照
 
 > 真实最新数据以 `git log` 和实际 `cargo test` 输出为准；下面是文档记录的里程碑状态。
 
@@ -230,7 +230,7 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
 
 ---
 
-## 四、架构概览
+## 五、架构概览
 
 ```
                     ┌─────────────┐
@@ -248,7 +248,7 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
      html-parser                              cookie / eventloop
 ```
 
-### 15 个 Crate
+### 16 个 Crate
 
 | Crate | 职责 |
 |-------|------|
@@ -277,7 +277,7 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
 
 ---
 
-## 五、关键约束（动手前必知）
+## 六、关键约束（动手前必知）
 
 ### 代码纪律
 
@@ -304,7 +304,7 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
 
 ---
 
-## 六、Agent 工作流程
+## 七、Agent 工作流程
 
 ### 收到"实现功能 X"时
 
@@ -417,7 +417,7 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
 
 ---
 
-## 七、文档地图（深入细节看这些）
+## 八、文档地图（深入细节看这些）
 
 | 文档 | 内容 | 何时读 |
 |------|------|--------|
@@ -446,7 +446,7 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
 
 ---
 
-## 八、给 Agent 的硬性约定
+## 九、给 Agent 的硬性约定
 
 1. **开工前必读 GOALS.md**，确认任务在 scope 内。不在 scope 的，先和用户确认而非自行扩范围。
 2. **每个 commit 过三门禁**（fmt / clippy / test），否则不要提交。
@@ -463,6 +463,22 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     兜底或标注需 Chrome，不要无限投入补 API（边际收益递减）。
 11. **纯 JS polyfill 优先**：补 Web API 用 compat_shim 的 JS 字符串，不引 Rust 依赖。
     保证二进制不涨（M62 补了 15+ API，14MB 纹丝不动）。
+12. **QuickJS 是默认引擎**（M66）。所有新功能先确保 QuickJS 下可用，再确认 boa 兼容。
+    `--js-engine boa` 可切换回旧引擎调试。
+13. **QuickJS GC 安全**（生死规则）：
+    - ❌ 禁止用 `wrap_script`（try/catch 包装）——会触发 QuickJS C 层 GC assertion
+    - ✅ 用 `eval_safe`（`CatchResultExt::catch`）捕获错误
+    - ❌ 禁止在全局变量上存 JS 函数/对象引用（如 `window._cb = fn`）——runtime drop 时 GC 断言
+    - ✅ customElements.define 用 no-op（不存构造器引用）
+    - ✅ `eval_module_with_imports` 全部在 `ctx.with` 闭包内完成
+14. **TypeScript 自动跳过**：QuickJS 不支持 TS。inline/external script 含
+    `: string`/`: "literal" |`/`as Type` 的自动跳过（见第三章 TS 检测）。
+15. **所有改动必须有例子、有引用、有测试**：
+    - 例子：`browser fetch <url> --format text` 的实际输出
+    - 引用：AGENTS.md 对应章节 + docs/assessments 报告链接
+    - 测试：`integration_js_features.rs` 入库回归测试
+16. **测试方法和步骤必须写入 AGENTS.md**（第三章 QuickJS 测试方法）。
+17. **对标 Chrome 是渲染质量的最终标准**（见 `docs/assessments/M66-quickjs-csr-comparison.md`）。
 
 ---
 
