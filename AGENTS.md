@@ -99,9 +99,74 @@ cargo build --release -p browser-cli
 | `cdp --port N` | CDP server（Puppeteer/Playwright 兼容） |
 | `get / parse` | 仅取 DOM 树 |
 | `render-file / render-script` | 本地 HTML 渲染（后者执行 JS） |
-| `screenshot <url>` | 输出 PNG 截图（支持 `--max-height`） |
 | `image-ascii <file>` | 图片转 ASCII |
 | `open <url>` | GUI 窗口（需显示器，headless 用 `--check`） |
+| `fetch <url>` | **核心**：fetch + JS + 提取（markdown/html/text/links） |
+
+> **M66 双引擎**：所有 JS 相关命令支持 `--js-engine quickjs`（默认）或 `--js-engine boa`。
+> QuickJS 是 ES2020 完整引擎（rquickjs 0.12），速度/内存全面优于 boa。
+
+---
+
+## 三、JS 引擎双后端（M66）
+
+### 引擎对比
+
+| 维度 | QuickJS（默认） | boa（备选） | Chrome（对标） |
+|------|:-:|:-:|:-:|
+| ES 兼容 | ES2020 完整 | 部分（跑不动 React） | ES2024 |
+| 速度 | ⭐ 最快 | 慢 | 中等 |
+| 内存 | ⭐ 21MB 中位数 | 42MB | 270MB |
+| react.dev | **91% 覆盖率** | 0.7% | 100% |
+| 截图 | ✅ | ✅ | ✅ |
+
+### 切换引擎
+
+```bash
+# 默认 QuickJS
+browser fetch https://nuxt.com/
+
+# 切换 boa
+browser fetch https://nuxt.com/ --js-engine boa
+```
+
+### CSR 渲染对标 Chrome 测试方法
+
+```bash
+# 1. 基本验证（文本/Markdown/HTML）
+browser fetch https://nuxt.com/ --format text
+browser fetch https://nuxt.com/ --format markdown
+
+# 2. ASCII 画面渲染
+browser render-url https://svelte.dev/ --width 80
+
+# 3. PNG 截图
+browser render-url https://svelte.dev/ --screenshot out.png
+
+# 4. 多站对比（QuickJS vs boa）
+for u in "https://nuxt.com/" "https://svelte.dev/"; do
+  q=$(browser fetch "$u" --format text 2>/dev/null | wc -c)
+  b=$(browser fetch "$u" --format text --js-engine boa 2>/dev/null | wc -c)
+  echo "$u: QJS=$q boa=$b"
+done
+
+# 5. 对标 Chrome
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+"$CHROME" --headless=new --virtual-time-budget=8000 --dump-dom "$url" 2>/dev/null | \
+  python3 -c "import sys,re;h=sys.stdin.read();h=re.sub(r'<script[^>]*>.*?</script>','',h,flags=re.DOTALL);t=re.sub(r'<[^>]+>',' ',h);print(len(re.sub(r'\s+',' ',t).strip()))"
+
+# 6. 自动化基准（12 站全维度）
+bash tests/benchmarks/csr_benchmark.sh
+
+# 7. JS 错误诊断
+browser fetch https://react.dev/ --format text 2>&1 >/dev/null | \
+  grep -oE "message=[^|]*" | sort | uniq -c | sort -rn
+
+# 8. 底层插桩
+browser fetch https://react.dev/ --format text --profile
+```
+
+> 完整对标数据见 [`docs/assessments/M66-quickjs-csr-comparison.md`](./docs/assessments/M66-quickjs-csr-comparison.md)
 
 ---
 
@@ -111,12 +176,16 @@ cargo build --release -p browser-cli
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M62（boa 0.21 + JS 覆盖矩阵 + fetch 命令） |
+| HEAD | M66（QuickJS 双引擎：JsEngine trait + QuickJS 后端，默认引擎） |
 | 当前分支 | `main` |
-| 总 commits | 200+ |
+| 总 commits | 250+ |
 | Crates | **16** 个（含 `extractor` 后置过滤器） |
-| 测试 | **776+ passed**（含 30 项 JS 特性入库测试），0 clippy warnings |
-| boa 版本 | **0.21**（M60 升级，async/await 运行时落地，ES 一致性 ~94%） |
+| 测试 | **830+ passed**，0 clippy warnings |
+| JS 引擎 | **双引擎**：QuickJS（默认，rquickjs 0.12）+ boa（`--js-engine boa`） |
+| 核心目标 G1（SPA 爬虫）| ✅ |
+| 截图 G2 | ✅ |
+| 跨平台 G3 | ✅ |
+| CSR 对标 Chrome | 8/10 站渲染成功，平均覆盖率 67%，react.dev 91% |
 | JS 覆盖矩阵 | ES6+ 28 项入库测试全通过（详见 `docs/JS-COVERAGE.md`） |
 | 核心目标 G1（SPA 爬虫） | ✅ 达成（M4），`browser fetch` 命令（M59）当 curl 用 |
 | 截图 G2 | ✅ 达成（M12.1） |
