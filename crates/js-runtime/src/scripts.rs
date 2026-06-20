@@ -1133,6 +1133,12 @@ window.performance = {
     measure: function() {},
 };
 
+// window/document 的 parentElement + currentScript
+// svelte 用 document.currentScript.parentElement
+window.parentElement = null;
+document.parentElement = null;
+document.currentScript = { parentElement: null };
+
 // localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
 var __localStorage = {};
 window.localStorage = {
