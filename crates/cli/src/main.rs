@@ -109,6 +109,9 @@ enum Cmd {
         /// 在子进程内杀掉自己，父进程走 CSR 兜底。0 = 禁用沙箱（进程内渲染）。
         #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
         js_memory_limit_mb: u64,
+        /// M66: JS engine (boa | quickjs). Default: boa.
+        #[arg(long, default_value = "boa")]
+        js_engine: String,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -162,6 +165,9 @@ enum Cmd {
         /// by e2e tests in headless environments.
         #[arg(long)]
         check: bool,
+        /// M66: JS engine (boa | quickjs). Default: boa.
+        #[arg(long, default_value = "boa")]
+        js_engine: String,
     },
     /// **M42**: Start a CDP (Chrome DevTools Protocol) server. Lets external
     /// tools like Puppeteer/Playwright drive the browser over WebSocket.
@@ -342,14 +348,14 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             max_height,
             assert_network_idle,
             js_memory_limit_mb,
+            js_engine,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
-            // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。vendor
-            // bundle 爆涨时被内核杀掉，返回 None → 落回进程内渲染（仍会跑
-            // CSR 兜底拿到正文）。no_js 或显式禁用沙箱时直接进程内渲染。
-            let (text, colored) = if !no_js && js_memory_limit_mb > 0 {
+            // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。
+            // M66: QuickJS 引擎内存效率高，跳过沙箱直接进程内渲染。
+            let (text, colored) = if !no_js && js_memory_limit_mb > 0 && js_engine == "boa" {
                 match sandbox::run_js_render_in_sandbox(&html, &url, width, js_memory_limit_mb) {
                     Ok(Some(text)) => {
                         // 沙箱只返回纯文本；colored 仅截图用，按需在进程内补算。
@@ -372,7 +378,15 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     }
                 }
             } else {
-                render_html_to_string_inner(&html, width, !no_js, base.clone())?
+                // M66: QuickJS 或 no_js → 直接进程内渲染
+                render_html_to_string_inner_ex_engine(
+                    &html,
+                    width,
+                    !no_js,
+                    false,
+                    base.clone(),
+                    &js_engine,
+                )?
             };
             print!("{text}");
             if let Some(p) = screenshot {
@@ -576,11 +590,14 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             win_height,
             no_js,
             check,
+            js_engine,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
-            let text = render_html_to_string(&html, width, !no_js, base)?;
+            let (text, _colored) = render_html_to_string_inner_ex_engine(
+                &html, width, !no_js, false, base, &js_engine,
+            )?;
             if check {
                 print!("{text}");
                 return Ok(());
@@ -747,8 +764,30 @@ fn render_html_to_string_inner_ex(
     csr_fallback: bool,
     base_url: Option<String>,
 ) -> Result<(String, String)> {
+    render_html_to_string_inner_ex_engine(html, width, run_js, csr_fallback, base_url, "boa")
+}
+
+/// M66: 引擎可切换版本的渲染入口。
+fn render_html_to_string_inner_ex_engine(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    csr_fallback: bool,
+    base_url: Option<String>,
+    js_engine: &str,
+) -> Result<(String, String)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
+        let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
+        #[cfg(feature = "quickjs")]
+        let (shared, n) = if base_url.is_some() {
+            browser_js_runtime::run_scripts_with_base_engine(tree, base_url.clone(), &engine_kind)
+        } else {
+            // 无 base_url 时用 boa 默认路径（QuickJS 需要 base_url 解析 URL）
+            let tree2 = tree;
+            browser_js_runtime::run_scripts_with_base(tree2, base_url.clone())
+        };
+        #[cfg(not(feature = "quickjs"))]
         let (shared, n) = if base_url.is_some() {
             run_scripts_with_base(tree, base_url.clone())
         } else {
