@@ -19,9 +19,7 @@ use browser_cookie::{load_from_file_shared, save_jar_to_file};
 use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
-use browser_js_runtime::{
-    current_cookie_jar, ensure_cookie_jar, run_scripts, run_scripts_with_base, try_csr_fallback,
-};
+use browser_js_runtime::{current_cookie_jar, ensure_cookie_jar, try_csr_fallback};
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
 use browser_net::HttpClient;
 use browser_render::{render_ascii, render_ascii_colored};

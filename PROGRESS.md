@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M66（QuickJS 双引擎：JsEngine trait + QuickJS 后端，速度/内存/兼容全面超越 boa） |
-| 总 commits | ~230 |
-| 测试 | 830+ pass, 0 clippy warnings |
+| HEAD | M66-fix（QuickJS bridge 三处 bug：__setBody/appendBody/Promise microtask） |
+| 总 commits | ~235 |
+| 测试 | 795 pass, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 8 + `--js-engine boa\|quickjs` |
 | JS 引擎 | **双引擎**：boa（默认）+ QuickJS（`--features quickjs`） |
@@ -24,6 +24,43 @@
 ---
 
 ## 最近变更（倒序）
+
+### M66-fix — QuickJS bridge 三处关键 bug 修复（__setBody / appendBody / Promise microtask）✅
+
+**修复 QuickJS 引擎下 SPA 渲染管线 3 个导致内容丢失的 bug，4 个测试转绿。**
+
+根因与修复：
+
+1. **`__setBody` 走 `set_attr("innerHTML")` 而非 `set_body_inner_html`**
+   - 现象：QuickJS 下 `__setBody("text")` 执行了但渲染仍显示旧 placeholder
+   - 根因：QuickJS 的 `__setBody` 注册成 `set_attr(body, "innerHTML", html)`，
+     而 `set_attr_inner` 把 innerHTML 当普通 attribute 设置（只改属性表），不替换子节点
+   - 修复：新增 `qjs_bridge::set_body()`（走 `set_body_inner_html`，清空子节点+插文本），
+     `__setBody` 改用它（`engine_quickjs.rs:169`）
+
+2. **`__appendBody` 误用 `set_body`（覆盖而非追加）**
+   - 现象：`spa_shell_renders_combined_api_output` 只输出最后一个 fetch 结果
+   - 根因：`__appendBody` 注册成 `set_body`（清空+覆盖），而非追加
+   - 修复：新增 `qjs_bridge::append_body()`（走 `append_body_text`，追加到 body 末尾）
+
+3. **`__fetchSetBody` / `__fetchAppendBody` 未注册到 QuickJS**
+   - 现象：QuickJS 报 `__fetchAppendBody is not defined`
+   - 修复：新增 `qjs_bridge::fetch_set_body()` / `fetch_append_body()`（镜像 boa 实现），
+     注册到 QuickJS globals
+
+4. **Promise microtask 不 drain（`run_jobs` 空实现）**
+   - 现象：`render_url_async_spa_with_real_fetch` 失败——`Promise.resolve().then(fn)` 的
+     fn 永远不执行，setTimeout 回调拿不到 then 准备的数据
+   - 根因：`QuickJsEngine::run_jobs()` 是空函数（注释称 "ctx.with 退出自动 drain"，实际不会）
+   - 修复：`run_jobs` 改为 `while ctx.execute_pending_job() {}` 循环 drain；
+     并在 event loop 里**先 drain microtask 再 drain macrotask**（`run_jobs` → `__drainDueTimers`），
+     匹配 JS 的 microtask-before-macrotask 语义
+
+验证：
+- 4 个失败测试转绿：`integration_render_url` / `integration_open` / `integration_spa` /
+  `integration_timer_spa`（20 个测试全通过）
+- 全量 **795 passed, 0 failed**，0 clippy warnings
+- 顺手清理 dead-code：移除 `HttpResolver.base` / `QuickJsEngine.base_url` 未读字段
 
 ### M66 — JS 引擎双后端（JsEngine trait + QuickJS via rquickjs）✅
 

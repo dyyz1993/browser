@@ -2548,6 +2548,45 @@ pub mod qjs_bridge {
         })
     }
 
+    /// setBody(html) —— 替换 `<body>` 的全部内容（清空子节点 + 插入文本）。
+    /// 与 boa 的 `__setBody`（bridge.rs set_body）行为一致：走 set_body_inner_html，
+    /// 而非把 "innerHTML" 当普通 attribute 设置（那样渲染时仍读旧子节点）。
+    pub fn set_body(html: String) {
+        with_tree(|t| set_body_inner_html(t, &html));
+    }
+
+    /// appendBody(html) —— 追加文本到 `<body>` 末尾（不清空已有内容）。
+    /// 镜像 boa 的 `__appendBody`（走 append_body_text）。
+    pub fn append_body(html: String) {
+        with_tree(|t| append_body_text(t, &html));
+    }
+
+    /// fetchSetBody(url) —— 同步 fetch url，成功后替换 `<body>` 内容。
+    /// 镜像 boa 的 `__fetchSetBody`（bridge.rs fetch_set_body）。
+    pub fn fetch_set_body(url: String) {
+        if url.is_empty() {
+            return;
+        }
+        let resolved = resolve_url(&url);
+        match super::fetch_sync(&resolved) {
+            Ok(text) => with_tree(|t| set_body_inner_html(t, &text)),
+            Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+        }
+    }
+
+    /// fetchAppendBody(url) —— 同步 fetch url，成功后把文本追加到 `<body>`。
+    /// 镜像 boa 的 `__fetchAppendBody`（bridge.rs fetch_append_body）。
+    pub fn fetch_append_body(url: String) {
+        if url.is_empty() {
+            return;
+        }
+        let resolved = resolve_url(&url);
+        match super::fetch_sync(&resolved) {
+            Ok(text) => with_tree(|t| append_body_text(t, &text)),
+            Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+        }
+    }
+
     /// setTitle(title)。
     pub fn set_title(title: String) {
         with_tree(|t| set_title_text(t, &title));

@@ -902,6 +902,10 @@ fn run_scripts_quickjs(
     );
 
     // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
+    // M66-fix: 必须先 drain Promise microtask（.then 回调），再 drain timer（setTimeout）。
+    // 标准 JS 语义：同一 tick 内 microtask 优先级高于 macrotask。
+    // 否则 setTimeout(0) 回调跑得比 Promise.then 早，拿不到 then 准备的数据。
+    engine.run_jobs();
     let _ = engine.eval_i32("__drainDueTimers()");
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
@@ -911,6 +915,10 @@ fn run_scripts_quickjs(
     let el_start = std::time::Instant::now();
     loop {
         let fired = engine.eval_i32("__drainDueTimers()").unwrap_or(0);
+        // M66-fix: 每轮 timer 回调触发后，drain 其 schedule 的新 Promise microtask。
+        if fired > 0 {
+            engine.run_jobs();
+        }
         if fired == 0 {
             let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
             if !has {
@@ -922,6 +930,8 @@ fn run_scripts_quickjs(
         }
         std::thread::sleep(std::time::Duration::from_millis(EL_TICK_MS));
     }
+    // M66-fix: 最后再 drain 一轮（最后一波 timer 回调可能 schedule 了 microtask）。
+    engine.run_jobs();
     engine.gc();
 
     (shared, executed)

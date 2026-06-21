@@ -11,9 +11,9 @@ use rquickjs::{Context, Ctx, Function, Runtime, Value};
 use crate::bridge;
 
 /// M66: HTTP Resolver —— 把相对路径解析成绝对 URL。
-pub struct HttpResolver {
-    base: String,
-}
+/// 注意：resolve 用的是 trait 传入的 `base` 参数，不存自身状态；
+/// 结构体保留是因为 rquickjs 的 set_loader 需要具体类型实例。
+pub struct HttpResolver;
 
 impl rquickjs_core::loader::Resolver for HttpResolver {
     fn resolve<'js>(
@@ -101,21 +101,18 @@ impl crate::engine::JsEngine for QuickJsEngineWrapper {
 pub struct QuickJsEngine {
     rt: Runtime,
     ctx: Context,
-    base_url: String,
 }
 
 impl QuickJsEngine {
     pub fn new(esm_origin: Option<&str>) -> Self {
         let rt = Runtime::new().expect("QuickJS runtime");
         let base = esm_origin.unwrap_or("about:blank").to_string();
-        // M66: 注册 HTTP Module Loader（ESM import 支持）
-        rt.set_loader(HttpResolver { base: base.clone() }, HttpLoader);
+        // M66: 注册 HTTP Module Loader（ESM import 支持）。
+        // base 仅用于日志/loader 上下文，不存到结构体（resolver 用 trait 参数）。
+        let _ = base;
+        rt.set_loader(HttpResolver, HttpLoader);
         let ctx = Context::full(&rt).expect("QuickJS context");
-        let mut engine = Self {
-            rt,
-            ctx,
-            base_url: base,
-        };
+        let mut engine = Self { rt, ctx };
         engine.install_bridge();
         engine
     }
@@ -166,12 +163,20 @@ impl QuickJsEngine {
                 let _ = g.set("__submit", Function::new(ctx.clone(), |_: f64| {}).unwrap());
 
                 // === setBody / appendBody / fetchSetBody / fetchAppendBody ===
+                // M66-fix: 用 qjs_bridge::set_body（走 set_body_inner_html，清空子节点+插文本），
+                // 而非 set_attr("innerHTML", ...)（后者只改 attribute，渲染仍读旧子节点）。
                 let _ = g.set("__setBody", Function::new(ctx.clone(), |html: String| {
-                    bridge::qjs_bridge::set_attr(bridge::qjs_bridge::get_body(), "innerHTML".to_string(), html);
+                    bridge::qjs_bridge::set_body(html);
                 }).unwrap());
+                // __appendBody 追加文本到 <body> 末尾（不清空），与 boa append_body_text 一致。
                 let _ = g.set("__appendBody", Function::new(ctx.clone(), |html: String| {
-                    // 简化：设 innerHTML（和 setBody 一样，爬虫够用）
-                    bridge::qjs_bridge::set_attr(bridge::qjs_bridge::get_body(), "innerHTML".to_string(), html);
+                    bridge::qjs_bridge::append_body(html);
+                }).unwrap());
+                let _ = g.set("__fetchSetBody", Function::new(ctx.clone(), |url: String| {
+                    bridge::qjs_bridge::fetch_set_body(url);
+                }).unwrap());
+                let _ = g.set("__fetchAppendBody", Function::new(ctx.clone(), |url: String| {
+                    bridge::qjs_bridge::fetch_append_body(url);
                 }).unwrap());
 
                 // === Fetch ===
@@ -253,7 +258,6 @@ impl QuickJsEngine {
     /// M66: 执行有静态 import 的 ESM module（需要 set_loader 预先注册）。
     /// 用 Module::declare + eval + catch 全部在 ctx.with 闭包内完成。
     pub fn eval_module_with_imports(&mut self, name: &str, source: &str) -> Result<(), String> {
-        use rquickjs::CatchResultExt;
         self.ctx.with(|ctx: Ctx| {
             match Module::declare(ctx.clone(), name, source) {
                 Ok(module) => {
@@ -319,8 +323,21 @@ impl QuickJsEngine {
     }
 
     /// 运行微任务队列。
+    /// M66-fix: rquickjs 的 Promise microtask（.then 回调）不会自动 drain，
+    /// 必须显式调用 ctx.execute_pending_job() 直到返回 false。
+    /// 否则 `Promise.resolve().then(fn)` 里的 fn 永远不执行，
+    /// 导致 setTimeout 回调拿不到 then 里准备的数据（integration_timer_spa 失败）。
     pub fn run_jobs(&mut self) {
-        // rquickjs 微任务在 ctx.with 闭包退出时自动 drain。
+        self.ctx.with(|ctx: Ctx| {
+            // drain 所有 pending microtask（上限 1000 防御死循环）
+            let mut guard = 0;
+            while ctx.execute_pending_job() {
+                guard += 1;
+                if guard > 1000 {
+                    break;
+                }
+            }
+        });
     }
 
     /// 手动触发 GC。
