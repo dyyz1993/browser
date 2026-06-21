@@ -22,3 +22,8 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[features]
+default = ["quickjs"]
+# M67: QuickJS JS 引擎后端（转发到 js-runtime）。CDP Runtime domain 默认走 QuickJS。
+quickjs = ["browser-js-runtime/quickjs"]

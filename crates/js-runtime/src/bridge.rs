@@ -2490,6 +2490,19 @@ pub mod qjs_bridge {
         })
     }
 
+    /// M67: getTagByName(tag) -> f64 —— 按标签名找第一个匹配节点的 NodeId。
+    /// 找不到返回 -1.0（CDP/JS 侧判 < 0）。对齐 boa `get_tag` 的字符串模式。
+    pub fn get_tag_by_name(tag: String) -> f64 {
+        let t = tag.trim().to_lowercase();
+        if t.is_empty() {
+            return -1.0;
+        }
+        with_tree(|tree| match crate::bridge::find_first_element(tree, &t) {
+            Some(id) => id as f64,
+            None => -1.0,
+        })
+    }
+
     /// getAttr(id, key) -> Option<String>。
     pub fn get_attr(id: f64, key: String) -> Option<String> {
         with_tree(|t| {

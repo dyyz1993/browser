@@ -107,7 +107,7 @@ enum Cmd {
         /// 在子进程内杀掉自己，父进程走 CSR 兜底。0 = 禁用沙箱（进程内渲染）。
         #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
         js_memory_limit_mb: u64,
-        /// M66: JS engine (boa | quickjs). Default: boa.
+        /// M66: JS engine (boa | quickjs). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
@@ -139,7 +139,7 @@ enum Cmd {
         /// 阶段：fetch HTML / parse / JS eval / event loop / serialize / total
         #[arg(long)]
         profile: bool,
-        /// M66: JS engine selection (boa | quickjs). Default: boa.
+        /// M66: JS engine selection (boa | quickjs). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
@@ -163,7 +163,7 @@ enum Cmd {
         /// by e2e tests in headless environments.
         #[arg(long)]
         check: bool,
-        /// M66: JS engine (boa | quickjs). Default: boa.
+        /// M66: JS engine (boa | quickjs). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
@@ -174,6 +174,11 @@ enum Cmd {
         /// Port to listen on (Chrome default: 9222).
         #[arg(long, default_value_t = browser_cdp::server::DEFAULT_CDP_PORT)]
         port: u16,
+        /// M67: JS engine for Runtime.evaluate/callFunctionOn (boa | quickjs).
+        /// Default: quickjs (aligns with render-url/fetch/open). The CDP Runtime
+        /// domain is the last path still bound to boa pre-M67.
+        #[arg(long, default_value = "quickjs")]
+        js_engine: String,
     },
     /// M-cls.1: 内部隐藏子命令 —— 在 RLIMIT_AS 受限的子进程里跑一次 JS
     /// 渲染。父进程（render-url/open）通过 sandbox 模块 spawn 它，stdin 传
@@ -611,9 +616,11 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             browser_gui::run_window(config).map_err(|e| anyhow!("GUI error: {e}"))?;
             Ok(())
         }
-        Cmd::Cdp { port } => {
+        Cmd::Cdp { port, js_engine } => {
             // M42: start the CDP server. Blocks forever (listen loop).
-            browser_cdp::server::CdpServer::listen(port)
+            // M67: engine_kind 透传到 Runtime domain（默认 quickjs）。
+            let engine_kind = browser_js_runtime::EngineKind::parse_str(&js_engine);
+            browser_cdp::server::CdpServer::listen(port, engine_kind)
                 .await
                 .map_err(|e| anyhow!("CDP server error: {e}"))?;
             Ok(())

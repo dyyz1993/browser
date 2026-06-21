@@ -1563,7 +1563,15 @@ Object.defineProperty(document, 'head', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'title', {
-    get: function() { return ''; },
+    get: function() {
+        // M67: 对齐 boa —— 读第一个 <title> 节点的文本。CDP evaluate
+        // （document.title）依赖这个，不能返回空字符串。
+        // 用 __findTag（字符串→NodeId）而非 __getTag（NodeId→tag 名）。
+        var n = (typeof __findTag === 'function') ? __findTag('title') : -1;
+        return (typeof n === 'number' && n >= 0 && typeof __getText === 'function')
+            ? (__getText(n) || '')
+            : '';
+    },
     set: function(v) {},
     enumerable: true, configurable: true
 });
@@ -2117,9 +2125,41 @@ fn build_shimmed_context(base_url: &Option<String>) -> Context {
 /// # Errors
 /// 返回 `Err(msg)` 如果 JS 解析或执行失败。
 pub fn eval_in_tree(tree: Tree, base_url: Option<String>, expr: &str) -> Result<String, String> {
+    eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::Boa)
+}
+
+/// M67: `eval_in_tree` 的引擎可选版本。供 CDP `Runtime.evaluate` /
+/// `callFunctionOn` 用 —— 让 `document.title`、`document.querySelector` 等能
+/// 访问真实页面 DOM。与 `run_scripts_with_base` 不同：不执行页面里的
+/// `<script>`，只 eval 调用方传入的表达式。tree 的 thread-local 安装在函数
+/// 返回时由 `TreeGuard::drop` 清理。
+///
+/// **返回值格式约定**（两引擎统一，便于 CDP `classify_value` 复用）：
+/// - 字符串结果**带双引号**（模拟 boa `display()`：`"hello"`）
+/// - number / bool / undefined / null 原样 `to_string()`（`5` / `true` / `undefined`）
+///
+/// # Errors
+/// 返回 `Err(msg)` 如果 JS 解析或执行失败。
+pub fn eval_in_tree_engine(
+    tree: Tree,
+    base_url: Option<String>,
+    expr: &str,
+    engine_kind: &crate::engine::EngineKind,
+) -> Result<String, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
+
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
+
+    // ── QuickJS 分支 ──
+    #[cfg(feature = "quickjs")]
+    if matches!(engine_kind, crate::engine::EngineKind::QuickJs) {
+        return eval_in_tree_quickjs(shared, base_url, expr);
+    }
+    // 非 QuickJS（boa）或 quickjs feature 未启用时的回退。
+    let _ = engine_kind;
+
+    // ── boa 分支（默认 + QuickJS feature 未启用时的回退）──
     let mut ctx = build_shimmed_context(&base_url);
     // 安装 tree guard：让 document/window shims 的 __* 桥能访问 DOM。
     // guard 在作用域结束时自动清理 thread-local slot。
@@ -2128,6 +2168,79 @@ pub fn eval_in_tree(tree: Tree, base_url: Option<String>, expr: &str) -> Result<
         .eval(Source::from_bytes(expr))
         .map_err(|e| format!("js eval error: {e}"))?;
     Ok(result.display().to_string())
+}
+
+/// M67: QuickJS 版 `eval_in_tree`。复用 `run_scripts_quickjs` 的 setup 模式
+/// （install_shared + storage/nav/cookie + shim install + 裸变量声明），但只
+/// eval 调用方传入的单表达式，不执行页面 `<script>`。
+///
+/// 结果格式对齐 boa `display()`：字符串结果带双引号，其余原样 to_string()。
+#[cfg(feature = "quickjs")]
+fn eval_in_tree_quickjs(
+    shared: crate::bridge::SharedTree,
+    base_url: Option<String>,
+    expr: &str,
+) -> Result<String, String> {
+    let mut engine_box = crate::engine::EngineKind::QuickJs.create(None);
+    let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (*engine_box)
+        .as_any_mut()
+        .downcast_mut::<crate::engine_quickjs::QuickJsEngineWrapper>()
+        .expect("engine_name was quickjs but type mismatch");
+    let engine = wrapper.engine();
+
+    // 安装 thread_local DOM 后端（和 run_scripts_quickjs 一致）。
+    let _guard = crate::bridge::install_shared_with_base(shared, base_url.clone());
+    let storage = browser_storage::new_storage();
+    crate::bridge::install_storage(storage);
+    let initial_url = base_url
+        .clone()
+        .unwrap_or_else(|| "about:blank".to_string());
+    let nav = browser_navigation::new_navigation(&initial_url);
+    crate::bridge::install_navigation(nav);
+    crate::bridge::ensure_cookie_jar();
+
+    // 安装 JS shim —— 所有 shim 拼接成一个大字符串一次 eval（QuickJS ctx.eval
+    // 每次是独立 scope，var 不跨 eval 泄漏，必须拼接）。
+    let shims = get_all_shim_js(&base_url);
+    let combined_shim: String = shims
+        .iter()
+        .map(|(_, js)| js.as_str())
+        .collect::<Vec<_>>()
+        .join("\n;\n");
+    if let Err(e) = engine.eval(&combined_shim) {
+        eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
+    }
+    // 裸变量声明（globalThis.xxx 不会被解析为裸变量 xxx）。
+    let _ = engine.eval(
+        r#"var document = globalThis.document;
+var navigator = globalThis.navigator;
+var location = globalThis.location;
+var history = globalThis.history;
+var localStorage = globalThis.localStorage;
+var sessionStorage = globalThis.sessionStorage;
+var Event = globalThis.Event;
+var CustomEvent = globalThis.CustomEvent;
+var URL = globalThis.URL;
+var URLSearchParams = globalThis.URLSearchParams;
+var fetch = globalThis.fetch;
+var setTimeout = globalThis.setTimeout;
+var clearTimeout = globalThis.clearTimeout;
+var setInterval = globalThis.setInterval;
+var clearInterval = globalThis.clearInterval;
+var requestAnimationFrame = globalThis.requestAnimationFrame;
+var queueMicrotask = globalThis.queueMicrotask;
+var atob = globalThis.atob;
+var btoa = globalThis.btoa;
+var crypto = globalThis.crypto;
+var self = globalThis;
+"#,
+    );
+
+    // eval 调用方表达式 —— 用封装好的 eval_display_string（对齐 boa display 格式）。
+    let result = engine.eval_display_string(expr);
+    // engine 在作用域结束时 drop（释放 QuickJS runtime）
+    drop(engine_box);
+    result
 }
 
 #[cfg(test)]
