@@ -7,7 +7,8 @@ set -uo pipefail
 BROWSER="./target/release/browser"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-SITES=(
+# 默认 5 站；可通过环境变量 SITES_COUNT 扩展（如 SITES_COUNT=10）
+ALL_SITES=(
   "https://nuxt.com/"
   "https://svelte.dev/"
   "https://vite.dev/"
@@ -20,6 +21,8 @@ SITES=(
   "https://nextjs.org/"
 )
 
+SITES_COUNT="${SITES_COUNT:-5}"
+SITES=("${ALL_SITES[@]:0:$SITES_COUNT}")
 count=${#SITES[@]}
 
 echo ""
@@ -62,17 +65,9 @@ echo "━━━ 1. 内存对标（峰值 RSS MB，越低越好）━━━━━
 printf "  %-16s | %8s %8s | %s\n" "站点" "QuickJS" "Chrome" "内存比"
 printf '  %.0s-' {1..55}; echo
 
-qjs_mem_sum=0
-chr_mem_sum=0
-valid=0
-
-for url in "${SITES[@]}"; do
-  short=$(echo "$url" | sed 's|https://||;s|/$||')
-  
-  # QuickJS 内存：用 --profile flag（内部 mach API，可靠）
-  q_mem=$($BROWSER fetch "$url" --format text --profile 2>&1 >/dev/null | grep "TOTAL" | grep -oE '[0-9]+MB' | head -1 | tr -d 'MB')
-  # Chrome 内存：用 ps 采样峰值
-  "$CHROME" --headless=new --disable-gpu --no-sandbox --virtual-time-budget=8000 --dump-dom "$url" >/dev/null 2>/dev/null &
+# Chrome 内存：用 ps 采样峰值
+chrome_peak_rss() {
+  "$CHROME" --headless=new --disable-gpu --no-sandbox --virtual-time-budget=8000 --dump-dom "$1" >/dev/null 2>/dev/null &
   local _cpid=$!
   local _peak=0
   while kill -0 $_cpid 2>/dev/null; do
@@ -80,7 +75,20 @@ for url in "${SITES[@]}"; do
     [ -n "$_rss" ] && [ "$_rss" -gt "$_peak" ] 2>/dev/null && _peak=$_rss
     sleep 0.3
   done
-  c_mem=$_peak
+  echo "$_peak"
+}
+
+qjs_mem_sum=0
+chr_mem_sum=0
+valid=0
+
+for url in "${SITES[@]}"; do
+  short=$(echo "$url" | sed 's|https://||;s|/$||')
+
+  # QuickJS 内存：用 --profile flag（内部 mach API，可靠）
+  q_mem=$($BROWSER fetch "$url" --format text --profile 2>&1 >/dev/null | grep "TOTAL" | grep -oE '[0-9]+MB' | head -1 | tr -d 'MB')
+  # Chrome 内存：用 ps 采样峰值
+  c_mem=$(chrome_peak_rss "$url")
   
   ratio="—"
   if [ -n "$q_mem" ] && [ -n "$c_mem" ] && [ "$q_mem" -gt 0 ] 2>/dev/null && [ "$c_mem" -gt 0 ] 2>/dev/null; then
@@ -169,22 +177,23 @@ chr_clean=0
 
 for url in "${SITES[@]}"; do
   short=$(echo "$url" | sed 's|https://||;s|/$||')
-  
-  # QuickJS 错误
-  q_err=$($BROWSER fetch "$url" --format text 2>&1 >/dev/null | grep -c "quickjs.*Error" 2>/dev/null || echo 0)
-  q_err=$(echo "$q_err" | tr -d ' \n')
-  $BROWSER fetch "$url" --format text >/dev/null 2>&1
-  q_crash=$?
-  
-  # Chrome 错误（检测 stderr 里的 ERROR/FATAL）
-  c_err=$("$CHROME" --headless=new --disable-gpu --no-sandbox --virtual-time-budget=8000 --dump-dom "$url" 2>&1 >/dev/null | grep -ciE "ERROR|FATAL|crash" 2>/dev/null || echo 0)
+
+  # QuickJS 错误（只抓 JS 引擎报错，过滤网络/进度噪声）
+  q_err=$($BROWSER fetch "$url" --format text 2>&1 1>/dev/null | grep -oE '\[quickjs\].*Error|\[js\].*Error' | wc -l | tr -d ' ')
+  [ -z "$q_err" ] && q_err=0
+  q_crash=0
+  $BROWSER fetch "$url" --format text >/dev/null 2>&1 || q_crash=$?
+
+  # Chrome 错误（stderr 里 JS 相关的 Uncaught/error）
+  c_err=$("$CHROME" --headless=new --disable-gpu --no-sandbox --virtual-time-budget=8000 --dump-dom "$url" 2>&1 1>/dev/null | grep -ciE "Uncaught|ReferenceError|TypeError|SyntaxError" || true)
   c_err=$(echo "$c_err" | tr -d ' \n')
-  
+  [ -z "$c_err" ] && c_err=0
+
   q_status="✅"
   [ "$q_err" != "0" ] && q_status="⚠️${q_err}错"
-  [ $q_crash -ne 0 ] && q_status="❌崩溃"
-  [ "$q_err" = "0" ] && [ $q_crash -eq 0 ] && qjs_clean=$((qjs_clean + 1))
-  
+  [ "$q_crash" != "0" ] && q_status="❌崩溃"
+  [ "$q_err" = "0" ] && [ "$q_crash" = "0" ] && qjs_clean=$((qjs_clean + 1))
+
   c_status="✅"
   [ "$c_err" != "0" ] && c_status="⚠️${c_err}行"
   [ "$c_err" = "0" ] && chr_clean=$((chr_clean + 1))

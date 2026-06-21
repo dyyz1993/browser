@@ -2,6 +2,65 @@
 
 > 日期：2026-06-21
 > 引擎：QuickJS（rquickjs 0.12，默认）vs boa（git main）vs Chrome（headless --dump-dom）
+> **5 站 Chrome 全维度对标数据**：`tests/benchmarks/chrome_test_suite.sh`（2026-06-21 跑批）
+
+---
+
+## 〇、5 站对标 Chrome 完整数据（全维度）
+
+> 命令：`SITES_COUNT=5 bash tests/benchmarks/chrome_test_suite.sh`
+> 5 维度：内存 | 速度 | 内容覆盖 | 错误 | 并发
+
+### 内存（峰值 RSS MB，越低越好）
+
+| 站点 | QuickJS | Chrome | 内存比 |
+|------|--------:|-------:|:------:|
+| nuxt.com | 38MB | 256MB | 1/6 |
+| svelte.dev | 17MB | 260MB | 1/15 |
+| vite.dev | 21MB | 259MB | 1/12 |
+| vuejs.org | 20MB | 268MB | 1/13 |
+| react.dev | 26MB | 260MB | 1/10 |
+| **平均** | **24MB** | **260MB** | **1/11** |
+
+### 速度（渲染时间秒，越低越好）
+
+| 站点 | QuickJS | Chrome | 速度比 |
+|------|--------:|-------:|:------:|
+| nuxt.com | 11.3s | 4.8s | Chrome 快 2.4x |
+| svelte.dev | 0.3s | 4.1s | **QJS 快 13.7x** |
+| vite.dev | 1.3s | 4.6s | **QJS 快 3.5x** |
+| vuejs.org | 1.4s | 3.9s | **QJS 快 2.8x** |
+| react.dev | 2.7s | 14.8s | **QJS 快 5.5x** |
+
+**QuickJS 4/5 站比 Chrome 快**（nuxt 因远程 chunk 预取多，是唯一慢的站）
+
+### 内容覆盖（文本字符数，越接近 Chrome 越好）
+
+| 站点 | QuickJS | Chrome | 覆盖率 |
+|------|--------:|-------:|:------:|
+| nuxt.com | 6124 | 6948 | **88%** |
+| svelte.dev | 1938 | 2122 | **91%** |
+| vite.dev | 2994 | 4107 | **73%** |
+| vuejs.org | 1354 | 2120 | **64%** |
+| react.dev | 7530 | 8287 | **91%** |
+| **平均** | | | **81%** |
+
+### 并发（3 站并发总时间）
+
+| 模式 | QuickJS | Chrome |
+|------|--------:|-------:|
+| 3 站并发 | 3.8s | 9.1s |
+| 3 站串行 | 3.8s | — |
+| 并发提速 | 1.0x | — |
+
+**QuickJS 并发 3.8s vs Chrome 9.1s（快 2.4x）**
+
+### 一句话总结
+
+- **内存**：QuickJS 平均 **24MB**，Chrome 平均 **260MB** → **1/11**
+- **速度**：QuickJS **4/5 站比 Chrome 快**（svelte 快 13.7x，react 快 5.5x）
+- **覆盖**：平均 **81%**（svelte/react 91%，对标 Chrome 文本内容）
+- **并发**：QuickJS **3.8s** vs Chrome **9.1s**（3 站并发，快 2.4x）
 
 ---
 
@@ -146,10 +205,11 @@ cargo test --workspace --no-fail-fast
 ## 五、结论
 
 **QuickJS 是更好的 JS 引擎选择**：
+- **对标 Chrome**（5 站实测）：内存 **1/11**、速度 **4/5 站更快**、内容覆盖 **81%**、并发 **快 2.4x**
 - 8/9 站 0 错误，9/9 站内容完整
 - 速度 7/9 站比 boa 快
-- 内存中位数 21MB（boa 1/2，Chrome 1/13）
-- react.dev 渲染 7530 字符（boa 0）
+- 内存中位数 21MB（boa 1/2，Chrome **1/11**）
+- react.dev 渲染 7530 字符（boa 只有 0，QuickJS ES2020 让 React hydration 成功）
 - 支持 ESM module（Module::declare + HttpLoader）
 - GC 安全（eval_safe，0 assertion）
 
