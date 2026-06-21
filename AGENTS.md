@@ -479,6 +479,20 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     - 测试：`integration_js_features.rs` 入库回归测试
 16. **测试方法和步骤必须写入 AGENTS.md**（第三章 QuickJS 测试方法）。
 17. **对标 Chrome 是渲染质量的最终标准**（见 `docs/assessments/M66-quickjs-csr-comparison.md`）。
+18. **QuickJS bridge 函数必须走真实 DOM 操作，不能走 set_attr 当 attribute**（M66-fix）：
+    - ❌ `__setBody` 不能注册成 `set_attr(body, "innerHTML", html)`——`set_attr_inner`
+      把 innerHTML 当普通 attribute（只改属性表），**不替换子节点**，渲染仍读旧 DOM
+    - ✅ `__setBody` 必须走 `qjs_bridge::set_body()` → `set_body_inner_html`（清空子节点+插文本）
+    - ✅ `__appendBody` 必须走 `append_body_text`（追加，不清空）
+    - ✅ `__fetchSetBody`/`__fetchAppendBody` 必须注册（镜像 boa 的 fetch_set_body/fetch_append_body）
+    - 新增 bridge 函数时，先看 boa 的 `bridge.rs` 同名函数怎么实现，再在 `qjs_bridge` 镜像
+19. **QuickJS Promise microtask 必须显式 drain**（M66-fix）：
+    - ❌ `run_jobs()` 不能是空函数——rquickjs 的 Promise microtask（`.then` 回调）**不会**
+      在 `ctx.with` 退出时自动 drain，必须显式调用 `ctx.execute_pending_job()`
+    - ✅ `run_jobs` 实现：`while ctx.execute_pending_job() {}`（带上限 1000 防御死循环）
+    - ✅ event loop 里**先 drain microtask 再 drain macrotask**（`run_jobs` → `__drainDueTimers`），
+      匹配 JS 的 microtask-before-macrotask 语义。否则 `setTimeout(0)` 回调跑得比
+      `Promise.then` 早，拿不到 then 里准备的数据（`integration_timer_spa` 回归测试覆盖）
 
 ---
 
