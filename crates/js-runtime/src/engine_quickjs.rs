@@ -147,6 +147,9 @@ impl QuickJsEngine {
                 let _ = g.set("__getText", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_text(id)).unwrap());
                 let _ = g.set("__getTag", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_tag(id)).unwrap());
                 let _ = g.set("__getTagName", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_tag(id)).unwrap());
+                // M67: __findTag(tag) -> f64 —— 按标签名找第一个匹配节点 NodeId（对齐 boa get_tag 字符串模式）。
+                // document.title/head getter 用它读真实 DOM（找 <title>/<head> 节点）。
+                let _ = g.set("__findTag", Function::new(ctx.clone(), |tag: String| bridge::qjs_bridge::get_tag_by_name(tag)).unwrap());
                 let _ = g.set("__getAttr", Function::new(ctx.clone(), |id: f64, k: String| bridge::qjs_bridge::get_attr(id, k)).unwrap());
                 let _ = g.set("__setAttr", Function::new(ctx.clone(), |id: f64, k: String, v: String| bridge::qjs_bridge::set_attr(id, k, v)).unwrap());
                 let _ = g.set("__removeAttr", Function::new(ctx.clone(), |id: f64, k: String| bridge::qjs_bridge::remove_attr(id, k)).unwrap());
@@ -304,6 +307,31 @@ impl QuickJsEngine {
     /// M66: 带字符串返回值的 eval。
     pub fn eval_string(&mut self, js: &str) -> Option<String> {
         self.ctx.with(|ctx: Ctx| ctx.eval::<String, _>(js).ok())
+    }
+
+    /// M67: eval 单表达式，返回对齐 boa `display()` 格式的结果字符串。
+    ///
+    /// 供 CDP `eval_in_tree_engine` 的 QuickJS 分支用。CDP evaluate 的返回类型
+    /// 不定（number/bool/string/undefined/null/object），用 JS 层统一格式化：
+    /// - string → JSON.stringify 包引号（正确转义换行/引号），模拟 boa display
+    /// - undefined / null / number / bool → String(r) 原样字面量
+    ///
+    /// 用 `CatchResultExt::catch` 捕获错误，CaughtError 在 `with` 闭包内 drop（GC 安全）。
+    pub fn eval_display_string(&mut self, js: &str) -> Result<String, String> {
+        use rquickjs::CatchResultExt;
+        // 用 IIFE 在 JS 层格式化结果，避免 rquickjs Value 跨闭包取值的复杂性。
+        // 注意：expr 原样注入到 return 后，不转义（CDP evaluate 的 expr 本就是 JS 代码）。
+        let wrapper = format!(
+            "(function() {{ var r = (function(){{ return ({EXPR}); }})(); \
+             return typeof r === 'string' ? JSON.stringify(r) : String(r); }})()",
+            EXPR = js
+        );
+        self.ctx.with(
+            |ctx: Ctx| match ctx.eval::<String, _>(wrapper.as_str()).catch(&ctx) {
+                Ok(s) => Ok(s),
+                Err(e) => Err(format!("{e}")),
+            },
+        )
     }
 
     /// M66: 执行 ESM module 源码（支持 import/export/import.meta）。

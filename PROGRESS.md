@@ -11,12 +11,12 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M67（内容完整性度量：4 指标去噪 + 测试量化阈值） |
-| 总 commits | ~235 |
-| 测试 | 796 pass, 0 clippy warnings |
+| HEAD | M67.1（CDP Runtime domain 接 EngineKind，默认 QuickJS） |
+| 总 commits | ~236 |
+| 测试 | 800 pass, 0 clippy warnings |
 | Crates | 16 |
-| CLI 子命令 | 8 + `--js-engine boa\|quickjs` |
-| JS 引擎 | **双引擎**：boa（默认）+ QuickJS（`--features quickjs`） |
+| CLI 子命令 | 8 + `--js-engine boa\|quickjs`（含 `cdp --js-engine`） |
+| JS 引擎 | **双引擎**：QuickJS（默认，CLI + CDP）+ boa（`--js-engine boa`） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
 | 截图 G2 | ✅ |
 | 跨平台 G3 | ✅ |
@@ -24,6 +24,55 @@
 ---
 
 ## 最近变更（倒序）
+
+### M67.1 — CDP Runtime domain 接 EngineKind，默认 QuickJS ✅
+
+**解决「CDP 是 workspace 唯一还硬编码 boa 的路径」问题。** M66 把 CLI 三命令
+（render-url/fetch/open）默认引擎切到 QuickJS，但 CDP 的 `Runtime.evaluate` /
+`callFunctionOn`（puppeteer 的 `page.evaluate`/`title`/`$` 全走这里）仍写死走 boa。
+
+#### 现状（改动前）
+- `eval_in_tree`（scripts.rs）硬编码 `build_shimmed_context()`（boa ctx），CDP 唯一
+  JS 执行入口。
+- `CdpServer::listen(port)` / `runtime_domain::dispatch(...)` 链路无 engine 透传点。
+- `Cdp` CLI 命令只有 `--port`，无 `--js-engine`。
+
+#### 改动（5 文件）
+- **js-runtime/scripts.rs** —— 新增 `eval_in_tree_engine(tree, base_url, expr, &EngineKind)`：
+  - boa 分支沿用 `eval_in_tree` 逻辑（返回 boa `display()` 格式）
+  - QuickJS 分支复用 `run_scripts_quickjs` 的 setup 模式（install_shared + storage/nav/
+    cookie + shim + 裸变量声明），调新方法 `engine.eval_display_string()`
+  - **返回值格式约定**：两引擎统一（string 带引号模拟 boa display，number/bool/undefined/
+    null 原样），`classify_value` 不分引擎
+  - 旧 `eval_in_tree` 保留（内部委托 boa 分支），向后兼容
+- **js-runtime/engine_quickjs.rs** —— 新增 `eval_display_string(js)`：用 IIFE 在 JS 层
+  格式化结果（`typeof r==='string' ? JSON.stringify(r) : String(r)`），一次 eval 拿
+  String 结果，避免 rquickjs Value 跨闭包取值复杂性。用 `CatchResultExt::catch` GC 安全。
+- **js-runtime/bridge.rs** —— `qjs_bridge::get_tag_by_name(tag) -> f64`：按标签名找
+  第一个匹配节点 NodeId（找不到 -1.0），复用 `find_first_element`。对齐 boa `get_tag`
+  的字符串模式。
+- **js-runtime/engine_quickjs.rs** —— 注册 `__findTag(tag)` 桥 + QuickJS shim 的
+  `document.title` getter 从「硬编码空串」改为读真实 `<title>` 节点（`__findTag('title')`
+  + `__getText`）。**这是顺手补的 shim 缺口**——CDP `document.title` 依赖它。
+- **cdp/runtime_domain.rs** —— `dispatch(...)` 加 `engine_kind: &EngineKind` 参数，
+  两处 `eval_in_tree` 调用改为 `eval_in_tree_engine`。`classify_value` 不动。
+- **cdp/server.rs** —— `CdpSession` 加 `engine_kind` 字段，`handle`/`listen`/`accept_one`
+  加参数透传，两处 `dispatch` 调用传 `&self.engine_kind`。
+- **cdp/Cargo.toml** —— 加 `quickjs` feature 转发（`browser-js-runtime/quickjs`），默认开。
+- **cli/main.rs** —— `Cdp` 命令加 `--js-engine`（默认 quickjs），修正 3 处过时注释。
+
+#### 验证
+- 4 个新 QuickJS 测试：`evaluate_arithmetic_quickjs` / `evaluate_string_quickjs` /
+  `evaluate_boolean_quickjs` / `evaluate_reads_dom_quickjs`（document.title 读真实 DOM）。
+- 端到端：`browser cdp --port N`（默认 quickjs），5 个 Runtime.evaluate 表达式全通过
+  （含 `typeof Symbol` → `function`，**QuickJS 原生支持 Symbol，boa 0.20 不支持**）。
+- 三门禁：fmt ✅ / clippy 0 warnings ✅ / **800 passed**（baseline 796 + 4 新）。
+- boa 回退模式（`--js-engine boa`）同样 5 表达式全过。
+
+#### 边界（本次不做）
+- ❌ `Page.navigate` 执行页面 `<script>`（CDP 目前只 evaluate 注入表达式，不跑页面
+  自带脚本）——更大 scope，另议。
+- ❌ CDP engine 缓存/复用（性能优化）——每次 evaluate new engine，和 boa 版特征一致。
 
 ### M67 — 内容完整性度量加固（4 指标 + 测试量化阈值）✅
 

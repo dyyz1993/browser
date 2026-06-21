@@ -23,6 +23,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use browser_js_runtime::EngineKind;
 use browser_ws::handshake::{build_server_response, parse_key_from_request};
 use browser_ws::{decode_frame, encode_frame, Frame, OpCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -51,13 +52,19 @@ impl CdpServer {
     /// # Errors
     /// Returns an error if binding fails or the accept loop hits an
     /// unrecoverable I/O error.
-    pub async fn listen(port: u16) -> std::io::Result<()> {
+    pub async fn listen(port: u16, engine_kind: EngineKind) -> std::io::Result<()> {
         let listener = TcpListener::bind(("127.0.0.1", port)).await?;
-        eprintln!("[cdp] listening on http://127.0.0.1:{port}");
+        eprintln!(
+            "[cdp] listening on http://127.0.0.1:{port} (engine: {})",
+            match engine_kind {
+                EngineKind::QuickJs => "quickjs",
+                EngineKind::Boa => "boa",
+            }
+        );
         loop {
             let (stream, addr) = listener.accept().await?;
             eprintln!("[cdp] connection from {addr}");
-            if let Err(e) = CdpSession::handle(stream).await {
+            if let Err(e) = CdpSession::handle(stream, engine_kind).await {
                 eprintln!("[cdp] session ended: {e}");
             }
         }
@@ -65,9 +72,12 @@ impl CdpServer {
 
     /// Accept and handle exactly one connection, then return. Used by tests.
     #[cfg(test)]
-    pub(crate) async fn accept_one(listener: TcpListener) -> std::io::Result<()> {
+    pub(crate) async fn accept_one(
+        listener: TcpListener,
+        engine_kind: EngineKind,
+    ) -> std::io::Result<()> {
         let (stream, _) = listener.accept().await?;
-        let _ = CdpSession::handle(stream).await;
+        let _ = CdpSession::handle(stream, engine_kind).await;
         Ok(())
     }
 }
@@ -93,6 +103,9 @@ pub struct CdpSession {
     page: Arc<Mutex<crate::page::PageState>>,
     /// M49: emulation state (device metrics, user agent).
     emulation: Arc<Mutex<crate::emulation_domain::EmulationState>>,
+    /// M67: JS engine backend for `Runtime.evaluate` / `callFunctionOn`.
+    /// Default QuickJs (aligns with CLI); Boa fallback via `--js-engine boa`.
+    engine_kind: EngineKind,
 }
 
 impl CdpSession {
@@ -100,11 +113,12 @@ impl CdpSession {
     ///
     /// # Errors
     /// Returns an error string on handshake or I/O failure.
-    pub async fn handle(stream: TcpStream) -> Result<(), String> {
+    pub async fn handle(stream: TcpStream, engine_kind: EngineKind) -> Result<(), String> {
         let mut session = CdpSession {
             stream,
             page: Arc::new(Mutex::new(crate::page::PageState::default())),
             emulation: Arc::new(Mutex::new(crate::emulation_domain::EmulationState::new())),
+            engine_kind,
         };
         session.route().await
     }
@@ -380,7 +394,14 @@ impl CdpSession {
                             p
                         }),
                     );
-                    match crate::runtime_domain::dispatch(id, m, msg.params.as_ref(), tree, url) {
+                    match crate::runtime_domain::dispatch(
+                        id,
+                        m,
+                        msg.params.as_ref(),
+                        tree,
+                        url,
+                        &self.engine_kind,
+                    ) {
                         Ok(resp) => (resp, vec![event]),
                         Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                             CdpMessage::error_response(id, -32601, "Method not found"),
@@ -392,7 +413,14 @@ impl CdpSession {
                         ),
                     }
                 } else {
-                    match crate::runtime_domain::dispatch(id, m, msg.params.as_ref(), tree, url) {
+                    match crate::runtime_domain::dispatch(
+                        id,
+                        m,
+                        msg.params.as_ref(),
+                        tree,
+                        url,
+                        &self.engine_kind,
+                    ) {
                         Ok(resp) => (resp, vec![]),
                         Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                             CdpMessage::error_response(id, -32601, "Method not found"),
@@ -656,7 +684,7 @@ mod tests {
         // Server task: accept and handle one session.
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            CdpSession::handle(stream).await
+            CdpSession::handle(stream, EngineKind::Boa).await
         });
 
         // Client: connect, do WS handshake.
@@ -705,7 +733,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            CdpSession::handle(stream).await
+            CdpSession::handle(stream, EngineKind::Boa).await
         });
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let key = browser_ws::handshake::key_from_random([0x01; 16]);
@@ -737,7 +765,7 @@ mod tests {
     async fn http_discovery_version_endpoint() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener));
+        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
 
         // Plain HTTP GET /json/version (no WebSocket upgrade).
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -771,7 +799,7 @@ mod tests {
     async fn http_discovery_list_endpoint() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener));
+        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
 
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         client
@@ -803,7 +831,7 @@ mod tests {
         use browser_ws::handshake::build_client_request;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener));
+        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
 
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let key = browser_ws::handshake::key_from_random([0x99; 16]);
@@ -827,7 +855,7 @@ mod tests {
     async fn non_json_plain_http_returns_404() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener));
+        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
 
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         client

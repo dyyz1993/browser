@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use browser_dom::Tree;
-use browser_js_runtime::eval_in_tree;
+use browser_js_runtime::{eval_in_tree_engine, EngineKind};
 
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
 
@@ -23,15 +23,19 @@ use crate::jsonrpc::{CdpError, CdpMessage, Json};
 /// CDP response.
 ///
 /// `tree` / `url` describe the page that navigate() built. M48: evaluate /
-/// callFunctionOn now run in a shimmed boa context bound to this tree, so
+/// callFunctionOn now run in a shimmed context bound to this tree, so
 /// `document.title`, `document.querySelector`, etc. read the real DOM (previously
 /// they hit an empty `JsRuntime::new()` → "document is not defined").
+///
+/// M67: `engine_kind` selects the JS backend (QuickJs default, Boa fallback).
+/// Both produce a unified display-format string consumed by `classify_value`.
 pub fn dispatch(
     id: i64,
     method: &str,
     params: Option<&Json>,
     tree: &Tree,
     url: &str,
+    engine_kind: &EngineKind,
 ) -> Result<String, CdpError> {
     match method {
         "Runtime.enable" | "Runtime.disable" | "Runtime.runIfWaitingForDebugger" => {
@@ -44,7 +48,7 @@ pub fn dispatch(
             let expr = params
                 .and_then(|p| p.get_str("expression"))
                 .ok_or_else(|| CdpError::InvalidJson("missing expression".to_string()))?;
-            match eval_in_tree(tree.clone(), url_or_default(url), expr) {
+            match eval_in_tree_engine(tree.clone(), url_or_default(url), expr, engine_kind) {
                 Ok(value) => {
                     // Build RemoteObject { type, value }.
                     let (val_type, val_json) = classify_value(&value);
@@ -101,7 +105,7 @@ pub fn dispatch(
                 FD = function_decl,
                 ARGS = args_str.join(",")
             );
-            match eval_in_tree(tree.clone(), url_or_default(url), &expr) {
+            match eval_in_tree_engine(tree.clone(), url_or_default(url), &expr, engine_kind) {
                 Ok(value) => {
                     // boa display() 的输出，classify_value 据此归类。
                     let (val_type, val_json) = classify_value(&value);
@@ -176,6 +180,7 @@ mod tests {
             Some(&Json::Object(p)),
             &Tree::new(),
             "",
+            &EngineKind::Boa,
         )
         .unwrap();
         assert!(resp.contains("\"value\":5"), "got: {resp}");
@@ -195,6 +200,7 @@ mod tests {
             Some(&Json::Object(p)),
             &Tree::new(),
             "",
+            &EngineKind::Boa,
         )
         .unwrap();
         assert!(resp.contains("\"value\":\"HELLO\""), "got: {resp}"); // boa quotes; classify strips
@@ -210,6 +216,7 @@ mod tests {
             Some(&Json::Object(p)),
             &Tree::new(),
             "",
+            &EngineKind::Boa,
         )
         .unwrap();
         assert!(resp.contains("\"type\":\"boolean\""), "got: {resp}");
@@ -229,6 +236,7 @@ mod tests {
             Some(&Json::Object(p)),
             &Tree::new(),
             "",
+            &EngineKind::Boa,
         )
         .unwrap();
         assert!(resp.contains("\"exceptionDetails\""), "got: {resp}");
@@ -236,7 +244,15 @@ mod tests {
 
     #[test]
     fn enable_returns_ok_empty() {
-        let resp = dispatch(1, "Runtime.enable", None, &Tree::new(), "").unwrap();
+        let resp = dispatch(
+            1,
+            "Runtime.enable",
+            None,
+            &Tree::new(),
+            "",
+            &EngineKind::Boa,
+        )
+        .unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
     }
 
@@ -263,7 +279,99 @@ mod tests {
     #[test]
     fn unknown_method_noop() {
         // M53: unknown methods now return no-op ack instead of error
-        let resp = dispatch(1, "Runtime.totallyFake", None, &Tree::new(), "").unwrap();
+        let resp = dispatch(
+            1,
+            "Runtime.totallyFake",
+            None,
+            &Tree::new(),
+            "",
+            &EngineKind::Boa,
+        )
+        .unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
+    }
+
+    // ── M67: QuickJS 引擎路径回归测试 ──
+    // 验证 eval_in_tree_engine 的 QuickJS 分支返回值格式与 boa 对齐
+    // （classify_value 不分引擎，必须统一格式）。
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn evaluate_arithmetic_quickjs() {
+        let mut p = BTreeMap::new();
+        p.insert("expression".to_string(), Json::String("2 + 3".to_string()));
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+            &EngineKind::QuickJs,
+        )
+        .unwrap();
+        assert!(resp.contains("\"value\":5"), "got: {resp}");
+        assert!(resp.contains("\"type\":\"number\""), "got: {resp}");
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn evaluate_string_quickjs() {
+        let mut p = BTreeMap::new();
+        p.insert(
+            "expression".to_string(),
+            Json::String("\"hello\".toUpperCase()".to_string()),
+        );
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+            &EngineKind::QuickJs,
+        )
+        .unwrap();
+        // QuickJS 分支模拟 boa display 格式：字符串结果带引号。
+        assert!(resp.contains("\"value\":\"HELLO\""), "got: {resp}");
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn evaluate_boolean_quickjs() {
+        let mut p = BTreeMap::new();
+        p.insert("expression".to_string(), Json::String("1 < 2".to_string()));
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+            &EngineKind::QuickJs,
+        )
+        .unwrap();
+        assert!(resp.contains("\"type\":\"boolean\""), "got: {resp}");
+        assert!(resp.contains("\"value\":true"), "got: {resp}");
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn evaluate_reads_dom_quickjs() {
+        // 验证 QuickJS 分支的 tree guard 生效：evaluate 能读真实 DOM。
+        let html = "<html><head><title>QJS Title</title></head><body><p>x</p></body></html>";
+        let tree = browser_html_parser::parse(html);
+        let mut p = BTreeMap::new();
+        p.insert(
+            "expression".to_string(),
+            Json::String("document.title".to_string()),
+        );
+        let resp = dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &tree,
+            "http://example.com/",
+            &EngineKind::QuickJs,
+        )
+        .unwrap();
+        assert!(resp.contains("\"QJS Title\""), "got: {resp}");
     }
 }

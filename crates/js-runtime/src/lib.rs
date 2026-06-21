@@ -40,8 +40,8 @@ pub use image_shim::install_image;
 pub use navigation_shim::install_navigation_globals;
 pub use runtime::JsRuntime;
 pub use scripts::{
-    eval_in_tree, execute_scripts, execute_scripts_with_base, extract_scripts, run_scripts,
-    run_scripts_with_base, run_scripts_with_base_engine,
+    eval_in_tree, eval_in_tree_engine, execute_scripts, execute_scripts_with_base, extract_scripts,
+    run_scripts, run_scripts_with_base, run_scripts_with_base_engine,
 };
 pub use spa_fallback::try_csr_fallback;
 pub use storage_shim::install_storage_globals;

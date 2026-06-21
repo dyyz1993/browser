@@ -39,6 +39,7 @@ pub trait JsEngine: std::any::Any {
 }
 
 /// M66: 默认引擎选择器。根据 CLI flag 创建对应引擎。
+#[derive(Clone, Copy)]
 pub enum EngineKind {
     Boa,
     #[allow(dead_code)]

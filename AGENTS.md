@@ -228,12 +228,12 @@ iframe/form/button 等噪声子树（复用 extractor clean.rs 的 Firecrawl 思
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M66（QuickJS 双引擎：JsEngine trait + QuickJS 后端，默认引擎） |
+| HEAD | M67.1（CDP Runtime domain 接 EngineKind，默认 QuickJS） |
 | 当前分支 | `main` |
 | 总 commits | 250+ |
 | Crates | **16** 个（含 `extractor` 后置过滤器） |
-| 测试 | **830+ passed**，0 clippy warnings |
-| JS 引擎 | **双引擎**：QuickJS（默认，rquickjs 0.12）+ boa（`--js-engine boa`） |
+| 测试 | **800 passed**，0 clippy warnings |
+| JS 引擎 | **双引擎**：QuickJS（默认，rquickjs 0.12，CLI + CDP）+ boa（`--js-engine boa`） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
 | 截图 G2 | ✅ |
 | 跨平台 G3 | ✅ |
@@ -503,8 +503,13 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     兜底或标注需 Chrome，不要无限投入补 API（边际收益递减）。
 11. **纯 JS polyfill 优先**：补 Web API 用 compat_shim 的 JS 字符串，不引 Rust 依赖。
     保证二进制不涨（M62 补了 15+ API，14MB 纹丝不动）。
-12. **QuickJS 是默认引擎**（M66）。所有新功能先确保 QuickJS 下可用，再确认 boa 兼容。
+12. **QuickJS 是默认引擎**（M66 + M67.1）。所有新功能先确保 QuickJS 下可用，再确认 boa 兼容。
     `--js-engine boa` 可切换回旧引擎调试。
+    - **CLI**（render-url/fetch/open）默认 QuickJS（M66）。
+    - **CDP**（`browser cdp`）默认 QuickJS（M67.1）：`Runtime.evaluate`/`callFunctionOn`
+      走 `eval_in_tree_engine(..., &EngineKind)`，不再硬编码 boa。`cdp --js-engine boa` 回退。
+    - **CDP 边界**：`Page.navigate` 目前**不执行页面自带 `<script>`**，只 evaluate 客户端
+      注入的表达式。让 navigate 跑页面脚本是更大 scope（未做）。
 13. **QuickJS GC 安全**（生死规则）：
     - ❌ 禁止用 `wrap_script`（try/catch 包装）——会触发 QuickJS C 层 GC assertion
     - ✅ 用 `eval_safe`（`CatchResultExt::catch`）捕获错误
