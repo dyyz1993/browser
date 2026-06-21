@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M66-fix（QuickJS bridge 三处 bug：__setBody/appendBody/Promise microtask） |
+| HEAD | M67（内容完整性度量：4 指标去噪 + 测试量化阈值） |
 | 总 commits | ~235 |
-| 测试 | 795 pass, 0 clippy warnings |
+| 测试 | 796 pass, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 8 + `--js-engine boa\|quickjs` |
 | JS 引擎 | **双引擎**：boa（默认）+ QuickJS（`--features quickjs`） |
@@ -24,6 +24,33 @@
 ---
 
 ## 最近变更（倒序）
+
+### M67 — 内容完整性度量加固（4 指标 + 测试量化阈值）✅
+
+**解决「测试不够给力、没有值反映完整性」问题：旧 wc -c 指标假繁荣。**
+
+核心问题：旧对标用 `wc -c` 总字符数（6124 vs 6948 → 88%）当覆盖率，极具欺骗性——
+渲染全 nav/footer 噪声、正文一个字没出，总字符数照样接近 Chrome。集成测试用
+`contains("Post A")` 断言，渲染丢 90% 内容只要剩一个词照样绿。
+
+#### 新增
+- `tests/benchmarks/completeness.py` —— 4 指标度量工具（纯标准库）
+  - `block_cov`（块覆盖）/ `sim_ratio`（相似度）/ `struct_jaccard`（链接）/ `word_cov`（词频）
+  - 去噪：nav/footer/script/style/aside 等子树不计入，测正文完整性
+  - 综合评级 A-F（block_cov×0.4 + word_cov×0.3 + sim×0.2 + struct×0.1）
+- `chrome_test_suite.sh` 第 3 部分升级：单字符数 → 4 指标表格 + 评级
+- `integration_spa.rs` 加固：
+  - `word_coverage()` helper（词覆盖率，≥0.9 阈值，替代 contains）
+  - 顺序断言（Posts: 必须在 Post A 前，防乱序）
+  - `spa_shell_completeness_quantified` 多块完整度测试（6 短语缺一不可）
+
+#### 实测发现（3 站）
+- 综合完整度 **0.971**（评级 A）：块覆盖 1.000 / 词频 1.000 / 相似度 0.987 / 结构 0.733
+- **新指标暴露了旧指标掩盖的问题**：vite.dev 结构覆盖只有 0.200
+  （QuickJS 只含 Chrome 链接 20%），旧 wc -c 显示"73% 假繁荣"看不出
+- 正文完整性（块/词频）QuickJS 已 100% 对齐 Chrome
+
+验证：796 passed（+1 新测试），0 failed，0 clippy warnings
 
 ### M66-fix — QuickJS bridge 三处关键 bug 修复（__setBody / appendBody / Promise microtask）✅
 

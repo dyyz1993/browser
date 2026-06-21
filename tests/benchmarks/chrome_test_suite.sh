@@ -6,6 +6,10 @@ set -uo pipefail
 
 BROWSER="./target/release/browser"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMP="$SCRIPT_DIR/completeness.py"
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 # 默认 5 站；可通过环境变量 SITES_COUNT 扩展（如 SITES_COUNT=10）
 ALL_SITES=(
@@ -134,36 +138,67 @@ echo "  QuickJS 速度领先: ${qjs_speed_wins}/${count} 站"
 
 ############################################################
 echo ""
-echo "━━━ 3. 内容覆盖对标（文本字符数，越接近 Chrome 越好）━━━━"
-printf "  %-16s | %8s %8s | %s\n" "站点" "QuickJS" "Chrome" "覆盖率"
-printf '  %.0s-' {1..55}; echo
+echo "━━━ 3. 内容完整度对标（4 指标，对标 Chrome 正文）━━━━━━━━━"
+echo "  指标：block_cov(块覆盖) sim_ratio(相似度) struct(链接) word_cov(词频)"
+echo "  去噪：nav/footer/script/style/aside 等噪声子树不计入"
+printf "  %-16s | %6s %6s %6s %6s | %-4s\n" "站点" "块覆盖" "相似度" "结构" "词频" "评级"
+printf '  %.0s-' {1..66}; echo
 
-coverage_sum=0
-coverage_valid=0
+bc_sum=0; sr_sum=0; sj_sum=0; wc_sum=0; comp_sum=0; cov_valid=0
 
 for url in "${SITES[@]}"; do
   short=$(echo "$url" | sed 's|https://||;s|/$||')
-  
-  q_chars=$($BROWSER fetch "$url" --format text 2>/dev/null | wc -c | tr -d ' ')
-  c_chars=$(chrome_text_chars "$url")
-  
-  cov="—"
-  if [ "$c_chars" -gt 0 ] 2>/dev/null && [ "$q_chars" -gt 1 ] 2>/dev/null; then
-    cov=$(python3 -c "print(f'{$q_chars/$c_chars*100:.0f}%')")
-    coverage_sum=$(python3 -c "print($coverage_sum + $q_chars/$c_chars*100)")
-    coverage_valid=$((coverage_valid + 1))
-  elif [ "$q_chars" -gt 1 ] 2>/dev/null; then
-    cov="有内容"
+  tag=$(echo "$short" | tr '.' '_')
+
+  # QuickJS：fetch 后序列化 DOM（post-JS HTML）
+  q_html="$WORK_DIR/$tag.qjs.html"
+  $BROWSER fetch "$url" --format html --only-main-content=false >"$q_html" 2>/dev/null
+
+  # Chrome：dump-dom（post-JS HTML）
+  c_html="$WORK_DIR/$tag.chr.html"
+  "$CHROME" --headless=new --disable-gpu --no-sandbox \
+    --virtual-time-budget=8000 --dump-dom "$url" >"$c_html" 2>/dev/null
+
+  # 4 指标度量
+  if [ -s "$q_html" ] && [ -s "$c_html" ]; then
+    metrics=$(python3 "$COMP" --ours "$q_html" --theirs "$c_html" --grade)
+    bc=$(echo "$metrics" | cut -f1)
+    sr=$(echo "$metrics" | cut -f2)
+    sj=$(echo "$metrics" | cut -f3)
+    wc=$(echo "$metrics" | cut -f4)
+    comp=$(echo "$metrics" | cut -f5)
+    grd=$(echo "$metrics" | cut -f6)
+    bc_sum=$(python3 -c "print($bc_sum+$bc)")
+    sr_sum=$(python3 -c "print($sr_sum+$sr)")
+    sj_sum=$(python3 -c "print($sj_sum+$sj)")
+    wc_sum=$(python3 -c "print($wc_sum+$wc)")
+    comp_sum=$(python3 -c "print($comp_sum+$comp)")
+    cov_valid=$((cov_valid + 1))
   else
-    cov="❌空"
+    bc="—"; sr="—"; sj="—"; wc="—"; comp="0"; grd="F"
   fi
-  
-  printf "  %-16s | %7s %7s | %s\n" "$short" "$q_chars" "$c_chars" "$cov"
+
+  # 评级图标
+  case "$grd" in
+    A|B) icon="✅";; C) icon="⚠️";; *) icon="❌";;
+  esac
+
+  printf "  %-16s | %6s %6s %6s %6s | %s%s\n" "$short" "$bc" "$sr" "$sj" "$wc" "$icon" "$grd"
 done
 
-if [ $coverage_valid -gt 0 ]; then
-  avg_cov=$(python3 -c "print(f'{$coverage_sum/$coverage_valid:.0f}%')")
-  echo "  平均覆盖率: ${avg_cov}"
+if [ $cov_valid -gt 0 ]; then
+  avg_comp=$(python3 -c "print(f'{$comp_sum/$cov_valid:.3f}')")
+  avg_bc=$(python3 -c "print(f'{$bc_sum/$cov_valid:.3f}')")
+  avg_wc=$(python3 -c "print(f'{$wc_sum/$cov_valid:.3f}')")
+  avg_grd=$(python3 -c "
+s=$comp_sum/$cov_valid
+print('A' if s>=0.85 else 'B' if s>=0.70 else 'C' if s>=0.55 else 'D' if s>=0.35 else 'F')
+")
+  printf '  %.0s-' {1..66}; echo
+  printf "  %-16s | %6s %6s %6s %6s | %s%s\n" "平均" "$avg_bc" \
+    "$(python3 -c "print(f'{$sr_sum/$cov_valid:.3f}')")" \
+    "$(python3 -c "print(f'{$sj_sum/$cov_valid:.3f}')")" "$avg_wc" "" "$avg_grd"
+  echo "  综合完整度: ${avg_comp}（评级 ${avg_grd}）"
 fi
 
 ############################################################
@@ -248,8 +283,8 @@ if [ $valid -gt 0 ]; then
   echo "  内存：QuickJS 平均 $((qjs_mem_sum/valid))MB | Chrome 平均 $((chr_mem_sum/valid))MB"
 fi
 echo "  速度：QuickJS ${qjs_speed_wins}/${count} 站比 Chrome 快"
-if [ $coverage_valid -gt 0 ]; then
-  echo "  覆盖率：平均 ${avg_cov}（对标 Chrome 文本内容）"
+if [ $cov_valid -gt 0 ]; then
+  echo "  完整度：综合 ${avg_comp}（评级 ${avg_grd}）——块覆盖 ${avg_bc} / 词频 ${avg_wc}"
 fi
 echo "  错误：QuickJS ${qjs_clean}/${count} 站 0错误 | Chrome ${chr_clean}/${count} 站 0错误"
 echo "  并发：QuickJS ${qjs_concurrent}s | Chrome ${chr_concurrent}s（3站并发）"

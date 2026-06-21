@@ -33,6 +33,22 @@ fn at_least_n_scripts(n: usize) -> impl Predicate<str> {
     })
 }
 
+/// M67: 词覆盖率 —— expected 词里 actual 命中多少（0.0-1.0）。
+/// 比 contains 强：contains 只要有"一个词"就过，这里要"绝大多数词"都在。
+/// 例如 expected="Post A | Post B | Post C | Post D" 4 个词都命中才得 1.0。
+fn word_coverage(actual: &str, expected: &str) -> f64 {
+    let expected_words: Vec<&str> = expected.split_whitespace().collect();
+    if expected_words.is_empty() {
+        return 1.0;
+    }
+    let actual_lower = actual.to_lowercase();
+    let hit = expected_words
+        .iter()
+        .filter(|w| actual_lower.contains(&w.to_lowercase()))
+        .count();
+    hit as f64 / expected_words.len() as f64
+}
+
 fn spa_shell_html(base: &str) -> String {
     format!(
         r#"<!doctype html>
@@ -83,7 +99,7 @@ async fn spa_shell_renders_combined_api_output() {
     //     __appendBody("\n")
     //     __fetchAppendBody(/api/posts-2) → "Post C | Post D"
     //   → render all of that as ASCII
-    bin()
+    let result = bin()
         .args(["render-url", &url, "--width", "200"])
         .assert()
         .success()
@@ -93,6 +109,67 @@ async fn spa_shell_renders_combined_api_output() {
         // "Loading..." placeholder must be gone — JS replaced it.
         .stdout(predicate::str::contains("Loading...").not())
         .stderr(at_least_n_scripts(1));
+
+    // M67 加固：量化完整度断言（不只 contains，要算覆盖率）。
+    // 期望完整输出包含 8 个词，覆盖率必须 >= 0.9（容许丢 1 个，但不能丢一半）。
+    let stdout = String::from_utf8_lossy(&result.get_output().stdout);
+    let expected_words = "Posts: Post A | Post B Post C | Post D";
+    let cov = word_coverage(&stdout, expected_words);
+    assert!(
+        cov >= 0.9,
+        "内容覆盖率 {cov:.2} < 0.9 —— 期望词 [{expected_words}] 在输出中覆盖不足\nstdout:\n{stdout}"
+    );
+
+    // M67 加固：顺序断言 —— Posts: 必须在 Post A 前，Post A 在 Post C 前（防乱序渲染）。
+    let i_posts = stdout.find("Posts:").unwrap();
+    let i_a = stdout.find("Post A").unwrap();
+    let i_c = stdout.find("Post C").unwrap();
+    assert!(
+        i_posts < i_a && i_a < i_c,
+        "内容顺序错乱：Posts:@{i_posts} Post A:@{i_a} Post C:@{i_c}\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn spa_shell_completeness_quantified() {
+    // M67: 量化完整度测试 —— 用多块内容验证渲染管线不丢块。
+    // 之前用 contains 只能验证"有某个词"，这里验证"期望的所有块都出现"。
+    // 5 个独立内容块，缺任何一个都会让覆盖率 < 1.0。
+    let server = MockServer::start().await;
+    let base = server.uri();
+
+    let html = r#"<!doctype html>
+<html><body>
+  <p>placeholder</p>
+  <script>
+    __setBody("Header Section");
+    __appendBody(" Block One alpha");
+    __appendBody(" Block Two beta");
+    __appendBody(" Block Three gamma");
+    __appendBody(" Block Four delta");
+    __appendBody(" Block Five epsilon");
+  </script>
+</body></html>"#;
+    Mock::given(method("GET"))
+        .and(path("/multi"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(html))
+        .mount(&server)
+        .await;
+
+    let result = bin()
+        .args(["render-url", &format!("{base}/multi"), "--width", "200"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("placeholder").not());
+
+    let stdout = String::from_utf8_lossy(&result.get_output().stdout);
+    // 6 个关键短语，每个都应出现。覆盖率阈值 1.0（一个都不能少）。
+    let expected = "Header Section alpha beta gamma delta epsilon";
+    let cov = word_coverage(&stdout, expected);
+    assert!(
+        cov >= 1.0,
+        "多块完整度 {cov:.2} < 1.0 —— 有块丢失\n期望：{expected}\n实际：\n{stdout}"
+    );
 }
 
 #[tokio::test]

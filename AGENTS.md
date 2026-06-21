@@ -180,6 +180,46 @@ browser fetch https://react.dev/ --format text --profile
 
 > 完整对标数据见 [`docs/assessments/M66-quickjs-csr-comparison.md`](./docs/assessments/M66-quickjs-csr-comparison.md)
 
+### 内容完整性度量（M67，4 指标）
+
+**⚠️ 不要用 `wc -c` 总字符数当完整性指标**——它极具欺骗性：渲染全 nav/footer
+噪声、正文一个字没出，总字符数照样接近 Chrome。M67 引入 4 指标去噪度量，
+工具 `tests/benchmarks/completeness.py`（纯标准库，不引第三方依赖）。
+
+```bash
+# 用法：对比两份 HTML 产物，输出 4 指标
+python3 tests/benchmarks/completeness.py --ours qjs.html --theirs chrome.html --grade -v
+
+# 典型流程：QuickJS fetch → HTML，Chrome dump-dom → HTML，再比
+browser fetch https://nuxt.com/ --format html --only-main-content=false > qjs.html
+"$CHROME" --headless=new --virtual-time-budget=8000 --dump-dom https://nuxt.com/ > chrome.html
+python3 tests/benchmarks/completeness.py --ours qjs.html --theirs chrome.html -v
+
+# 自动化：chrome_test_suite.sh 第 3 部分已集成
+SITES_COUNT=3 bash tests/benchmarks/chrome_test_suite.sh
+```
+
+**4 个指标**（值域 [0,1]，越高越好，综合评级 A-F）：
+
+| 指标 | 算法 | 反映什么 |
+|------|------|---------|
+| `block_cov` | Chrome 文本块（p/li/h1-6/article/td）里 ours 命中多少（`|交集|/|Chrome|`） | 正文段落爬全没 |
+| `sim_ratio` | 双方 HTML→纯文本归一化后 `difflib.SequenceMatcher.ratio` | 综合像不像 |
+| `struct_jaccard` | 链接集 a[href] 归一化（去 fragment/query）后 Jaccard `|交集|/|并集|` | DOM 结构完整度 |
+| `word_cov` | Chrome 正文高频词 top40（len≥4 去停用词）里 ours 命中比例 | 正文核心词覆盖 |
+
+**关键去噪**：提取文本块/词频时，过滤 nav/footer/script/style/aside/header/svg/
+iframe/form/button 等噪声子树（复用 extractor clean.rs 的 Firecrawl 思路），
+保证测的是**正文完整性**而非页面总字节数。
+
+**综合分**：`block_cov×0.4 + word_cov×0.3 + sim_ratio×0.2 + struct×0.1`。
+块覆盖权重最高（最贴近"正文爬全没"）。评级：≥0.85 A / 0.70 B / 0.55 C / 0.35 D。
+
+**集成测试**（`integration_spa.rs`）也用量化阈值断言，不再用 `contains`：
+- `word_coverage()` helper —— 期望词覆盖率（容许丢 1 个不能丢一半），阈值 ≥ 0.9
+- 顺序断言 —— Posts: 必须在 Post A 前（防乱序）
+- `spa_shell_completeness_quantified` —— 多块完整度测试（6 个关键短语缺一不可）
+
 ---
 
 ## 四、当前进度快照
