@@ -228,11 +228,11 @@ iframe/form/button 等噪声子树（复用 extractor clean.rs 的 Firecrawl 思
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M67.1（CDP Runtime domain 接 EngineKind，默认 QuickJS） |
+| HEAD | M68（CDP Page.navigate 执行页面 `<script>`，对齐 CLI SPA 管线） |
 | 当前分支 | `main` |
 | 总 commits | 250+ |
 | Crates | **16** 个（含 `extractor` 后置过滤器） |
-| 测试 | **800 passed**，0 clippy warnings |
+| 测试 | **804 passed** + 18 e2e，0 clippy warnings |
 | JS 引擎 | **双引擎**：QuickJS（默认，rquickjs 0.12，CLI + CDP）+ boa（`--js-engine boa`） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
 | 截图 G2 | ✅ |
@@ -508,8 +508,11 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     - **CLI**（render-url/fetch/open）默认 QuickJS（M66）。
     - **CDP**（`browser cdp`）默认 QuickJS（M67.1）：`Runtime.evaluate`/`callFunctionOn`
       走 `eval_in_tree_engine(..., &EngineKind)`，不再硬编码 boa。`cdp --js-engine boa` 回退。
-    - **CDP 边界**：`Page.navigate` 目前**不执行页面自带 `<script>`**，只 evaluate 客户端
-      注入的表达式。让 navigate 跑页面脚本是更大 scope（未做）。
+    - **CDP 边界**：`Page.navigate`（M68）**执行页面自带 `<script>`**——复用 CLI 的
+      `run_scripts_with_base_engine` 管线（含 timer/networkidle 驱动，覆盖异步 SPA）。
+      spawn_blocking 隔离 !Send DOM，catch_unwind 防 JS panic 杀 server。JS 改过的
+      DOM 反映到 `PageState.tree`，后续 `DOM.getDocument`/`getOuterHTML`/`Runtime.evaluate`
+      读到渲染后的 DOM。
 13. **QuickJS GC 安全**（生死规则）：
     - ❌ 禁止用 `wrap_script`（try/catch 包装）——会触发 QuickJS C 层 GC assertion
     - ✅ 用 `eval_safe`（`CatchResultExt::catch`）捕获错误

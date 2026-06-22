@@ -322,7 +322,15 @@ impl CdpSession {
             }
             // ── M44+M50: Page domain (navigate, captureScreenshot + events) ──
             m if m.starts_with("Page.") => {
-                match crate::page::dispatch(id, m, msg.params.as_ref(), self.page.clone()).await {
+                match crate::page::dispatch(
+                    id,
+                    m,
+                    msg.params.as_ref(),
+                    self.page.clone(),
+                    self.engine_kind,
+                )
+                .await
+                {
                     Ok(dr) => (dr.response, dr.events),
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                         CdpMessage::error_response(id, -32601, "Method not found"),

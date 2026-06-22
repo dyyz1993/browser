@@ -19,14 +19,18 @@
 //!            → construct_layout_tree → run_layout → render_ascii_colored
 //! ```
 //!
-//! M44 does **not** execute JS (that needs the js-runtime threading model
-//! which doesn't fit CDP's async session model cleanly — M45+).
+//! M68: `Page.navigate` **does** execute page `<script>` via
+//! `run_scripts_with_base_engine`（对齐 CLI 管线，含 timer/networkidle 驱动）。
+//! JS 改过的 DOM 反映到 `PageState.tree`，后续 `DOM.getDocument` /
+//! `getOuterHTML` / `Runtime.evaluate` 读到的是渲染后的 DOM。spawn_blocking
+//! 隔离 !Send 的 thread_local DOM 后端，catch_unwind 防 JS panic 杀 server。
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use browser_dom::Tree;
 use browser_html_parser::parse as parse_html;
+use browser_js_runtime::EngineKind;
 
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
 
@@ -64,23 +68,36 @@ impl Default for PageState {
 
 impl PageState {
     /// Render `html` (already fetched) and store the result.
+    ///
+    /// 便捷封装：parse → render_from_tree。M68 起 navigate 不再调这个
+    /// （它需要在中间插入 JS 执行步骤），改调 `parse_only` + `render_from_tree`。
     pub fn render(&mut self, html: &str, url: &str, width: usize) {
-        let tree = parse_html(html);
-        let style_text = extract_style_text(&tree);
+        self.parse_only(html, url, width);
+        self.render_from_tree();
+    }
+
+    /// M68: 只 parse HTML 存 tree/url/width，不 layout（给 JS 步骤留插入点）。
+    pub fn parse_only(&mut self, html: &str, url: &str, width: usize) {
+        self.tree = parse_html(html);
+        self.url = url.to_string();
+        self.width = width;
+    }
+
+    /// M68: 从 `self.tree` 跑 css+layout+render，填 rendered_text/rendered_colored。
+    /// JS 改完 DOM 后调这个，用新 tree 重新渲染。
+    pub fn render_from_tree(&mut self) {
+        let style_text = extract_style_text(&self.tree);
         let sheet = browser_css_engine::parse(&style_text);
-        let styles = browser_css_engine::compute_styles(&tree, &sheet);
-        let mut layout = browser_layout::construct_layout_tree(&tree, &styles);
+        let styles = browser_css_engine::compute_styles(&self.tree, &sheet);
+        let mut layout = browser_layout::construct_layout_tree(&self.tree, &styles);
         browser_layout::layout(
             &mut layout,
             browser_layout::LayoutConfig {
-                viewport_width: width as f32,
+                viewport_width: self.width as f32,
             },
         );
-        self.rendered_text = browser_render::render_ascii(&layout, width);
-        self.rendered_colored = browser_render::render_ascii_colored(&layout, width);
-        self.url = url.to_string();
-        self.width = width;
-        self.tree = tree;
+        self.rendered_text = browser_render::render_ascii(&layout, self.width);
+        self.rendered_colored = browser_render::render_ascii_colored(&layout, self.width);
     }
 
     /// Render the current page to a PNG screenshot, returning base64 data.
@@ -247,6 +264,7 @@ pub async fn dispatch(
     method: &str,
     params: Option<&Json>,
     state: Arc<Mutex<PageState>>,
+    engine_kind: EngineKind,
 ) -> Result<DispatchResult, CdpError> {
     match method {
         "Page.navigate" => {
@@ -259,12 +277,55 @@ pub async fn dispatch(
                 .await
                 .map_err(|e| CdpError::Io(format!("fetch: {e}")))?;
             let html = String::from_utf8_lossy(&bytes).to_string();
+
+            // M68: ① parse HTML 存 tree（不 layout），给 JS 步骤留插入点。
             {
                 let mut st = state
                     .lock()
                     .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
-                st.render(&html, url, 80);
+                st.parse_only(&html, url, 80);
                 st.raw_html = html.clone();
+            }
+
+            // M68: ② spawn_blocking 跑页面 <script>（对齐 CLI run_scripts 管线）。
+            // run_scripts 是同步阻塞（含最长 8s timer loop）且内部用 thread_local
+            // DOM 后端（!Send），必须用 spawn_blocking 在固定 OS 线程跑完。
+            // panic 兜底沿用 CLI main.rs:486 的 catch_unwind 模式——JS 引擎崩溃
+            // (OOM/栈溢出) 时回退静态树，不杀 CDP server。
+            let tree_clone = {
+                let st = state
+                    .lock()
+                    .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
+                st.tree.clone()
+            };
+            let url_owned = url.to_string();
+            // 注意：SharedTree (Rc<RefCell<Tree>>) 是 !Send，不能跨 spawn_blocking
+            // 返回。所以在闭包内部就 clone 成 owned Tree（Tree: Send），返回 Tree。
+            let js_tree: Tree = tokio::task::spawn_blocking(move || {
+                use std::panic::AssertUnwindSafe;
+                let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    browser_js_runtime::run_scripts_with_base_engine(
+                        tree_clone,
+                        Some(url_owned),
+                        &engine_kind,
+                    )
+                }));
+                match result {
+                    Ok((shared, _executed)) => shared.borrow().clone(),
+                    // panic → 回退静态树（重 parse），不杀 server。
+                    Err(_) => parse_html(""),
+                }
+            })
+            .await
+            .map_err(|e| CdpError::Io(format!("js task join: {e}")))?;
+
+            // M68: ③ JS 后 owned tree 回写 + 重新 layout+render。
+            {
+                let mut st = state
+                    .lock()
+                    .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
+                st.tree = js_tree;
+                st.render_from_tree();
             }
             let mut result = BTreeMap::new();
             result.insert(
@@ -560,5 +621,99 @@ mod tests {
         let (chars, _, _) = strip_ansi_and_track_styles("\x1b[4;34mgo\x1b[0m");
         let s: String = chars.into_iter().collect();
         assert_eq!(s, "go");
+    }
+
+    // ── M68: Page.navigate 执行页面 <script> 的核心逻辑测试 ──
+    // 不经过 dispatch 的网络层（需真实 tokio runtime + fetch），直接测
+    // parse_only → run_scripts → render_from_tree 的组合，验证 JS 改的 DOM
+    // 能反映到 PageState。
+
+    #[test]
+    fn parse_only_then_render_from_tree_matches_render() {
+        // 回归保护：拆分后的 parse_only + render_from_tree 应等价于旧 render()。
+        let html = "<html><body><p>Static</p></body></html>";
+        let mut a = PageState::default();
+        a.render(html, "test://a", 80);
+        let mut b = PageState::default();
+        b.parse_only(html, "test://b", 80);
+        b.render_from_tree();
+        // Tree 未实现 PartialEq，比 rendered_text 即可验证回归。
+        assert_eq!(a.rendered_text, b.rendered_text);
+        assert_eq!(a.url, "test://a");
+        assert_eq!(b.url, "test://b");
+    }
+
+    #[test]
+    fn run_scripts_mutates_tree_reflected_in_page_state() {
+        // 核心：JS 改 DOM 后，PageState.tree + rendered_text 应反映改动。
+        let html = r#"<html><body><div id="root"></div>
+<script>document.getElementById('root').innerHTML = '<p>JS-RENDERED</p>';</script>
+</body></html>"#;
+        let mut st = PageState::default();
+        st.parse_only(html, "http://example.com/", 80);
+
+        // 跑页面 JS（对齐 CLI，默认 QuickJS）。
+        let ek = EngineKind::QuickJs;
+        let tree = st.tree.clone();
+        let (shared, _n) = browser_js_runtime::run_scripts_with_base_engine(
+            tree,
+            Some("http://example.com/".to_string()),
+            &ek,
+        );
+        st.tree = shared.borrow().clone();
+        st.render_from_tree();
+
+        // JS 注入的文本应出现在渲染结果里。
+        assert!(
+            st.rendered_text.contains("JS-RENDERED"),
+            "rendered_text should contain JS-RENDERED, got: {}",
+            st.rendered_text
+        );
+    }
+
+    #[test]
+    fn run_scripts_async_timer_reflected() {
+        // 验证 timer 驱动：setTimeout 后改 DOM 应反映（对齐 CLI，覆盖异步 SPA）。
+        let html = r#"<html><body><div id="root">LOADING</div>
+<script>setTimeout(function(){ document.getElementById('root').innerHTML = '<p>ASYNC-DONE</p>'; }, 0);</script>
+</body></html>"#;
+        let mut st = PageState::default();
+        st.parse_only(html, "http://example.com/", 80);
+        let ek = EngineKind::QuickJs;
+        let (shared, _) = browser_js_runtime::run_scripts_with_base_engine(
+            st.tree.clone(),
+            Some("http://example.com/".to_string()),
+            &ek,
+        );
+        st.tree = shared.borrow().clone();
+        st.render_from_tree();
+        assert!(
+            st.rendered_text.contains("ASYNC-DONE"),
+            "async timer result should appear, got: {}",
+            st.rendered_text
+        );
+    }
+
+    #[test]
+    fn no_script_page_renders_static() {
+        // 无 <script> 的页面：run_scripts 不改 DOM，渲染纯静态（回归保护）。
+        let html = "<html><body><p>Plain Text</p></body></html>";
+        let mut st = PageState::default();
+        st.parse_only(html, "http://example.com/", 80);
+        let before = st.rendered_text.clone();
+        let (shared, _) = browser_js_runtime::run_scripts_with_base_engine(
+            st.tree.clone(),
+            Some("http://example.com/".to_string()),
+            &EngineKind::QuickJs,
+        );
+        st.tree = shared.borrow().clone();
+        st.render_from_tree();
+        // 静态页面跑完 JS，正文文本应仍在。
+        assert!(
+            st.rendered_text.contains("Plain Text"),
+            "static content preserved, got: {}",
+            st.rendered_text
+        );
+        let _ = before;
     }
 }

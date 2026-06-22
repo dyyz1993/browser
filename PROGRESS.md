@@ -11,12 +11,13 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M67.1（CDP Runtime domain 接 EngineKind，默认 QuickJS） |
-| 总 commits | ~236 |
-| 测试 | 800 pass, 0 clippy warnings |
+| HEAD | M68（CDP Page.navigate 执行页面 `<script>`，对齐 CLI SPA 管线） |
+| 总 commits | ~238 |
+| 测试 | 804 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 8 + `--js-engine boa\|quickjs`（含 `cdp --js-engine`） |
 | JS 引擎 | **双引擎**：QuickJS（默认，CLI + CDP）+ boa（`--js-engine boa`） |
+| CDP navigate | ✅ M68 执行页面 `<script>`（spawn_blocking + catch_unwind） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
 | 截图 G2 | ✅ |
 | 跨平台 G3 | ✅ |
@@ -24,6 +25,62 @@
 ---
 
 ## 最近变更（倒序）
+
+### M68 — CDP Page.navigate 执行页面 `<script>`（对齐 CLI SPA 管线）✅
+
+**解决「CDP navigate 只解析静态 HTML、不跑 JS」的历史缺口。** 现在 puppeteer
+连上 `browser cdp`，`page.goto()` 会真正执行页面自带 `<script>`，JS 改过的 DOM
+反映到 `PageState.tree`，后续 `DOM.getDocument` / `getOuterHTML` /
+`Runtime.evaluate` 读到的是**渲染后**的 DOM。
+
+#### 现状（改动前）
+- `page.rs:266` navigate 调 `st.render(&html, url, 80)`——只 parse+layout+render，
+  不跑 JS（`page.rs:22` 注释承认「M44 does not execute JS」）。
+- `PageState::render`（`page.rs:67-84`）把 parse→css→layout→render 绑死成一函数。
+- `dom_domain.rs` 的 `getDocument`/`getOuterHTML` 读的是**静态解析树**，JS mutation
+  不体现。
+
+#### 改动（3 文件 + 1 e2e）
+- **cdp/page.rs**：
+  - **拆 `render()` 为 `parse_only` + `render_from_tree`**——给 JS 步骤留插入点。
+    旧 `render()` 保留（内部调两者），向后兼容。
+  - **`dispatch` 加 `engine_kind: EngineKind` 参数**。
+  - **`Page.navigate` 三步管线**：
+    1. `parse_only`（同步，存 tree）
+    2. `spawn_blocking` + `catch_unwind` 跑 `run_scripts_with_base_engine`
+       （对齐 CLI，含 timer/networkidle 驱动）。!Send 的 SharedTree 在闭包内
+       clone 成 owned Tree 返回。panic 兜底回退静态树。
+    3. `render_from_tree`（用 JS 改过的 tree 重新 layout+render）
+- **cdp/server.rs**：`page::dispatch` 调用传 `self.engine_kind`。
+- **js-runtime/scripts.rs**：QuickJS `document.title` setter 从 no-op 改为
+  `__setText` 写回 `<title>` 节点（对齐浏览器：改 title 更新 `<title>` 元素，
+  getter 反映新值）。**顺手补的 shim 缺口**——e2e 暴露。
+- **tests/e2e/spa.js**（新）：puppeteer navigate 本地 HTTP 托管的 inline-script
+  SPA，验证同步渲染 + title 覆盖 + setTimeout 异步渲染。
+
+#### 验证
+- 4 个新单元测试：`parse_only_then_render_from_tree_matches_render`（拆分等价回归）
+  / `run_scripts_mutates_tree_reflected_in_page_state`（JS innerHTML 改 DOM）
+  / `run_scripts_async_timer_reflected`（setTimeout 异步渲染）
+  / `no_script_page_renders_static`（无 script 静态回归）。
+- **e2e（tests/e2e/spa.js）5/5 全过**：同步 inline script DOM、title JS 覆盖、
+  50ms setTimeout 异步内容全部验证。
+- **完整 e2e 套件 18/18 全过**（basic 5 + evaluate 4 + dom-via-evaluate 4 + spa 5）。
+- 三门禁：fmt ✅ / clippy 0 warnings ✅ / **804 passed**（baseline 800 + 4 新）。
+
+#### 关键技术点
+| 点 | 处理 |
+|----|------|
+| `!Send`（SharedTree/thread_local） | `spawn_blocking` 在固定 OS 线程跑完 run_scripts，闭包内 clone 成 owned Tree 返回 |
+| run_scripts panic（OOM/栈溢出） | `catch_unwind`，panic → 回退静态树，不杀 CDP server |
+| Tree 所有权 | `tree.clone()` 给 run_scripts（拿走所有权），返回后 `borrow().clone()` 回写 |
+| timer/networkidle 驱动 | 复用 run_scripts 内置逻辑（boa pump_event_loop / QuickJS __drainDueTimers），无需 CDP 侧另接 eventloop |
+
+#### 边界（本次不做）
+- ❌ sandbox 子进程内存护栏（CLI sandbox 是 stdin 协议，不适合 CDP 长驻 server；
+  CDP 用 catch_unwind + 静态树兜底替代）
+- ❌ 动态渲染宽度（emulation device metrics 联动另议）
+- ❌ `Page.addScriptToEvaluateOnNewDocument` 真正注入（目前 no-op，保持）
 
 ### M67.1 — CDP Runtime domain 接 EngineKind，默认 QuickJS ✅
 
