@@ -340,8 +340,16 @@ pub fn dispatch(
         "DOM.getOuterHTML" => {
             // M46 simplified: always serialize from root (nodeId mapping not
             // persisted across calls in this minimal impl).
+            //
+            // M68-fix: 之前返回 `Json::String(html)`（裸字符串），但 CDP 协议
+            // 要求 `{"result":{"outerHTML":"..."}}` 对象。puppeteer 期望从
+            // `r.outerHTML` 取值，裸字符串会被它当 iterable 解构成
+            // `{0:'<',1:'!',...}`，导致 `evaluate(()=>outerHTML)` 之外的所有
+            // DOM 序列化路径全失效（completeness.py 评分因此全 D/F）。
             let html = serialize_html(&state.tree, state.tree.root());
-            Ok(CdpMessage::ok_response(id, Json::String(html)))
+            let mut result = BTreeMap::new();
+            result.insert("outerHTML".to_string(), Json::String(html));
+            Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
         "DOM.querySelector" => {
             let selector = params
@@ -489,6 +497,12 @@ mod tests {
         let st = make_state("<html><body><p>Hi</p></body></html>");
         let resp = dispatch(1, "DOM.getOuterHTML", None, &st).unwrap();
         assert!(resp.contains("<p>Hi</p>"), "got: {resp}");
+        // M68-fix: 必须是 {"outerHTML":"..."} 对象，不是裸字符串。
+        // 裸字符串会被 puppeteer 当 iterable 解构，外层代码取 r.outerHTML 得到 undefined。
+        assert!(
+            resp.contains("\"outerHTML\""),
+            "response must wrap html in outerHTML field, got: {resp}"
+        );
     }
 
     #[test]

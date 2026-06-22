@@ -82,6 +82,25 @@
 - ❌ 动态渲染宽度（emulation device metrics 联动另议）
 - ❌ `Page.addScriptToEvaluateOnNewDocument` 真正注入（目前 no-op，保持）
 
+#### M68-fix：`DOM.getOuterHTML` 响应格式 bug
+
+**现象**：用 puppeteer + completeness.py 跑 5 CSR 站对标 Chrome，DOM 渲染明明
+追平（链接数 100% 一致），但 completeness 评分全 D/F（composite 0.33-0.49）。
+
+**根因**：`DOM.getOuterHTML`（`dom_domain.rs`）返回裸 `Json::String(html)`，
+未包成 CDP 协议要求的 `{"outerHTML":"..."}` 对象。puppeteer 把裸字符串当
+iterable 解构成 `{0:'<',1:'!',...}`，`r.outerHTML` 得 undefined，HTML 全空。
+
+**修复**（1 文件）：
+- `cdp/dom_domain.rs`：响应改为 `BTreeMap{"outerHTML" → html}` 对象。
+- 单元测试 `dispatch_get_outer_html` 加断言：响应必须含 `"outerHTML"` 字段。
+- 同步 `/tmp/single.js` 从 `evaluate(()=>outerHTML)`（QuickJS getter 漏标签）
+  改走 `DOM.getOuterHTML`（Rust `serialize_html`，完整序列化）。
+
+**验证**：重跑 5 站 × 2 backend，completeness **5 站全 A**（composite
+0.997-1.000，block_cov/struct_jaccard/word_cov 全 1.000）。详见
+[`docs/assessments/M68-cdp-chrome-comparison.md`](./docs/assessments/M68-cdp-chrome-comparison.md)。
+
 ### M67.1 — CDP Runtime domain 接 EngineKind，默认 QuickJS ✅
 
 **解决「CDP 是 workspace 唯一还硬编码 boa 的路径」问题。** M66 把 CLI 三命令
