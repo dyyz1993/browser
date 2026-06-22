@@ -3,7 +3,7 @@
 // （async generator / for-await / using），改为 dom-via-evaluate.js ——
 // 即 SPA 爬虫真实取数路径 page.evaluate(() => document.querySelector(...))。
 const { execFileSync } = require('child_process');
-const scenarios = ['basic.js', 'evaluate.js', 'dom-via-evaluate.js'];
+const scenarios = ['basic.js', 'evaluate.js', 'dom-via-evaluate.js', 'spa.js'];
 
 let failed = 0;
 for (const s of scenarios) {

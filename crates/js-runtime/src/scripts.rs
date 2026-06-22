@@ -1572,7 +1572,14 @@ Object.defineProperty(document, 'title', {
             ? (__getText(n) || '')
             : '';
     },
-    set: function(v) {},
+    set: function(v) {
+        // M68: document.title setter —— 把值写回 <title> 节点（对齐浏览器：
+        // 改 title 会更新 <title> 元素文本，getter 再读时反映新值）。
+        var n = (typeof __findTag === 'function') ? __findTag('title') : -1;
+        if (typeof n === 'number' && n >= 0 && typeof __setText === 'function') {
+            __setText(n, String(v));
+        }
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'cookie', {
