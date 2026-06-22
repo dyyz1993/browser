@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>before</title></head>
+<body>
+<div id="app">BEFORE</div>
+<script>
+// M69: 动态 inline script 执行。
+// 模拟 webpack/vite 的 createElement("script") + textContent + appendChild 模式。
+var s = document.createElement("script");
+s.textContent = 'document.getElementById("app").innerHTML = "DYNAMIC_INLINE_OK"; document.title = "after";';
+document.body.appendChild(s);
+</script>
+</body>
+</html>

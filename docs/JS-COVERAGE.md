@@ -92,7 +92,7 @@
 ### DOM element
 | API | 状态 | 测试 |
 |------|------|------|
-| appendChild | ✅ | lazy-load fixture |
+| appendChild | ✅ M69（script 标签触发动态加载：fetch+eval+onload） | integration_dynamic_script |
 | **append / prepend (ParentNode)** | ✅ M63（svelte.dev `document.body.append(div)`，接受多参数+字符串） | integration_js_features |
 | insertBefore | ✅ | |
 | removeChild | ✅ | |
@@ -257,3 +257,4 @@
 - **boa 引擎 panic**（owid）：catch_unwind 兜底降级（M62 已修）
 - **base.js/lodash _.template 深层报错**：不影响核心功能，停止深挖
 - ~~**ES Modules import()**：boa 0.21 动态 import 卡死（需 ModuleLoader），defer~~ → **M64 已解决**：实现 `HttpModuleLoader`（boa Module API + 同步 HTTP fetch chunk），vuejs.org/vite.dev/nuxt.com ESM bundle 全部渲染
+- ~~**动态 script 执行**（`createElement("script") + appendChild`）：webpack/vite 动态加载的 chunk 不执行~~ → **M69 已解决**：appendChild 的 JS shim 检测 script 标签后，`__fetchSync` + 入队 + event loop pump `eval_safe`。支持多层链式加载（webpack runtime→chunk→子 chunk）、onload/onerror 回调、相对 URL 解析。详见 `docs/assessments/M69-dynamic-script.md`

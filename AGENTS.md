@@ -541,6 +541,18 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     - ✅ event loop 里**先 drain microtask 再 drain macrotask**（`run_jobs` → `__drainDueTimers`），
       匹配 JS 的 microtask-before-macrotask 语义。否则 `setTimeout(0)` 回调跑得比
       `Promise.then` 早，拿不到 then 里准备的数据（`integration_timer_spa` 回归测试覆盖）
+20. **动态 script 执行的时序与 GC 约束**（M69）：
+    - ✅ `appendChild(scriptEl)` 的 JS shim 检测 script 标签后，把代码（inline textContent
+      或 `__fetchSync(src)` 拿到的外链源码）塞进 `bridge::PENDING_DYNAMIC_SCRIPTS` 队列
+    - ✅ event loop pump 每轮**先 drain 动态 script（eval_safe）再 drain timer**——否则
+      onload 的 `setTimeout(0)` 会跑在 script eval 之前，读到 undefined 状态
+    - ❌ 禁止用 JS 间接 `eval(code)` 执行动态 script——会触发 QuickJS GC 风险；必须走
+      Rust 侧 `engine.eval_safe(code)`（`CatchResultExt::catch`，CaughtError 在 ctx.with
+      闭包内 drop）
+    - ✅ QuickJS shim 缺反射属性系统：`s.src = x` 只设 JS 属性不写 DOM attrs，appendChild
+      里读 src 必须**双 fallback**（先 `__getAttr(nodeId,'src')` 再 `child.src`）
+    - ✅ 同步 `__fetchSync` 阻塞是期望行为——保证 webpack chunk loader 的 Promise.resolve
+      顺序正确；eval 推迟到 event loop（setTimeout 语义）不阻塞当前同步 JS 栈
 
 ---
 

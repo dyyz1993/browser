@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>no-script</title></head>
+<body>
+<div id="app">UNCHANGED</div>
+<script>
+// M69: 非 script 元素的 appendChild 不应触发 eval。
+// 创建 div 并 appendChild，验证不会误执行。
+var d = document.createElement("div");
+d.textContent = 'document.getElementById("app").innerHTML = "SHOULD_NOT_RUN";';
+document.body.appendChild(d);
+// app 应保持 UNCHANGED（div 的 textContent 不执行）
+</script>
+</body>
+</html>

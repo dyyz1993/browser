@@ -241,6 +241,18 @@ impl QuickJsEngine {
                     .unwrap(),
                 );
 
+                // === M69: 动态 script 执行队列 ===
+                // appendChild(scriptEl) 的 JS shim 检测到 script 标签后调
+                // __enqueueDynamicScript(code) 入队；Rust 侧 run_scripts_quickjs 的
+                // pump 循环每轮用 drain_dynamic_scripts() 取出 eval_safe。
+                let _ = g.set(
+                    "__enqueueDynamicScript",
+                    Function::new(ctx.clone(), |code: String| {
+                        bridge::enqueue_dynamic_script(code);
+                    })
+                    .unwrap(),
+                );
+
                 // === makeElement（JS shim 工厂，返回 undefined 占位——shim JS 自己创建）===
                 // JS shim 的 __makeElement 需要返回一个带 __nodeId 的对象。
                 // QuickJS 版本让 JS shim 自己处理（返回 undefined，shim 有 fallback）。

@@ -281,6 +281,13 @@ pub fn install(ctx: &mut Context) {
     register_fn1(ctx, "__wsCreate", ws_create_bridge as NativeFn);
     register_fn2(ctx, "__wsSend", ws_send_bridge as NativeFn);
     register_fn1(ctx, "__wsClose", ws_close_bridge as NativeFn);
+    // M69: 动态 script 执行队列——appendChild(scriptEl) 时 JS shim 调它入队代码，
+    // pump 循环用 qjs_bridge::drain_dynamic_scripts() 取出 eval。
+    register_fn1(
+        ctx,
+        "__enqueueDynamicScript",
+        enqueue_dynamic_script_bridge as NativeFn,
+    );
 }
 
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
@@ -739,6 +746,22 @@ fn parse_html(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult
             t.insert(Some(node_id), NodeData::Text(html));
         }
     });
+    Ok(JsValue::undefined())
+}
+
+/// M69: `__enqueueDynamicScript(code)` — 把动态加载的 JS 代码塞入队列。
+/// 由 appendChild 的 JS shim 在检测到 script 标签时调用。
+/// event loop pump（boa 的 pump_event_loop / QuickJS 的 run_scripts_quickjs）
+/// 每轮用 `qjs_bridge::drain_dynamic_scripts()` 取出，调 eval 执行。
+fn enqueue_dynamic_script_bridge(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let code = arg_string(args, 0).unwrap_or_default();
+    if !code.is_empty() {
+        enqueue_dynamic_script(code);
+    }
     Ok(JsValue::undefined())
 }
 
@@ -1801,6 +1824,39 @@ pub fn pending_requests() -> usize {
 #[must_use]
 pub fn is_network_idle() -> bool {
     pending_timers() == 0 && pending_requests() == 0
+}
+
+// ===== M69: 动态 script 执行队列 =====
+//
+// 当 JS 调 `document.createElement("script") + head.appendChild(s)` 时，
+// appendChild 的 JS shim 检测到 script 标签后，把代码（inline textContent 或
+// __fetchSync 拿到的外链源码）塞进这个队列。event loop pump 每轮用
+// `drain_dynamic_scripts()` 取出，调 engine.eval_safe(code) 执行。
+//
+// 为什么走队列而非 JS 层直接 eval：
+// 1. GC 安全——QuickJS 间接 eval 在 appendChild 闭包内创建的 JS 值有泄漏风险
+//    （AGENTS.md 第 13 条）；eval_safe 用 CatchResultExt::catch，CaughtError
+//    在 ctx.with 闭包内 drop。
+// 2. 时序符合 HTML5——动态 script 的执行推迟到 event loop 下一轮（微任务/宏任务语义），
+//    不阻塞当前同步 JS 栈。
+// 3. 多层链式加载——webpack runtime→vue chunk→app chunk 的递归 appendChild
+//    天然支持：每轮 pump 处理一层，新入队的下一轮处理。
+//
+// 放顶层（非 qjs_bridge mod 内），不受 quickjs feature 门控——boa 和 QuickJS 共用。
+thread_local! {
+    static PENDING_DYNAMIC_SCRIPTS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// 把动态 script 代码塞入队列（由 appendChild JS shim 调用）。
+pub fn enqueue_dynamic_script(code: String) {
+    PENDING_DYNAMIC_SCRIPTS.with(|q| q.borrow_mut().push(code));
+}
+
+/// 取出所有待执行的动态 script（由 event loop pump 每轮调用）。
+/// 返回的 Vec 顺序 = 入队顺序（FIFO），取出后队列清空。
+pub fn drain_dynamic_scripts() -> Vec<String> {
+    PENDING_DYNAMIC_SCRIPTS.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
 fn inc_pending_requests() {
@@ -2926,5 +2982,54 @@ mod m7_dom_api_tests {
         drop(_guard);
         let t = shared.borrow();
         assert!(matches!(t.data(id), NodeData::Element { tag, .. } if tag == "body"));
+    }
+}
+
+#[cfg(test)]
+mod m69_dynamic_script_tests {
+    use super::{drain_dynamic_scripts, enqueue_dynamic_script};
+
+    // 测试间隔离：每个 test 前清空队列，避免相互污染。
+    fn reset_queue() {
+        let _ = drain_dynamic_scripts();
+    }
+
+    #[test]
+    fn drain_empty_returns_empty_vec() {
+        reset_queue();
+        let drained = drain_dynamic_scripts();
+        assert!(drained.is_empty(), "empty queue should drain to empty vec");
+    }
+
+    #[test]
+    fn enqueue_then_drain_returns_codes_in_fifo_order() {
+        reset_queue();
+        enqueue_dynamic_script("var a = 1;".to_string());
+        enqueue_dynamic_script("var b = 2;".to_string());
+        enqueue_dynamic_script("var c = 3;".to_string());
+        let drained = drain_dynamic_scripts();
+        assert_eq!(drained, vec!["var a = 1;", "var b = 2;", "var c = 3;"]);
+    }
+
+    #[test]
+    fn drain_clears_queue() {
+        reset_queue();
+        enqueue_dynamic_script("code1".to_string());
+        let first = drain_dynamic_scripts();
+        assert_eq!(first.len(), 1);
+        // 二次 drain 应该为空（已清空）
+        let second = drain_dynamic_scripts();
+        assert!(second.is_empty(), "drain should clear the queue");
+    }
+
+    #[test]
+    fn enqueue_after_drain_works() {
+        reset_queue();
+        enqueue_dynamic_script("first".to_string());
+        let _ = drain_dynamic_scripts();
+        // drain 后可以继续 enqueue 新代码
+        enqueue_dynamic_script("second".to_string());
+        let drained = drain_dynamic_scripts();
+        assert_eq!(drained, vec!["second"]);
     }
 }

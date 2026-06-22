@@ -698,7 +698,8 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
 /// M66: QuickJS TypeScript 检测——QuickJS 不支持 TS 语法。
-#[cfg(feature = "quickjs")]
+/// M66: QuickJS TypeScript 检测——QuickJS 不支持 TS 语法。
+/// M69: 移出 quickjs feature 门控——boa pump 的动态 script drain 也用它跳过 TS chunk。
 fn has_ts_syntax(code: &str) -> bool {
     code.contains(": string")
         || code.contains(": number")
@@ -720,6 +721,33 @@ fn should_skip_script(url: &str) -> bool {
         || url.contains("googletagmanager")
         || url.ends_with(".ts")
         || url.contains(".ts?")
+}
+
+/// M69: 取出动态 script 队列里的所有代码，逐个 eval。
+///
+/// 由 `run_scripts_quickjs` 的 event loop pump 每轮调用。appendChild(script)
+/// 的 JS shim 检测到 script 标签后，把代码（inline textContent 或 __fetchSync
+/// 拿到的外链源码）入队；这里取出用 `eval_safe` 执行（GC 安全，CaughtError
+/// 在 ctx.with 闭包内 drop）。
+///
+/// 跳过 TypeScript 代码（`: string` / `as Type` 等，QuickJS 不支持 TS）。
+/// eval 出的代码可能又 appendChild 新 script 入队，下一轮 pump 处理（多层链式加载）。
+///
+/// 返回本轮执行的 script 数（用于 pump 判断是否还有进展）。
+#[cfg(feature = "quickjs")]
+fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEngine) -> usize {
+    let codes = crate::bridge::drain_dynamic_scripts();
+    let n = codes.len();
+    for code in codes {
+        if has_ts_syntax(&code) {
+            continue;
+        }
+        match engine.eval_safe(&code) {
+            Ok(()) => {}
+            Err(e) => eprintln!("[js] [quickjs dynamic] {e}"),
+        }
+    }
+    n
 }
 
 /// M66-B: QuickJS 专用执行路径。
@@ -905,21 +933,32 @@ fn run_scripts_quickjs(
     // M66-fix: 必须先 drain Promise microtask（.then 回调），再 drain timer（setTimeout）。
     // 标准 JS 语义：同一 tick 内 microtask 优先级高于 macrotask。
     // 否则 setTimeout(0) 回调跑得比 Promise.then 早，拿不到 then 准备的数据。
+    // M69: 首轮 drain 动态 script——初始 script 执行时（如 webpack runtime）可能
+    // 已经 appendChild(script) 入队了 chunk。必须在 timer drain 之前 eval 它们：
+    // appendChild 时同时入队了 script 代码和 onload 的 setTimeout(0)，
+    // 必须先 eval script（设置 window.__xxx 等），onload 回调读这些状态才正确。
+    let mut dyn_executed = drain_and_eval_dynamic_scripts(engine);
+    executed += dyn_executed;
+
     engine.run_jobs();
     let _ = engine.eval_i32("__drainDueTimers()");
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
-    // 直到 pending timer 清空或超时（8s 上限，和 boa 一致）。
+    // 直到 pending timer 清空或动态 script 队列清空，或超时（8s 上限，和 boa 一致）。
     const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
     const EL_TICK_MS: u64 = 20;
     let el_start = std::time::Instant::now();
     loop {
+        // M69: 每轮先 drain 动态 script（上一轮 timer 回调/onload 可能 appendChild
+        // 新 chunk 入队）。eval 出的代码可能又入队，下一轮处理（支持多层链式加载）。
+        dyn_executed = drain_and_eval_dynamic_scripts(engine);
+        executed += dyn_executed;
         let fired = engine.eval_i32("__drainDueTimers()").unwrap_or(0);
         // M66-fix: 每轮 timer 回调触发后，drain 其 schedule 的新 Promise microtask。
-        if fired > 0 {
+        if fired > 0 || dyn_executed > 0 {
             engine.run_jobs();
         }
-        if fired == 0 {
+        if fired == 0 && dyn_executed == 0 {
             let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
             if !has {
                 break;
@@ -1266,7 +1305,51 @@ Element.prototype.getAttribute = function(key) {
 };
 Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); };
 Element.prototype.appendChild = function(child) {
-    if (child && typeof child.__nodeId === 'number') __appendChild(this.__nodeId, child.__nodeId);
+    if (child && typeof child.__nodeId === 'number') {
+        __appendChild(this.__nodeId, child.__nodeId);
+        // M69: 动态 script 执行。webpack/vite 等前端工程化站点把业务代码打包成
+        // 独立 chunk，在运行时用 createElement("script") + head.appendChild(s)
+        // 动态加载。浏览器语义：appendChild 一个 script 元素时，若它有 src 则
+        // fetch 远程 JS 执行，若它有 textContent 则执行内联代码；执行完触发 onload。
+        var tag = (typeof __getTag === 'function') ? String(__getTag(child.__nodeId)) : '';
+        if (tag && tag.toLowerCase() === 'script') {
+            // QuickJS shim 无反射属性系统：s.src=x 只设 JS 属性，不写 DOM attrs。
+            // 所以这里双 fallback——先读 DOM attr（setAttribute 路径），再读 JS 属性。
+            var src = __getAttr(child.__nodeId, 'src');
+            if (!src && typeof child.src === 'string') src = child.src;
+            var code = null;
+            if (src) {
+                // 外链 script：同步 fetch（复用 __fetchSync，相对 URL 自动解析）。
+                // 同步阻塞是期望行为——保证 webpack chunk loader 的 Promise.resolve 顺序。
+                code = (typeof __fetchSync === 'function') ? __fetchSync(src) : null;
+                if (!code) {
+                    // fetch 失败（404/网络错误）→ 异步触发 onerror
+                    var _err = child;
+                    setTimeout(function() {
+                        if (typeof _err.onerror === 'function') {
+                            try { _err.onerror.call(_err, { type: 'error', target: _err }); } catch(e) {}
+                        }
+                    }, 0);
+                    return child;
+                }
+            } else {
+                // inline script：读 textContent（同样双 fallback：DOM + JS 属性）。
+                code = __getText(child.__nodeId);
+                if (!code && typeof child.textContent === 'string') code = child.textContent;
+            }
+            if (code) {
+                // 入队，pump 循环（run_scripts_quickjs 里的 loop）取出 eval_safe。
+                __enqueueDynamicScript(code);
+                // 异步触发 onload（推迟到 event loop 下一轮，符合 HTML5 语义）。
+                var _s = child;
+                setTimeout(function() {
+                    if (typeof _s.onload === 'function') {
+                        try { _s.onload.call(_s, { type: 'load', target: _s }); } catch(e) {}
+                    }
+                }, 0);
+            }
+        }
+    }
     return child;
 };
 Element.prototype.insertBefore = function(child, ref) {
@@ -1737,6 +1820,19 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
         // M16.4: 先执行 Promise microtask（then 回调）。可能 schedule 新 timer。
         let _ = ctx.run_jobs(); // 0.21: 返回 JsResult，drain microtask 失败忽略
         let mut tick_invoked = 0;
+        // M69: drain 动态 script（appendChild(script) 入队的 chunk）。
+        // eval 出的代码可能又入队新 script（webpack 链式加载），下一轮 tick 处理。
+        // 必须在 timer 之前 eval——chunk 里 schedule 的 onload/setTimeout 才能进队列。
+        for code in crate::bridge::drain_dynamic_scripts() {
+            if has_ts_syntax(&code) {
+                continue;
+            }
+            if let Err(e) = ctx.eval(Source::from_bytes(&code)) {
+                eprintln!("[js] [boa dynamic] {e}");
+            }
+            invoked += 1;
+            tick_invoked += 1;
+        }
         // Timer 回调（setTimeout）。
         let due = crate::bridge::drain_due_timer_callbacks();
         for callback in due {

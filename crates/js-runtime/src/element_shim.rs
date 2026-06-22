@@ -355,6 +355,36 @@ Object.defineProperty(Element.prototype, 'tagName', {
         Element.prototype.appendChild = function(child) {
             if (child && typeof child.__nodeId === 'number') {
                 __appendChild(this.__nodeId, child.__nodeId);
+                // M69: 动态 script 执行（详见 QUICKJS_ELEMENT_SHIM 的同名实现注释）。
+                // webpack/vite 用 createElement("script") + appendChild 动态加载 chunk。
+                var tag = (typeof __getTag === 'function') ? String(__getTag(child.__nodeId)) : '';
+                if (tag && tag.toLowerCase() === 'script') {
+                    var src = __getAttr(child.__nodeId, 'src');
+                    var code = null;
+                    if (src) {
+                        code = (typeof __fetchSync === 'function') ? __fetchSync(src) : null;
+                        if (!code) {
+                            var _err = child;
+                            setTimeout(function() {
+                                if (typeof _err.onerror === 'function') {
+                                    try { _err.onerror.call(_err, { type: 'error', target: _err }); } catch(e) {}
+                                }
+                            }, 0);
+                            return child;
+                        }
+                    } else {
+                        code = __getText(child.__nodeId);
+                    }
+                    if (code) {
+                        if (typeof __enqueueDynamicScript === 'function') __enqueueDynamicScript(code);
+                        var _s = child;
+                        setTimeout(function() {
+                            if (typeof _s.onload === 'function') {
+                                try { _s.onload.call(_s, { type: 'load', target: _s }); } catch(e) {}
+                            }
+                        }, 0);
+                    }
+                }
             }
             return child;
         };

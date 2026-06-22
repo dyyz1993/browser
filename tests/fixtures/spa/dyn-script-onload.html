@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><title>load-test</title></head>
+<body>
+<div id="app">BEFORE</div>
+<script>
+// M69: 动态 script 的 onload 回调时序验证。
+// script 执行（设 window.__loaded）应在 onload 回调之前完成。
+var s = document.createElement("script");
+s.textContent = 'window.__loaded = "SCRIPT_RAN_FIRST";';
+s.onload = function(ev) {
+  var status = window.__loaded === "SCRIPT_RAN_FIRST" ? "ONLOAD_AFTER_EVAL" : "ONLOAD_BEFORE_EVAL";
+  document.getElementById("app").innerHTML = status;
+};
+document.body.appendChild(s);
+</script>
+</body>
+</html>

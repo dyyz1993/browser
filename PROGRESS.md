@@ -11,13 +11,14 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M68（CDP Page.navigate 执行页面 `<script>`，对齐 CLI SPA 管线） |
-| 总 commits | ~238 |
-| 测试 | 804 pass + 18 e2e, 0 clippy warnings |
+| HEAD | M69（动态 script 执行：createElement + appendChild 触发 fetch+eval） |
+| 总 commits | ~239 |
+| 测试 | 814 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 8 + `--js-engine boa\|quickjs`（含 `cdp --js-engine`） |
 | JS 引擎 | **双引擎**：QuickJS（默认，CLI + CDP）+ boa（`--js-engine boa`） |
 | CDP navigate | ✅ M68 执行页面 `<script>`（spawn_blocking + catch_unwind） |
+| 动态 script | ✅ M69 appendChild(script) 触发 fetch+eval+onload（webpack/vite 兼容） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
 | 截图 G2 | ✅ |
 | 跨平台 G3 | ✅ |
@@ -25,6 +26,43 @@
 ---
 
 ## 最近变更（倒序）
+
+### M69 — 动态 Script 执行（createElement + appendChild 触发 fetch+eval）✅
+
+**解决「webpack/vite 动态加载的 chunk 不执行」缺口。** 前端工程化站点把业务代码
+打包成独立 chunk，运行时用 `document.createElement("script") + head.appendChild(s)`
+动态加载（code-splitting / 路由懒加载）。修复前 appendChild 只做 DOM 树移动，
+不触发 fetch+eval，导致所有动态加载 chunk 的 SPA 渲染失败。
+
+#### 触发场景
+用户要求爬取 `open.bigmodel.cn/pricing`，渲染出 SPA fallback 空壳。**第一反应
+误判为「阿里风控反爬」**（因页面引用 alicdn 的 antidom.js），用户质疑后验证：
+antidom.js 是 404 死链接，无任何反爬逻辑。**真实根因是动态 script 不执行**。
+
+> 注：open.bigmodel.cn 主 chunk 是静态加载的，卡在更早的 zod/Vue 递归上限
+> （QuickJS 引擎限制，非 M69 scope）。M69 修复的是动态加载场景。
+
+#### 实现（JS shim 拦截 + Rust 桥 eval）
+- **JS shim**（appendChild）：检测 script 标签 → 读 src（`__fetchSync`）或
+  textContent → `__enqueueDynamicScript(code)` 入队 + `setTimeout(onload, 0)`
+- **Rust 桥**（`bridge.rs` 顶层 `PENDING_DYNAMIC_SCRIPTS`）：enqueue/drain 函数
+- **event loop pump**：每轮先 drain 动态 script → `eval_safe` → 再 drain timer
+  （顺序关键：script 必须在 onload 前执行，否则 onload 读不到 script 设的状态）
+
+#### 关键决策
+- eval 走 `eval_safe`（GC 安全）而非 JS 间接 eval
+- 同步 `__fetchSync` 阻塞（保证 webpack Promise.resolve 顺序）
+- src/textContent 双 fallback 读取（QuickJS shim 缺反射属性系统）
+- 队列放 bridge.rs 顶层（不受 quickjs feature 门控，boa/QuickJS 共用）
+
+#### 验证
+- 冒烟：3 层链式加载（入口→chunkA→chunkB→chunkC）双引擎均 `CHAIN_COMPLETE`
+- L1：4 单元测试（enqueue/drain FIFO + 清空 + 重入）
+- L2：6 集成测试（inline/外链/链式/onload 时序/onerror/非 script 不误触发）
+- 门禁：fmt ✅ / clippy 0 warnings ✅ / **814 passed**（baseline 804 + 10 新）
+- 5 站回归：**零退化**（M68 vs M69 CLI fetch text 逐站完全一致）
+
+详见 [`docs/assessments/M69-dynamic-script.md`](./docs/assessments/M69-dynamic-script.md)。
 
 ### M68 — CDP Page.navigate 执行页面 `<script>`（对齐 CLI SPA 管线）✅
 
