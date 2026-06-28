@@ -2506,3 +2506,25 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod m69_proto_rel_diag {
+    use super::resolve_script_url;
+
+    #[test]
+    fn diag_protocol_relative_url_resolution() {
+        // 协议相对 URL（//host/path）在各种 base 下的解析行为
+        let src = "//o.alicdn.com/x.js";
+        // 有 base URL
+        let r1 = resolve_script_url(src, Some("http://localhost:8899/page.html"));
+        eprintln!("proto-rel with http base: {:?}", r1);
+        let r2 = resolve_script_url(src, Some("https://open.bigmodel.cn/pricing"));
+        eprintln!("proto-rel with https base: {:?}", r2);
+        // 无 base URL（render-file 场景）
+        let r3 = resolve_script_url(src, None);
+        eprintln!("proto-rel without base: {:?}", r3);
+        // 普通 https 绝对 URL
+        let r4 = resolve_script_url("https://cdn.example.com/x.js", None);
+        eprintln!("absolute https without base: {:?}", r4);
+    }
+}
