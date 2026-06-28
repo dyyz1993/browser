@@ -84,7 +84,10 @@ fn layout_box_recursive(bx: &mut LayoutBox, state: &mut LayoutState) {
             layout_box_recursive(child, state);
         }
         bx.dimensions.height = (state.cursor_y - bx.dimensions.y).max(0.0) + 1.0;
-        state.cursor_y += 1.0;
+        // M70.1: don't double-advance cursor_y. The height already accounts for
+        // the line (the +1.0 above), and the parent block advances by
+        // `child.dimensions.bottom()` (= y + height), so an extra `cursor_y += 1`
+        // here produced a spurious blank line after each text run.
         state.cursor_x = state.x_start;
         return;
     }

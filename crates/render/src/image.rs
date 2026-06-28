@@ -32,6 +32,20 @@ pub fn image_file_to_ascii(path: &Path, max_w: u32, max_h: u32) -> Result<String
     Ok(image_to_ascii_from_img(&img, max_w, max_h))
 }
 
+/// M70.2: 把图像文件转成**带颜色**的 ASCII art（每字符带 ANSI truecolor 前景）。
+///
+/// 与 `image_file_to_ascii` 相同的算法，但每个字符额外用对应像素的 RGB
+/// 作为 ANSI 前景色 `\x1b[38;2;R;G;Bm`。相邻同色字符合并成一个 run，减少
+/// escape 序列长度。下游 PNG 渲染器（screenshot.rs::parse_fg_color）已能
+/// 解析 38;2;R;G;B，所以彩色 ASCII 能直接渲染进 PNG。
+///
+/// # Errors
+/// Returns error string if image decode fails.
+pub fn image_file_to_ascii_colored(path: &Path, max_w: u32, max_h: u32) -> Result<String, String> {
+    let img = image::open(path).map_err(|e| format!("image decode failed: {e}"))?;
+    Ok(image_to_ascii_from_img_colored(&img, max_w, max_h))
+}
+
 /// 把已解码的 `DynamicImage` 转 ASCII art（测试用 + 复用入口）。
 #[must_use]
 pub fn image_to_ascii_from_img(img: &DynamicImage, max_w: u32, max_h: u32) -> String {
@@ -64,6 +78,53 @@ pub fn image_to_ascii_from_img(img: &DynamicImage, max_w: u32, max_h: u32) -> St
 fn luminance(r: u8, g: u8, b: u8) -> u8 {
     let yf = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
     yf.round().min(255.0) as u8
+}
+
+/// M70.2: 把已解码的 `DynamicImage` 转**带颜色**的 ASCII art。
+///
+/// 每个字符 = 缩放图对应像素的灰度字符，前景色 = 该像素的原始 RGB。
+/// 同一行里相邻且同色的字符合并进一个 ANSI run（`\x1b[38;2;R;G;Bm...\x1b[0m`），
+/// 显著减少 escape 序列数量。
+#[must_use]
+pub fn image_to_ascii_from_img_colored(img: &DynamicImage, max_w: u32, max_h: u32) -> String {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return String::new();
+    }
+    let scale = (max_w as f64 / w as f64).min(max_h as f64 / h as f64);
+    let new_w = ((w as f64) * scale).max(1.0) as u32;
+    let new_h = ((h as f64) * scale).max(1.0) as u32;
+    let resized = imageops::resize(img, new_w, new_h, imageops::FilterType::Nearest);
+
+    let mut out = String::with_capacity((new_w * new_h * 8 + new_h) as usize);
+    for y in 0..new_h {
+        let mut run_color: Option<(u8, u8, u8)> = None;
+        let mut run_chars = String::new();
+        for x in 0..new_w {
+            let pixel = resized.get_pixel(x, y);
+            let (r, g, b) = (pixel.0[0], pixel.0[1], pixel.0[2]);
+            let lum = luminance(r, g, b);
+            let idx = ((u32::from(lum) * ASCII_RAMP.len() as u32) / 256) as usize;
+            let idx = idx.min(ASCII_RAMP.len() - 1);
+            let ch = ASCII_RAMP[idx];
+            let color = (r, g, b);
+            if run_color.is_some() && run_color != Some(color) {
+                // flush previous run
+                if let Some((rr, gg, bb)) = run_color.take() {
+                    out.push_str(&format!("\x1b[38;2;{rr};{gg};{bb}m{run_chars}\x1b[0m"));
+                }
+                run_chars.clear();
+            }
+            run_color = Some(color);
+            run_chars.push(ch);
+        }
+        // flush trailing run on this line
+        if let Some((rr, gg, bb)) = run_color {
+            out.push_str(&format!("\x1b[38;2;{rr};{gg};{bb}m{run_chars}\x1b[0m"));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// M22.1: 尝试把 `<img src>` 解析为本地文件路径。
@@ -209,5 +270,62 @@ mod tests {
         let url = format!("file://{}", target.display());
         let p = resolve_local_image_src(&url, None);
         assert!(p.is_some(), "should resolve file:// URL: {url}");
+    }
+
+    // ---- M70.2: colored ASCII art ----
+
+    #[test]
+    fn colored_empty_image_returns_empty() {
+        let img = DynamicImage::new_rgba8(0, 0);
+        let s = image_to_ascii_from_img_colored(&img, 10, 10);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn colored_output_contains_ansi_truecolor() {
+        // 纯红 1×1 图 → 缩放后每个像素 RGB=(255,0,0) → ANSI 38;2;255;0;0
+        let img = DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap(),
+        );
+        let s = image_to_ascii_from_img_colored(&img, 5, 5);
+        assert!(
+            s.contains("38;2;255;0;0"),
+            "red pixels should produce ANSI 38;2;255;0;0, got: {s:?}"
+        );
+    }
+
+    #[test]
+    fn colored_merges_adjacent_same_color() {
+        // 纯色 1×1 图放大到 5×5 → 整行同色，应该合并成一个 ANSI run（一个 \x1b[ 开头）
+        let img = DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(1, 1, vec![0, 200, 0, 255]).unwrap(),
+        );
+        let s = image_to_ascii_from_img_colored(&img, 5, 3);
+        // 每行应只有 1 个 \x1b[38;2 开头（合并），不是 5 个
+        for line in s.lines() {
+            let count = line.matches("\x1b[38;2").count();
+            assert_eq!(
+                count, 1,
+                "each line should merge to 1 ANSI run, got {count} in: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn colored_uses_pixel_rgb_not_gray() {
+        // 红 (255,0,0) 和 蓝 (0,0,255) 灰度相近但 RGB 不同，应产出不同 ANSI。
+        let red = DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap(),
+        );
+        let blue = DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap(),
+        );
+        let red_s = image_to_ascii_from_img_colored(&red, 3, 3);
+        let blue_s = image_to_ascii_from_img_colored(&blue, 3, 3);
+        assert!(
+            red_s.contains("38;2;255;0;0") && blue_s.contains("38;2;0;0;255"),
+            "red→38;2;255;0;0, blue→38;2;0;0;255"
+        );
+        assert_ne!(red_s, blue_s, "different colors should differ");
     }
 }

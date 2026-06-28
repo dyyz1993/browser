@@ -126,7 +126,18 @@ fn build_box(
             apply_grid_placement(id, styles, &mut bx);
             // M39: 读 background-color/border（视觉样式）。
             apply_box_style(id, styles, &mut bx);
-            bx.children = build_children(tree, id, bt, styles);
+            // M70.3: <svg> 特殊处理——读 width/height + 子元素 attrs，编码成
+            // [SVG: ...] 占位符。svg 子元素（circle/rect/...）不进布局树
+            // （它们不是 HTML element，是图形描述），由 CLI 后处理替换为 ASCII art。
+            // 注意：保持 svg 为 Inline（与 <img> 一致），因为 paint 只输出
+            // Inline box 的 text。Block box 的 text 会被忽略。
+            if tag.eq_ignore_ascii_case("svg") {
+                bx.text = Some(encode_svg_placeholder(tree, id, attrs));
+                bx.box_type = BoxType::Inline;
+                bx.children = Vec::new();
+            } else {
+                bx.children = build_children(tree, id, bt, styles);
+            }
             // M7.1.3: fill margin/padding from CSS + UA defaults.
             apply_box_model(tag, id, styles, &mut bx);
             // M9.1.1: inject placeholder for <img>.
@@ -329,8 +340,8 @@ fn apply_grid_placement(
     }
 }
 
-/// M39: 从 CSS 读 background-color / border 填充 BoxStyle。
-/// border 简化为 1 字符宽四边相同，background 解析颜色填 RgbColor。
+/// M39/M70: 从 CSS 读 background-color / border / color 填充 BoxStyle。
+/// border 简化为 1 字符宽四边相同，background 和 color 解析颜色填 RgbColor。
 fn apply_box_style(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &mut LayoutBox) {
     let Some(decls) = styles.get(&id) else {
         return;
@@ -342,6 +353,11 @@ fn apply_box_style(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &
             // 只取第一个 color token 尝试解析。
             if let Some((r, g, b)) = browser_css_engine::parse_color(&d.value) {
                 bx.style.background = Some(RgbColor { r, g, b });
+            }
+        } else if prop == "color" {
+            // M70: 文字前景色。对称 background-color，调同一个 parse_color。
+            if let Some((r, g, b)) = browser_css_engine::parse_color(&d.value) {
+                bx.style.color = Some(RgbColor { r, g, b });
             }
         } else if prop == "border" || prop.starts_with("border-") {
             // border shorthand: "Npx solid color" 或 longhand border-top/right/bottom/left
@@ -381,7 +397,12 @@ fn apply_box_style(id: NodeId, styles: &HashMap<NodeId, Vec<Declaration>>, bx: &
 fn ua_default_margins(tag: &str) -> browser_css_engine::BoxEdges<Length> {
     let lower = tag.to_ascii_lowercase();
     match lower.as_str() {
-        "p" | "div" => browser_css_engine::BoxEdges {
+        // M70.1: only <p> has the classic 1em top/bottom margin. <div> is a
+        // generic container with UA margin 0 in real browsers — the old code
+        // wrongly gave <div> 1em too, causing excessive blank lines in nested
+        // layouts (1em = 1 terminal line). Removing <div> collapses the
+        // whitespace to realistic levels.
+        "p" => browser_css_engine::BoxEdges {
             top: Length::Em(1.0),
             right: Length::Zero,
             bottom: Length::Em(1.0),
@@ -561,6 +582,50 @@ fn find_first_text_leaf_mut(bx: &mut LayoutBox) -> Option<&mut LayoutBox> {
         }
     }
     None
+}
+
+/// M70.3: 把 `<svg>` 及其子元素编码成 `[SVG: ...]` 占位符字符串。
+///
+/// 格式：`[SVG: w=<w> h=<h> | <tag> <key>=<val> <key>=<val>; <tag> ...]`
+/// 由 CLI 后处理（post_process_svgs）解析回图形列表，渲染成 ASCII art。
+///
+/// svg 的子元素（circle/rect/line/polygon）通过 tree.children_of 读取，
+/// 不经过 build_children（它们不是布局元素）。
+fn encode_svg_placeholder(tree: &Tree, svg_id: NodeId, svg_attrs: &[(String, String)]) -> String {
+    // 读 viewBox / width / height
+    let vb_w = svg_attrs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("width"))
+        .and_then(|(_, v)| v.trim_end_matches("px").parse::<f32>().ok())
+        .unwrap_or(100.0);
+    let vb_h = svg_attrs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("height"))
+        .and_then(|(_, v)| v.trim_end_matches("px").parse::<f32>().ok())
+        .unwrap_or(100.0);
+
+    let mut shapes_str = String::new();
+    for &child_id in tree.children_of(svg_id) {
+        if let NodeData::Element { tag, attrs } = tree.data(child_id) {
+            let lower = tag.to_ascii_lowercase();
+            if !matches!(
+                lower.as_str(),
+                "circle" | "rect" | "line" | "polygon" | "polyline"
+            ) {
+                continue;
+            }
+            if !shapes_str.is_empty() {
+                shapes_str.push_str("; ");
+            }
+            shapes_str.push_str(&lower);
+            for (k, v) in attrs {
+                // 简化编码：key=value，值里不含空格（颜色名/数字都没有）
+                let v_compact = v.split_whitespace().next().unwrap_or(v);
+                shapes_str.push_str(&format!(" {k}={v_compact}"));
+            }
+        }
+    }
+    format!("[SVG: w={vb_w} h={vb_h} | {shapes_str}]")
 }
 
 #[cfg(test)]

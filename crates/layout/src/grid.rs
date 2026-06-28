@@ -14,7 +14,7 @@
 //!    auto-fill remaining items left-to-right, skipping occupied cells.
 //! 4. Layout each child into its cell. Row height = max item height.
 
-use crate::boxes::{GridTrack, LayoutBox};
+use crate::boxes::{BoxType, GridTrack, LayoutBox};
 
 /// Entry point: lay out children of a `display:grid` container.
 pub fn layout_grid_children(bx: &mut LayoutBox, containing_width: f32) {
@@ -33,15 +33,38 @@ pub fn layout_grid_children(bx: &mut LayoutBox, containing_width: f32) {
         return;
     }
 
-    let col_widths = resolve_column_widths(&columns, &bx.children, containing_width, gap);
-    let placements = compute_placements(&bx.children, n_cols);
+    // M70.1: 真实 HTML 的 grid 子元素之间常有换行/空格，会生成 Inline 空白文本
+    // 块（不是 Anonymous）。CSS 规范里只有 element 是 grid item，纯空白文本不算。
+    // 收集"真实 item"的索引：Block 元素，或非空白的 Inline（极少见但保留语义）。
+    // 过滤掉 Anonymous + 纯空白 Inline（text 为空或全是空白）。
+    let is_ws = |s: &str| s.chars().all(char::is_whitespace);
+    let item_idxs: Vec<usize> = bx
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| match c.box_type {
+            BoxType::Anonymous => false,
+            BoxType::Inline => c.text.as_deref().is_some_and(|t| !is_ws(t)),
+            _ => true,
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if item_idxs.is_empty() {
+        bx.dimensions.height = 0.0;
+        return;
+    }
+
+    // Build a transient view of just the items for width/placement resolution.
+    let item_children: Vec<&LayoutBox> = item_idxs.iter().map(|&i| &bx.children[i]).collect();
+    let col_widths = resolve_column_widths(&columns, &item_children, containing_width, gap);
+    let placements = compute_placements(&item_children, n_cols);
     let n_rows = placements.iter().map(|p| p.0).max().map_or(0, |r| r + 1);
 
-    // Pass 1: layout each child (x, width, y=base_y) to measure heights.
+    // Pass 1: layout each item (x, width, y=base_y) to measure heights.
     // Grid items are blockified (CSS spec): force width to cell width
     // even for inline-level items.
-    for (i, &(_row, col, span)) in placements.iter().enumerate() {
-        let child = &mut bx.children[i];
+    for (k, &(_row, col, span)) in placements.iter().enumerate() {
+        let child = &mut bx.children[item_idxs[k]];
         let x = base_x + col_x_offset(&col_widths, col, gap);
         let w = spanned_width(&col_widths, col, span, gap);
         crate::block::layout_box_pub(child, x, base_y, w);
@@ -50,10 +73,10 @@ pub fn layout_grid_children(bx: &mut LayoutBox, containing_width: f32) {
         child.dimensions.width = w;
     }
 
-    // Compute row heights from measured children.
+    // Compute row heights from measured items.
     let mut row_heights = vec![0.0_f32; n_rows];
-    for (i, &(row, _, _)) in placements.iter().enumerate() {
-        let h = bx.children[i].dimensions.height;
+    for (k, &(row, _, _)) in placements.iter().enumerate() {
+        let h = bx.children[item_idxs[k]].dimensions.height;
         if h > row_heights[row] {
             row_heights[row] = h;
         }
@@ -71,8 +94,8 @@ pub fn layout_grid_children(bx: &mut LayoutBox, containing_width: f32) {
     }
 
     // Pass 2: re-layout with correct y per row.
-    for (i, &(row, col, span)) in placements.iter().enumerate() {
-        let child = &mut bx.children[i];
+    for (k, &(row, col, span)) in placements.iter().enumerate() {
+        let child = &mut bx.children[item_idxs[k]];
         let x = base_x + col_x_offset(&col_widths, col, gap);
         let w = spanned_width(&col_widths, col, span, gap);
         crate::block::layout_box_pub(child, x, row_y[row], w);
@@ -100,7 +123,7 @@ fn spanned_width(col_widths: &[f32], col: usize, span: usize, gap: f32) -> f32 {
 
 /// M35.3: Compute (row, col, col_span) for each child.
 /// Explicit `grid_placement` items get fixed positions; others auto-fill.
-fn compute_placements(children: &[LayoutBox], n_cols: usize) -> Vec<(usize, usize, usize)> {
+fn compute_placements(children: &[&LayoutBox], n_cols: usize) -> Vec<(usize, usize, usize)> {
     let n = children.len();
     let mut result = vec![(0usize, 0usize, 1usize); n];
     let mut occupied: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
@@ -163,7 +186,7 @@ fn compute_placements(children: &[LayoutBox], n_cols: usize) -> Vec<(usize, usiz
 /// Resolve track widths: Px fixed, Auto = max content width, Fr proportional.
 fn resolve_column_widths(
     tracks: &[GridTrack],
-    children: &[LayoutBox],
+    children: &[&LayoutBox],
     containing_width: f32,
     gap: f32,
 ) -> Vec<f32> {
@@ -182,11 +205,14 @@ fn resolve_column_widths(
                 used += v;
             }
             GridTrack::Auto => {
+                // M70.1: 取第 i 列的内容宽度。必须先 skip(i) 定位到第 i 列起点，
+                // 再 step_by(n) 每隔 n 个取该列的后续 item。旧的 .step_by(n).skip(i)
+                // 顺序反了——先按 n 跳步再 skip 会错位采样（对含 auto 的模板算错列宽）。
                 let col_content = children
                     .iter()
-                    .step_by(n)
                     .skip(i)
-                    .map(natural_content_width)
+                    .step_by(n)
+                    .map(|bx| natural_content_width(bx))
                     .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(1.0);
                 widths[i] = col_content;
@@ -597,5 +623,91 @@ mod tests {
             g.children[2].dimensions.x >= 50.0,
             "auto item 2 should be at col 2"
         );
+    }
+}
+
+#[cfg(test)]
+mod m70_tests {
+    use super::*;
+    use crate::boxes::{BoxType, Dimensions, GridProps, GridTrack, LayoutBox};
+
+    /// M70.1: 3 fr columns produce 3 equal-width tracks.
+    #[test]
+    fn fr_columns_resolve_to_equal_widths() {
+        let tracks = vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0), GridTrack::Fr(1.0)];
+        let children = [
+            LayoutBox::new(BoxType::Block).with_text("A".into()),
+            LayoutBox::new(BoxType::Block).with_text("B".into()),
+            LayoutBox::new(BoxType::Block).with_text("C".into()),
+        ];
+        let refs: Vec<&LayoutBox> = children.iter().collect();
+        let widths = resolve_column_widths(&tracks, &refs, 60.0, 0.0);
+        assert_eq!(widths, vec![20.0, 20.0, 20.0]);
+    }
+
+    /// M70.1: 3 items + 3 columns → all in row 0 at cols 0/1/2.
+    #[test]
+    fn placement_3items_3cols_one_row() {
+        let children = [
+            LayoutBox::new(BoxType::Block).with_text("A".into()),
+            LayoutBox::new(BoxType::Block).with_text("B".into()),
+            LayoutBox::new(BoxType::Block).with_text("C".into()),
+        ];
+        let refs: Vec<&LayoutBox> = children.iter().collect();
+        let placements = compute_placements(&refs, 3);
+        assert_eq!(placements, vec![(0, 0, 1), (0, 1, 1), (0, 2, 1)]);
+    }
+
+    /// M70.1: 3 fr columns + 3 block items → distinct x (0, 20, 40), same y.
+    #[test]
+    fn e2e_3col_grid_items_get_distinct_x() {
+        let mut grid = LayoutBox::new(BoxType::Grid);
+        grid.dimensions = Dimensions::new(0.0, 0.0, 60.0, 0.0);
+        grid.grid = GridProps {
+            columns: vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+            ..Default::default()
+        };
+        for s in ["A", "B", "C"] {
+            let child = LayoutBox::new(BoxType::Block).with_text(s.into());
+            grid.children.push(child);
+        }
+        layout_grid_children(&mut grid, 60.0);
+        assert_eq!(grid.children[0].dimensions.x, 0.0);
+        assert_eq!(grid.children[1].dimensions.x, 20.0);
+        assert_eq!(grid.children[2].dimensions.x, 40.0);
+    }
+
+    /// M70.1 regression: grid items separated by whitespace text (newlines/
+    /// spaces between `<div>`s in real HTML) must NOT break column placement.
+    /// Before the fix, whitespace Inline boxes were counted as grid items,
+    /// pushing real items to wrong columns/rows.
+    #[test]
+    fn grid_ignores_whitespace_children() {
+        let mut grid = LayoutBox::new(BoxType::Grid);
+        grid.dimensions = Dimensions::new(0.0, 0.0, 60.0, 0.0);
+        grid.grid = GridProps {
+            columns: vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+            ..Default::default()
+        };
+        // Simulate real HTML: <div>A</div>\n<div>B</div>\n<div>C</div>
+        // → children = [Block A, Inline "\n", Block B, Inline "\n", Block C]
+        grid.children
+            .push(LayoutBox::new(BoxType::Block).with_text("A".into()));
+        grid.children
+            .push(LayoutBox::new(BoxType::Inline).with_text("\n".into()));
+        grid.children
+            .push(LayoutBox::new(BoxType::Block).with_text("B".into()));
+        grid.children
+            .push(LayoutBox::new(BoxType::Inline).with_text("\n".into()));
+        grid.children
+            .push(LayoutBox::new(BoxType::Block).with_text("C".into()));
+        layout_grid_children(&mut grid, 60.0);
+        // The 3 real items (indices 0, 2, 4) should land at cols 0, 20, 40.
+        assert_eq!(grid.children[0].dimensions.x, 0.0, "A at col 0");
+        assert_eq!(grid.children[2].dimensions.x, 20.0, "B at col 1");
+        assert_eq!(grid.children[4].dimensions.x, 40.0, "C at col 2");
+        // All on the same row (same y).
+        assert_eq!(grid.children[0].dimensions.y, grid.children[2].dimensions.y);
+        assert_eq!(grid.children[2].dimensions.y, grid.children[4].dimensions.y);
     }
 }

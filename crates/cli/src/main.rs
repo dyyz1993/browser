@@ -834,20 +834,27 @@ fn render_html_to_string_inner_ex_engine(
     );
     let plain = render_ascii(&layout, width);
     let colored = render_ascii_colored(&layout, width);
-    // M22.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
+    // M22.2/M70.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
+    // colored 路径用彩色 ASCII（每字符带像素 RGB），plain 路径用灰度（爬虫安全）。
     // http(s) URL 或不存在的文件 → 保留占位符（不报错，爬虫场景容错）。
+    let plain = post_process_images(&plain, width, false);
+    let colored = post_process_images(&colored, width, true);
+    // M70.3: 把 [SVG: ...] 占位符替换为 ASCII art。
     Ok((
-        post_process_images(&plain, width),
-        post_process_images(&colored, width),
+        post_process_svgs(&plain, width),
+        post_process_svgs(&colored, width),
     ))
 }
 
-/// M22.2: 扫描渲染输出里的 `[IMG: src]` 占位符，尝试把 src 解析为本地
+/// M22.2/M70.2: 扫描渲染输出里的 `[IMG: src]` 占位符，尝试把 src 解析为本地
 /// 图像文件并解码成 ASCII art 替换。无法解析的保留原占位符。
+///
+/// `colored`: true 时用彩色 ASCII（每字符带 ANSI 38;2 前景色，对应像素 RGB），
+/// false 时用灰度 ASCII（纯字符，爬虫/终端安全）。
 ///
 /// base_dir 用 cwd（render-file/render-script 从文件读，cwd 是合理的
 /// 相对基准）。max_w 用渲染宽度，max_h 用宽度的 1/3（图像高度通常小于文本）。
-fn post_process_images(rendered: &str, width: usize) -> String {
+fn post_process_images(rendered: &str, width: usize, colored: bool) -> String {
     use browser_render::resolve_local_image_src;
     let cwd = std::env::current_dir().ok();
     let max_h = (width / 3).max(5) as u32;
@@ -901,23 +908,28 @@ fn post_process_images(rendered: &str, width: usize) -> String {
                 i = advance;
                 continue;
             }
-            // 尝试解析 + 解码
-            match resolve_local_image_src(&src, cwd.as_deref()) {
-                Some(path) => match browser_render::image_file_to_ascii(&path, width as u32, max_h)
-                {
-                    Ok(ascii) => {
-                        out.push_str("\n┌─ image: ");
-                        out.push_str(&src);
-                        out.push_str(" ─\n");
-                        out.push_str(ascii.trim_end_matches('\n'));
-                        out.push_str("\n└──────────────\n");
-                        eprintln!("[img] rendered {src} as ASCII");
-                    }
-                    Err(e) => {
-                        eprintln!("[img] decode {src} failed: {e}");
-                        out.push_str(&format!("[IMG: {src}]"));
-                    }
-                },
+            // 尝试解析 + 解码（M70.2: colored 路径用彩色版）
+            let decode_result = if colored {
+                resolve_local_image_src(&src, cwd.as_deref()).map(|path| {
+                    browser_render::image_file_to_ascii_colored(&path, width as u32, max_h)
+                })
+            } else {
+                resolve_local_image_src(&src, cwd.as_deref())
+                    .map(|path| browser_render::image_file_to_ascii(&path, width as u32, max_h))
+            };
+            match decode_result {
+                Some(Ok(ascii)) => {
+                    out.push_str("\n┌─ image: ");
+                    out.push_str(&src);
+                    out.push_str(" ─\n");
+                    out.push_str(ascii.trim_end_matches('\n'));
+                    out.push_str("\n└──────────────\n");
+                    eprintln!("[img] rendered {src} as ASCII");
+                }
+                Some(Err(e)) => {
+                    eprintln!("[img] decode {src} failed: {e}");
+                    out.push_str(&format!("[IMG: {src}]"));
+                }
                 None => {
                     out.push_str(&format!("[IMG: {src}]"));
                 }
@@ -929,6 +941,100 @@ fn post_process_images(rendered: &str, width: usize) -> String {
         }
     }
     out
+}
+
+/// M70.3: 扫描渲染输出里的 `[SVG: w=.. h=.. | shapes]` 占位符，解析出
+/// viewBox 尺寸 + 形状列表，调 `svg_to_ascii` 渲染成 ASCII art 替换。
+/// 解析失败的保留原占位符。
+fn post_process_svgs(rendered: &str, width: usize) -> String {
+    let chars: Vec<char> = rendered.chars().collect();
+    let mut out = String::with_capacity(rendered.len());
+    let mut i = 0;
+    while i < chars.len() {
+        // 匹配 [SVG:
+        if i + 5 <= chars.len()
+            && chars[i] == '['
+            && chars[i + 1] == 'S'
+            && chars[i + 2] == 'V'
+            && chars[i + 3] == 'G'
+            && chars[i + 4] == ':'
+        {
+            // 找到对应的 ]（SVG 占位符内不含 ]）
+            let mut j = i + 5;
+            while j < chars.len() && chars[j] != ']' {
+                j += 1;
+            }
+            if j >= chars.len() {
+                // 未闭合，原样输出
+                out.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            let placeholder: String = chars[i + 5..j].iter().collect();
+            match parse_svg_placeholder(&placeholder, width) {
+                Some(ascii) => {
+                    out.push_str("\n┌─ svg");
+                    out.push_str(" ─\n");
+                    out.push_str(ascii.trim_end_matches('\n'));
+                    out.push_str("\n└──────────────\n");
+                }
+                None => {
+                    out.push_str(&format!("[SVG:{placeholder}]"));
+                }
+            }
+            i = j + 1;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// M70.3: 解析 `[SVG: w=W h=H | tag k=v k=v; tag k=v]` 占位符内容（不含
+/// 外层 `[SVG:` 和 `]`），重建 SvgShape 列表并渲染成 ASCII art。
+fn parse_svg_placeholder(body: &str, width: usize) -> Option<String> {
+    use browser_render::{parse_svg_shapes, svg_to_ascii};
+    // 分割 " w=W h=H | shapes"
+    let (dims_part, shapes_part) = body.split_once('|')?;
+    let mut vb_w = 100.0_f32;
+    let mut vb_h = 100.0_f32;
+    for tok in dims_part.split_whitespace() {
+        if let Some(v) = tok.strip_prefix("w=") {
+            vb_w = v.parse().ok()?;
+        } else if let Some(v) = tok.strip_prefix("h=") {
+            vb_h = v.parse().ok()?;
+        }
+    }
+    // 解析 shapes：每个 "; " 分隔一个 shape，shape 内 "tag k=v k=v"
+    let mut elements: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for shape_str in shapes_part.split("; ") {
+        let mut parts = shape_str.split_whitespace();
+        let tag = parts.next()?;
+        let mut attrs = Vec::new();
+        for kv in parts {
+            if let Some((k, v)) = kv.split_once('=') {
+                attrs.push((k.to_string(), v.to_string()));
+            }
+        }
+        elements.push((tag.to_string(), attrs));
+    }
+    if elements.is_empty() {
+        return None;
+    }
+    // 转 parse_svg_shapes 需要的 &[(&str, &[(String,String)])]
+    let refs: Vec<(&str, &[(String, String)])> = elements
+        .iter()
+        .map(|(t, a)| (t.as_str(), a.as_slice()))
+        .collect();
+    let shapes = parse_svg_shapes(&refs);
+    let max_h = ((width as f32) * (vb_h / vb_w) * 0.5).max(5.0) as u32;
+    let ascii = svg_to_ascii(&shapes, vb_w, vb_h, width as u32, max_h);
+    if ascii.is_empty() {
+        None
+    } else {
+        Some(ascii)
+    }
 }
 
 /// Walk a DOM tree and concatenate every `<style>` tag's text content

@@ -7,7 +7,12 @@
 pub mod ascii;
 pub mod font;
 pub mod image;
+pub mod svg;
 
 pub use ascii::{render_ascii, render_ascii_colored};
 pub use font::{FontRenderer, LayoutMetrics};
-pub use image::{image_file_to_ascii, image_to_ascii_from_img, resolve_local_image_src};
+pub use image::{
+    image_file_to_ascii, image_file_to_ascii_colored, image_to_ascii_from_img,
+    image_to_ascii_from_img_colored, resolve_local_image_src,
+};
+pub use svg::{parse_svg_shapes, svg_to_ascii, SvgShape};

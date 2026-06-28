@@ -190,7 +190,7 @@ pub struct RgbColor {
     pub b: u8,
 }
 
-/// M39: 元素的视觉样式（border + background-color）。
+/// M39: 元素的视觉样式（border + background-color + 文字前景色）。
 /// 由 construct.rs 从 CSS computed styles 解析，由 ascii.rs 渲染。
 /// border 为简化版（四边相同宽度=1 字符），background 为 None=透明。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -199,6 +199,9 @@ pub struct BoxStyle {
     pub border: BoxEdges<bool>,
     /// 背景色。None = 透明（继承父背景）。
     pub background: Option<RgbColor>,
+    /// 文字前景色（CSS `color`）。None = 继承父 color（最顶层 None = 默认黑）。
+    /// M70: 新增。color 是继承属性，由 ascii.rs::paint 下传给子文本。
+    pub color: Option<RgbColor>,
 }
 
 /// A single layout box. Owns its children recursively.

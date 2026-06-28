@@ -35,7 +35,9 @@ fn render_ascii_inner(tree: &LayoutTree, viewport_width: usize, colored: bool) -
     }
 
     let mut buf = CharBuffer::new(viewport_width, max_y);
-    paint(&tree.root, &mut buf);
+    // M70: paint 从顶层开始，inherited_color=None 表示"用默认黑"。
+    // color 是 CSS 继承属性，paint 递归时把生效 color 下传给子文本。
+    paint(&tree.root, &mut buf, None);
 
     buf.to_string(colored)
 }
@@ -52,7 +54,13 @@ fn collect_text_extent(bx: &LayoutBox, max_y: &mut usize) {
     }
 }
 
-fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
+fn paint(bx: &LayoutBox, buf: &mut CharBuffer, inherited_color: Option<(u8, u8, u8)>) {
+    // M70: 计算本 box 生效的前景色（CSS color 是继承属性）。
+    // 本 box 有 color 声明 → 用它；否则继承父 color（inherited_color）；
+    // 顶层 None = 默认黑（终端/PNG 渲染层自己补黑）。
+    let effective_color: Option<(u8, u8, u8)> =
+        bx.style.color.map(|c| (c.r, c.g, c.b)).or(inherited_color);
+
     // M39: 先画 background-color（填充矩形）+ border（box-drawing），
     // 再画文字（文字会覆盖 border/background 的空格位置）。
     // 注意：background/border 只画有明确尺寸的 box（width>0 && height>0）。
@@ -92,7 +100,7 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
                     if ch == '\n' || ch == '\r' {
                         continue;
                     }
-                    buf.put(y, x, ch, is_link);
+                    buf.put(y, x, ch, is_link, effective_color);
                     x += 1;
                 }
             }
@@ -107,17 +115,18 @@ fn paint(bx: &LayoutBox, buf: &mut CharBuffer) {
                     continue;
                 }
                 if ch.is_whitespace() {
-                    buf.put(y, x, ' ', is_link);
+                    buf.put(y, x, ' ', is_link, effective_color);
                     x += 1;
                 } else {
-                    buf.put(y, x, ch, is_link);
+                    buf.put(y, x, ch, is_link, effective_color);
                     x += 1;
                 }
             }
         }
     }
     for child in &bx.children {
-        paint(child, buf);
+        // M70: 把生效 color 下传给子节点（继承语义）。
+        paint(child, buf, effective_color);
     }
 }
 
@@ -129,6 +138,9 @@ struct CharBuffer {
     links: Vec<Vec<bool>>,
     /// M39: parallel grid marking background color per cell.
     bg: Vec<Vec<Option<(u8, u8, u8)>>>,
+    /// M70: parallel grid marking foreground (CSS color) per cell.
+    /// None = 默认色（终端默认 / PNG 渲染层补黑）。
+    fg: Vec<Vec<Option<(u8, u8, u8)>>>,
 }
 
 impl CharBuffer {
@@ -136,19 +148,24 @@ impl CharBuffer {
         let rows = (0..height).map(|_| vec![' '; width]).collect();
         let links = (0..height).map(|_| vec![false; width]).collect();
         let bg = (0..height).map(|_| vec![None; width]).collect();
+        let fg = (0..height).map(|_| vec![None; width]).collect();
         Self {
             width,
             rows,
             links,
             bg,
+            fg,
         }
     }
 
-    fn put(&mut self, y: usize, x: usize, c: char, link: bool) {
+    fn put(&mut self, y: usize, x: usize, c: char, link: bool, color: Option<(u8, u8, u8)>) {
         if y < self.rows.len() && x < self.width {
             self.rows[y][x] = c;
             if link {
                 self.links[y][x] = true;
+            }
+            if let Some(rgb) = color {
+                self.fg[y][x] = Some(rgb);
             }
         }
     }
@@ -224,10 +241,13 @@ impl CharBuffer {
         }
     }
 
-    /// M30/M39: Render to string.
+    /// M30/M39/M70: Render to string.
     /// - `colored=true`: link cells → ANSI underline+blue foreground;
-    ///   background cells → ANSI truecolor background (`\x1b[48;2;R;G;Bm`).
-    ///   Link + background 叠加时合并为一个 SGR 序列。
+    ///   background cells → ANSI truecolor background (`\x1b[48;2;R;G;Bm`);
+    ///   foreground (CSS color) cells → ANSI truecolor foreground
+    ///   (`\x1b[38;2;R;G;Bm`).
+    ///   Link + background + foreground 叠加时合并为一个 SGR 序列。
+    ///   优先级：link（下划线蓝）> CSS color > 默认。
     /// - Trailing whitespace is trimmed, BUT background cells extend the
     ///   trim boundary (so colored background blocks aren't truncated).
     fn to_string(&self, colored: bool) -> String {
@@ -246,8 +266,9 @@ impl CharBuffer {
             while x < last {
                 let is_link = self.links[y][x];
                 let bg = self.bg[y][x];
+                let fg = self.fg[y][x];
 
-                if !colored || (!is_link && bg.is_none()) {
+                if !colored || (!is_link && bg.is_none() && fg.is_none()) {
                     // Plain cell — no ANSI.
                     out.push(row[x]);
                     x += 1;
@@ -255,11 +276,15 @@ impl CharBuffer {
                 }
 
                 // Build the SGR prefix for this cell's style.
-                let prefix = build_sgr_prefix(is_link, bg);
+                let prefix = build_sgr_prefix(is_link, bg, fg);
                 out.push_str(&prefix);
 
-                // Consume run of cells with identical (link, bg) style.
-                while x < last && self.links[y][x] == is_link && self.bg[y][x] == bg {
+                // Consume run of cells with identical (link, bg, fg) style.
+                while x < last
+                    && self.links[y][x] == is_link
+                    && self.bg[y][x] == bg
+                    && self.fg[y][x] == fg
+                {
                     out.push(row[x]);
                     x += 1;
                 }
@@ -271,18 +296,23 @@ impl CharBuffer {
     }
 }
 
-/// M39: Build ANSI SGR prefix for a cell style.
+/// M39/M70: Build ANSI SGR prefix for a cell style.
 ///
-/// - link: underline + W3C link blue (#0000EE) foreground
+/// - link: underline + W3C link blue (#0000EE) foreground（优先级最高，
+///   覆盖 CSS color）
+/// - foreground: truecolor foreground (`38;2;R;G;B`)（仅非 link 时生效）
 /// - background: truecolor background (`48;2;R;G;B`)
 ///
-/// Both can combine in a single SGR sequence.
-fn build_sgr_prefix(is_link: bool, bg: Option<(u8, u8, u8)>) -> String {
+/// 三者可合并到单个 SGR 序列。
+fn build_sgr_prefix(is_link: bool, bg: Option<(u8, u8, u8)>, fg: Option<(u8, u8, u8)>) -> String {
     // M30 link color: #0000EE = (0, 0, 238) + underline (4)
     let mut codes: Vec<String> = Vec::new();
     if is_link {
         codes.push("4".into()); // underline
         codes.push("38;2;0;0;238".into()); // link blue foreground
+    } else if let Some((r, g, b)) = fg {
+        // M70: CSS color 前景色。仅非 link 时生效（link 优先用固定蓝）。
+        codes.push(format!("38;2;{r};{g};{b}"));
     }
     if let Some((r, g, b)) = bg {
         codes.push(format!("48;2;{r};{g};{b}"));
@@ -463,5 +493,108 @@ mod tests {
         assert_eq!(plain, "pre MID post\n");
         let colored = render_ascii_colored(&tree, 80);
         assert_eq!(colored, "pre \x1b[4;38;2;0;0;238mMID\x1b[0m post\n");
+    }
+
+    // ---- M70: CSS color (foreground) rendering + inheritance ----
+
+    #[test]
+    fn colored_render_emits_fg_color_ansi() {
+        // M70: an inline box with style.color → ANSI 38;2;R;G;B prefix.
+        let mut b = LayoutBox::new(BoxType::Inline).with_text("hi".into());
+        b.dimensions = Dimensions::new(0.0, 0.0, 2.0, 1.0);
+        b.style.color = Some(browser_layout::RgbColor {
+            r: 33,
+            g: 150,
+            b: 243,
+        });
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.children.push(b);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        let tree = LayoutTree { root };
+        let plain = render_ascii(&tree, 80);
+        assert_eq!(plain, "hi\n"); // plain mode ignores color
+        let colored = render_ascii_colored(&tree, 80);
+        assert_eq!(colored, "\x1b[38;2;33;150;243mhi\x1b[0m\n");
+    }
+
+    #[test]
+    fn color_inherits_from_parent_block() {
+        // M70: CSS color is inherited. Parent block sets color, child inline
+        // text (no own color) should inherit it.
+        let mut text = LayoutBox::new(BoxType::Inline).with_text("hi".into());
+        text.dimensions = Dimensions::new(0.0, 0.0, 2.0, 1.0);
+        // text.style.color is None → should inherit parent's red
+        let mut parent = LayoutBox::new(BoxType::Block);
+        parent.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        parent.style.color = Some(browser_layout::RgbColor { r: 255, g: 0, b: 0 });
+        parent.children.push(text);
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        root.children.push(parent);
+        let tree = LayoutTree { root };
+        let colored = render_ascii_colored(&tree, 80);
+        // inherited red should appear as 38;2;255;0;0
+        assert_eq!(colored, "\x1b[38;2;255;0;0mhi\x1b[0m\n");
+    }
+
+    #[test]
+    fn child_color_overrides_inherited() {
+        // M70: child's own color wins over inherited parent color.
+        let mut text = LayoutBox::new(BoxType::Inline).with_text("hi".into());
+        text.dimensions = Dimensions::new(0.0, 0.0, 2.0, 1.0);
+        text.style.color = Some(browser_layout::RgbColor { r: 0, g: 0, b: 255 }); // blue
+        let mut parent = LayoutBox::new(BoxType::Block);
+        parent.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        parent.style.color = Some(browser_layout::RgbColor { r: 255, g: 0, b: 0 }); // red
+        parent.children.push(text);
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        root.children.push(parent);
+        let tree = LayoutTree { root };
+        let colored = render_ascii_colored(&tree, 80);
+        // child's blue wins
+        assert_eq!(colored, "\x1b[38;2;0;0;255mhi\x1b[0m\n");
+    }
+
+    #[test]
+    fn link_overrides_fg_color_in_ansi() {
+        // M70: a link box (underline) overrides its CSS color → fixed link blue.
+        let mut b = LayoutBox::new(BoxType::Inline)
+            .with_text("hi".into())
+            .with_link();
+        b.dimensions = Dimensions::new(0.0, 0.0, 2.0, 1.0);
+        // also has a CSS color, but link should win
+        b.style.color = Some(browser_layout::RgbColor { r: 255, g: 0, b: 0 });
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.children.push(b);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        let tree = LayoutTree { root };
+        let colored = render_ascii_colored(&tree, 80);
+        // link blue (4;38;2;0;0;238), NOT red
+        assert_eq!(colored, "\x1b[4;38;2;0;0;238mhi\x1b[0m\n");
+    }
+
+    #[test]
+    fn fg_and_bg_combined_in_one_sgr() {
+        // M70: CSS color (fg) + background-color combine into one SGR sequence.
+        let mut b = LayoutBox::new(BoxType::Inline).with_text("B".into());
+        b.dimensions = Dimensions::new(0.0, 0.0, 1.0, 1.0);
+        b.style.color = Some(browser_layout::RgbColor {
+            r: 255,
+            g: 255,
+            b: 255,
+        }); // white text
+        b.style.background = Some(browser_layout::RgbColor {
+            r: 76,
+            g: 175,
+            b: 80,
+        }); // green bg
+        let mut root = LayoutBox::new(BoxType::Block);
+        root.children.push(b);
+        root.dimensions = Dimensions::new(0.0, 0.0, 80.0, 1.0);
+        let tree = LayoutTree { root };
+        let colored = render_ascii_colored(&tree, 80);
+        // fg 38;2;255;255;255 + bg 48;2;76;175;80 in one sequence
+        assert_eq!(colored, "\x1b[38;2;255;255;255;48;2;76;175;80mB\x1b[0m\n");
     }
 }

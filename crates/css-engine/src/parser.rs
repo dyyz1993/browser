@@ -104,6 +104,45 @@ fn strip_important(value: &str) -> (&str, bool) {
     }
 }
 
+/// M70.1: Parse an inline `style="..."` attribute value into declarations.
+///
+/// The value is a `;`-separated list of `property: value` pairs (no selector,
+/// no braces). This is the same `parse_declaration` logic used inside rules,
+/// exposed so `compute_styles` can fold inline styles into the computed map.
+///
+/// # Example
+/// ```
+/// use browser_css_engine::parse_declaration_list;
+///
+/// let decls = parse_declaration_list("display: grid; color: red");
+/// assert_eq!(decls.len(), 2);
+/// assert_eq!(decls[0].property, "display");
+/// assert_eq!(decls[0].value, "grid");
+/// ```
+#[must_use]
+pub fn parse_declaration_list(style: &str) -> Vec<Declaration> {
+    let mut p = Parser::new(style);
+    let mut declarations = Vec::new();
+    while !p.is_eof() {
+        p.skip_whitespace_and_comments();
+        if p.is_eof() {
+            break;
+        }
+        if let Some(decl) = parse_declaration(&mut p) {
+            declarations.push(decl);
+        } else {
+            // Skip to next `;` or EOF so we don't get stuck.
+            while !p.is_eof() && !p.peek_char(';') {
+                p.advance_one();
+            }
+            if p.peek_char(';') {
+                p.advance_one();
+            }
+        }
+    }
+    declarations
+}
+
 // ---------------------------------------------------------------------------
 // Tiny cursor helper
 // ---------------------------------------------------------------------------

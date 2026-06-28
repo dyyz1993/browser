@@ -30,6 +30,10 @@ use fontdue::Font;
 pub type BgSpan = (usize, usize, (u8, u8, u8));
 /// M39: per-line background spans.
 pub type BgSpans = Vec<BgSpan>;
+/// M70: per-line foreground (CSS color) span = `(start_col, end_col, (r, g, b))` half-open range.
+pub type FgSpan = (usize, usize, (u8, u8, u8));
+/// M70: per-line foreground spans.
+pub type FgSpans = Vec<FgSpan>;
 
 const FONT_BYTES: &[u8] = include_bytes!("../assets/font.ttf");
 /// M36: CJK fallback font (NotoSansSC GB2312 subset, ~1.6MB).
@@ -96,6 +100,9 @@ impl FontRenderer {
     ///   ranges to paint blue. Pass empty for plain black text.
     /// - `bg_spans`: M39 per-line list of `(start_col, end_col, (r,g,b))`
     ///   half-open ranges to fill background color.
+    /// - `fg_spans`: M70 per-line list of `(start_col, end_col, (r,g,b))`
+    ///   half-open ranges to paint text in CSS color (overrides default black).
+    ///   Priority: link > fg > default black.
     ///
     /// Returns `(width, height, rgba_buffer)`. Buffer length is
     /// `width * height * 4`.
@@ -108,6 +115,7 @@ impl FontRenderer {
         text: &str,
         link_spans_per_line: &[Vec<(usize, usize)>],
         bg_spans_per_line: &[BgSpans],
+        fg_spans_per_line: &[FgSpans],
     ) -> (usize, usize, Vec<u8>) {
         let lines: Vec<&str> = text.lines().collect();
         assert!(!lines.is_empty(), "render_text_to_rgba: empty text");
@@ -149,6 +157,7 @@ impl FontRenderer {
                 .get(row)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
+            let fg_spans = fg_spans_per_line.get(row).map(Vec::as_slice).unwrap_or(&[]);
             let row_top = row * line_height;
             for (col, ch) in raw_line.chars().enumerate() {
                 let (m, mask) = self.cached_glyph(ch);
@@ -157,12 +166,11 @@ impl FontRenderer {
                 }
                 let y_origin = baseline as i32 - m.ymin - m.height as i32 + 1;
                 let is_link = spans.iter().any(|&(s, e)| col >= s && col < e);
-                let (cr, cg, cb) = if is_link {
-                    (0u8, 0u8, 0xEEu8)
-                } else {
-                    // alpha 0..=255 → gray v = 255 - alpha (black on white)
-                    (0u8, 0u8, 0u8)
-                };
+                // M70: 查找该列的 CSS 前景色（仅非 link 时生效）。
+                let fg_color = fg_spans
+                    .iter()
+                    .find(|&&(s, e, _)| col >= s && col < e)
+                    .map(|&(_, _, rgb)| rgb);
                 for dy in 0..m.height {
                     for dx in 0..m.width {
                         let alpha = mask[dy * m.width + dx];
@@ -179,16 +187,24 @@ impl FontRenderer {
                             continue;
                         }
                         let idx = (pyu * img_w + pxu) * 4;
-                        let v = 255 - alpha;
-                        // Blend: link spans override to blue, plain text uses gray.
+                        let v = 255 - alpha; // coverage 0..=255 (255=full ink)
+                                             // M30/M70 blend priority: link(blue) > CSS fg color > default black.
+                                             // 文字颜色 = 基色，再用 alpha 调制亮度（白底上抗锯齿淡边缘）。
                         let (r, g, b) = if is_link {
-                            // Blue text: keep blue, darken by alpha.
+                            // link blue: darken 0xEE by coverage.
                             let bf = (v as u32 * 0xEE / 255) as u8;
                             (0u8, 0u8, bf)
+                        } else if let Some((fr, fg, fb)) = fg_color {
+                            // CSS color: scale each channel by coverage.
+                            (
+                                (v as u32 * fr as u32 / 255) as u8,
+                                (v as u32 * fg as u32 / 255) as u8,
+                                (v as u32 * fb as u32 / 255) as u8,
+                            )
                         } else {
+                            // default black on white.
                             (v, v, v)
                         };
-                        let _ = (cr, cg, cb); // silence unused (replaced by blend logic above)
                         buf[idx] = r;
                         buf[idx + 1] = g;
                         buf[idx + 2] = b;
@@ -304,7 +320,7 @@ mod tests {
     #[test]
     fn render_simple_text_returns_nonempty_buffer() {
         let mut r = FontRenderer::new();
-        let (w, h, buf) = r.render_text_to_rgba("Hi", &[], &[]);
+        let (w, h, buf) = r.render_text_to_rgba("Hi", &[], &[], &[]);
         assert!(w > 0);
         assert!(h > 0);
         assert_eq!(buf.len(), w * h * 4);
@@ -322,14 +338,14 @@ mod tests {
     fn render_multiline_text_has_correct_height() {
         let mut r = FontRenderer::new();
         let m = r.metrics();
-        let (_w, h, _buf) = r.render_text_to_rgba("A\nB\nC", &[], &[]);
+        let (_w, h, _buf) = r.render_text_to_rgba("A\nB\nC", &[], &[], &[]);
         assert_eq!(h, m.line_height * 3);
     }
 
     #[test]
     fn render_chinese_chars_does_not_panic() {
         let mut r = FontRenderer::new();
-        let (w, h, _buf) = r.render_text_to_rgba("你好", &[], &[]);
+        let (w, h, _buf) = r.render_text_to_rgba("你好", &[], &[], &[]);
         assert!(w > 0);
         assert!(h > 0);
     }
@@ -391,13 +407,64 @@ mod tests {
     fn link_spans_paint_blue() {
         let mut r = FontRenderer::new();
         // 2 chars "go", link span covers col 0..2 → all blue.
-        let (w, h, buf) = r.render_text_to_rgba("go", &[vec![(0, 2)]], &[]);
+        let (w, h, buf) = r.render_text_to_rgba("go", &[vec![(0, 2)]], &[], &[]);
         // Find a non-white pixel and check its blue channel dominates.
         let blue_pixel = buf
             .chunks_exact(4)
             .any(|px| px[2] > px[0] && px[2] > px[1] && px[2] < 200);
         assert!(blue_pixel, "expected at least one blue link pixel");
         let _ = (w, h);
+    }
+
+    #[test]
+    fn fg_spans_paint_color() {
+        // M70: CSS color via fg_spans → pixels take that color (not gray, not blue).
+        let mut r = FontRenderer::new();
+        // Pure red (255,0,0) over "go" cols 0..2.
+        let (_w, _h, buf) = r.render_text_to_rgba("go", &[], &[], &[vec![(0, 2, (255, 0, 0))]]);
+        // Expect a pixel with red dominant (red channel high, green/blue low).
+        let red_pixel = buf
+            .chunks_exact(4)
+            .any(|px| px[0] > 100 && px[1] < px[0] && px[2] < px[0]);
+        assert!(red_pixel, "expected at least one red fg pixel");
+    }
+
+    #[test]
+    fn fg_spans_override_default_black() {
+        // M70: without fg span text is black (gray). With a fg span it's colored.
+        // Compare: default black text has equal RGB channels; colored does not.
+        let mut r = FontRenderer::new();
+        let (_, _, buf_default) = r.render_text_to_rgba("Hi", &[], &[], &[]);
+        let (_, _, buf_green) = r.render_text_to_rgba("Hi", &[], &[], &[vec![(0, 2, (0, 200, 0))]]);
+        // default: some ink pixel with r==g==b (gray)
+        let has_gray_ink = buf_default
+            .chunks_exact(4)
+            .any(|px| px[0] == px[1] && px[1] == px[2] && px[0] < 200);
+        // green: some ink pixel with g > r
+        let has_green_ink = buf_green
+            .chunks_exact(4)
+            .any(|px| px[1] > px[0] && px[1] > 50);
+        assert!(has_gray_ink, "default text should have gray ink");
+        assert!(has_green_ink, "fg-spans text should have green ink");
+    }
+
+    #[test]
+    fn link_overrides_fg_spans() {
+        // M70: priority link > fg. A cell that is both link AND fg should render blue.
+        let mut r = FontRenderer::new();
+        let (_, _, buf) = r.render_text_to_rgba(
+            "go",
+            &[vec![(0, 2)]], // link
+            &[],
+            &[vec![(0, 2, (255, 0, 0))]], // fg = red (should be overridden by link blue)
+        );
+        // Expect a blue-ish pixel (b > r), NOT a red pixel.
+        let blue_pixel = buf.chunks_exact(4).any(|px| px[2] > px[0] && px[2] < 200);
+        let red_pixel = buf
+            .chunks_exact(4)
+            .any(|px| px[0] > 100 && px[1] < px[0] && px[2] < px[0]);
+        assert!(blue_pixel, "link should override fg → blue");
+        assert!(!red_pixel, "fg red should NOT win over link blue");
     }
 
     // ── M36: CJK font fallback ──
@@ -422,7 +489,7 @@ mod tests {
     #[test]
     fn cjk_and_ascii_render_in_same_line() {
         let mut r = FontRenderer::new();
-        let (w, h, buf) = r.render_text_to_rgba("A你B", &[], &[]);
+        let (w, h, buf) = r.render_text_to_rgba("A你B", &[], &[], &[]);
         assert!(w > 0 && h > 0);
         assert_eq!(buf.len(), w * h * 4);
         // Both ASCII 'A' and CJK '你' should produce dark pixels
@@ -433,7 +500,7 @@ mod tests {
     #[test]
     fn pure_chinese_text_renders() {
         let mut r = FontRenderer::new();
-        let (w, h, buf) = r.render_text_to_rgba("你好世界", &[], &[]);
+        let (w, h, buf) = r.render_text_to_rgba("你好世界", &[], &[], &[]);
         assert!(w > 0 && h > 0);
         // 4 Chinese chars → at least some dark pixels per char
         let dark = buf.chunks_exact(4).filter(|px| px[0] < 200).count();

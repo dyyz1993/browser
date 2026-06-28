@@ -145,38 +145,43 @@ fn extract_style_text(tree: &Tree) -> String {
 }
 
 /// Render colored ANSI text to RGBA pixels using the shared font renderer.
-/// Mirrors `crates/cli/src/screenshot.rs`'s logic (M30 + M39 background).
+/// Mirrors `crates/cli/src/screenshot.rs`'s logic (M30 + M39 background + M70 fg).
 fn render_text_to_rgba(
     renderer: &mut browser_render::font::FontRenderer,
     text: &str,
 ) -> (Vec<u8>, usize, usize) {
-    // Strip ANSI, track link + background spans per line.
+    // Strip ANSI, track link + background + foreground spans per line.
     let lines: Vec<&str> = text.split('\n').collect();
     let mut link_spans: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut bg_spans: Vec<browser_render::font::BgSpans> = Vec::new();
+    let mut fg_spans: Vec<browser_render::font::FgSpans> = Vec::new();
     let mut plain_lines: Vec<String> = Vec::new();
     for line in &lines {
-        let (chars, links, bgs) = strip_ansi_and_track_styles(line);
+        let (chars, links, bgs, fgs) = strip_ansi_and_track_styles(line);
         plain_lines.push(chars.into_iter().collect());
         link_spans.push(links);
         bg_spans.push(bgs);
+        fg_spans.push(fgs);
     }
     let (w, h, rgba) =
-        renderer.render_text_to_rgba(&plain_lines.join("\n"), &link_spans, &bg_spans);
+        renderer.render_text_to_rgba(&plain_lines.join("\n"), &link_spans, &bg_spans, &fg_spans);
     (rgba, w, h)
 }
 
 /// Minimal ANSI stripper that also tracks link (underline truecolor) and
-/// background (48;2;R;G;B) spans. Mirrors `screenshot.rs`.
+/// background (48;2;R;G;B) and foreground (38;2;R;G;B) spans. Mirrors `screenshot.rs`.
+#[allow(clippy::type_complexity)] // 4-tuple return mirrors screenshot.rs
 pub(crate) fn strip_ansi_and_track_styles(
     line: &str,
 ) -> (
     Vec<char>,
     Vec<(usize, usize)>,
     Vec<browser_render::font::BgSpan>,
+    Vec<browser_render::font::FgSpan>,
 ) {
     let link_spans: Vec<(usize, usize)> = Vec::new();
     let bg_spans: Vec<browser_render::font::BgSpan> = Vec::new();
+    let fg_spans: Vec<browser_render::font::FgSpan> = Vec::new();
     // M44: simplified — we don't replicate the full parser here, the font
     // renderer handles plain text. For CDP screenshots, link coloring is
     // cosmetic; the key deliverable is the rendered text layout.
@@ -198,7 +203,7 @@ pub(crate) fn strip_ansi_and_track_styles(
         }
         result.push(c);
     }
-    (result, link_spans, bg_spans)
+    (result, link_spans, bg_spans, fg_spans)
 }
 
 /// Encode an RGBA buffer as a PNG (mirrors M12.1 screenshot encoding).
@@ -618,7 +623,7 @@ mod tests {
 
     #[test]
     fn strip_ansi_removes_escape_sequences() {
-        let (chars, _, _) = strip_ansi_and_track_styles("\x1b[4;34mgo\x1b[0m");
+        let (chars, _, _, _) = strip_ansi_and_track_styles("\x1b[4;34mgo\x1b[0m");
         let s: String = chars.into_iter().collect();
         assert_eq!(s, "go");
     }
