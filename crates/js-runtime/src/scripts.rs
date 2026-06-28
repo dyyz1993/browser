@@ -1638,7 +1638,7 @@ Object.defineProperty(document, 'body', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'documentElement', {
-    get: function() { return document.body; },
+    get: function() { return __makeElement(__findTag('html')); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'head', {
