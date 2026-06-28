@@ -32,6 +32,10 @@ struct Cli {
     /// updated jar back at exit. Enables login persistence across runs.
     #[arg(long, global = true)]
     cookie_file: Option<PathBuf>,
+    /// M70.7: HTTP/HTTPS proxy URL (e.g. http://127.0.0.1:7890).
+    /// Also respects https_proxy/http_proxy environment variables.
+    #[arg(long, global = true)]
+    proxy: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -193,6 +197,16 @@ enum Cmd {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    // M70.7: 应用 --proxy（若指定）。reqwest 默认读环境变量，这里设了后续所有
+    // HTTP 请求都会走代理。优先级：--proxy > 已有环境变量。
+    if let Some(ref proxy_url) = cli.proxy {
+        if std::env::var("https_proxy").is_err() {
+            std::env::set_var("https_proxy", proxy_url);
+        }
+        if std::env::var("http_proxy").is_err() {
+            std::env::set_var("http_proxy", proxy_url);
+        }
+    }
     // M21.2: 加载 cookie 文件（如果 --cookie-file 指定且文件存在）。
     // 用 RAII guard 确保 run 退出时（无论成功还是 ? 提前返回）
     // 都把更新后的 jar save 回文件（登录态持久化）。
