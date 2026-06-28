@@ -63,6 +63,60 @@ thread_local! {
     static WS_MANAGER: RefCell<Option<browser_ws::WsManager>> = const { RefCell::new(None) };
 }
 
+/// M70.4: A captured network event from JS fetch/XHR (Send-safe).
+/// Collected into a thread_local queue during script execution, drained
+/// by CDP navigate to emit `Network.*` events.
+#[derive(Debug, Clone)]
+pub struct CapturedNetworkEvent {
+    pub url: String,
+    pub method: String,
+    pub status: u16,
+    pub mime_type: String,
+    pub body_size: usize,
+}
+
+thread_local! {
+    /// M70.4: JS fetch/XHR 捕获的网络事件队列。navigate 的 JS 执行结束后 drain。
+    static CAPTURED_NETWORK: RefCell<Vec<CapturedNetworkEvent>> = const { RefCell::new(Vec::new()) };
+}
+
+/// M70.4: Drain and clear the captured network events (called by CDP navigate
+/// after JS execution). Returns owned Vec (Send-safe for crossing spawn_blocking).
+#[must_use]
+pub fn drain_captured_network_events() -> Vec<CapturedNetworkEvent> {
+    CAPTURED_NETWORK.with(|slot| slot.borrow_mut().drain(..).collect())
+}
+
+/// M70.4: Record a network event (called by fetch_sync_with_method).
+fn record_network_event(
+    url: &str,
+    method: &str,
+    status: u16,
+    headers: &[(String, String)],
+    body_size: usize,
+) {
+    let mime_type = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| {
+            v.split(';')
+                .next()
+                .unwrap_or("text/plain")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_else(|| "text/plain".to_string());
+    CAPTURED_NETWORK.with(|slot| {
+        slot.borrow_mut().push(CapturedNetworkEvent {
+            url: url.to_string(),
+            method: method.to_string(),
+            status,
+            mime_type,
+            body_size,
+        });
+    });
+}
+
 /// RAII guard: keeps the thread-local tree installed until drop.
 pub struct TreeGuard {
     _private: (),
@@ -663,6 +717,8 @@ fn fetch_sync_with_method(
         .map(|(_, v)| v.clone())
         .collect();
     let body = String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))?;
+    // M70.4: 记录这个网络请求到 CDP Network 事件队列（供 navigate drain）。
+    record_network_event(&url, &method, status, &headers, body.len());
     // 主线程写回 jar。
     if !set_cookies.is_empty() {
         CURRENT_COOKIE.with(|slot| {

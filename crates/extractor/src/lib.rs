@@ -24,6 +24,8 @@ use browser_dom::Tree;
 pub enum OutputFormat {
     /// 渲染后完整 HTML（序列化 DOM）。
     Html,
+    /// JS 执行前的原始 HTML（fetch 拿到的原样）。
+    OriginalHtml,
     /// 纯文本（去标签，保留段落结构）。
     Text,
     /// Markdown（HTML→md，turndown 子集）。【Step 3 加入】
@@ -40,11 +42,12 @@ impl OutputFormat {
     pub fn parse(s: &str) -> Result<Self, String> {
         match s.to_ascii_lowercase().as_str() {
             "html" | "raw" => Ok(Self::Html),
+            "original-html" | "original_html" | "pre-js" => Ok(Self::OriginalHtml),
             "text" | "txt" | "plain" => Ok(Self::Text),
             "markdown" | "md" => Ok(Self::Markdown),
             "links" | "link" => Ok(Self::Links),
             other => Err(format!(
-                "unknown format '{other}' (expected: html|text|markdown|links)"
+                "unknown format '{other}' (expected: html|text|markdown|links|original-html)"
             )),
         }
     }
@@ -125,6 +128,11 @@ fn extract_with_clean(
         OutputFormat::Text => format_text::to_text(tree, selector, &excluded),
         OutputFormat::Links => format_links::to_links(tree, base_url, selector, &excluded),
         OutputFormat::Markdown => format_md::to_markdown(tree, base_url, selector, &excluded),
+        OutputFormat::OriginalHtml => {
+            // 不应到达这里——CLI fetch 在原始 HTML 路径会提前 return。
+            // 若被调用（如测试），返回空（无意义但安全）。
+            Ok(String::new())
+        }
     }
 }
 
@@ -166,6 +174,14 @@ mod tests {
         assert_eq!(OutputFormat::parse("md").unwrap(), OutputFormat::Markdown);
         assert_eq!(OutputFormat::parse("text").unwrap(), OutputFormat::Text);
         assert_eq!(OutputFormat::parse("links").unwrap(), OutputFormat::Links);
+        assert_eq!(
+            OutputFormat::parse("original-html").unwrap(),
+            OutputFormat::OriginalHtml
+        );
+        assert_eq!(
+            OutputFormat::parse("pre-js").unwrap(),
+            OutputFormat::OriginalHtml
+        );
     }
 
     #[test]

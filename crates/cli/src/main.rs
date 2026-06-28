@@ -427,6 +427,14 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
             let tree = parse_html(&html);
+            // M70.5: `--format original-html` → 直接输出原始 HTML（JS 执行前），跳过整个渲染管线。
+            if format.eq_ignore_ascii_case("original-html")
+                || format.eq_ignore_ascii_case("original_html")
+                || format.eq_ignore_ascii_case("pre-js")
+            {
+                println!("{html}");
+                return Ok(());
+            }
             // M65: profile 打点
             let rss = || -> u64 {
                 // macOS: 用 mach_task_basic_info 拿 RSS（不依赖 /proc）

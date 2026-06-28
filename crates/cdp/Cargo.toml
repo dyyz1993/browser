@@ -17,6 +17,7 @@ browser-layout = { path = "../layout" }
 browser-render = { path = "../render" }
 browser-js-runtime = { path = "../js-runtime" }
 png = "0.17"
+url = "2"
 tokio = { workspace = true }
 thiserror = { workspace = true }
 

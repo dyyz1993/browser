@@ -136,13 +136,7 @@ pub fn svg_to_ascii(shapes: &[SvgShape], vb_w: f32, vb_h: f32, max_w: u32, max_h
 }
 
 /// 中点画圆算法（填充版）：画一个实心圆。
-fn draw_circle(
-    grid: &mut [Vec<Cell>],
-    cx: f32,
-    cy: f32,
-    r: f32,
-    color: Option<(u8, u8, u8)>,
-) {
+fn draw_circle(grid: &mut [Vec<Cell>], cx: f32, cy: f32, r: f32, color: Option<(u8, u8, u8)>) {
     if r <= 0.0 {
         return;
     }
@@ -161,14 +155,7 @@ fn draw_circle(
 }
 
 /// 实心矩形。
-fn draw_rect(
-    grid: &mut [Vec<Cell>],
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: Option<(u8, u8, u8)>,
-) {
+fn draw_rect(grid: &mut [Vec<Cell>], x: f32, y: f32, w: f32, h: f32, color: Option<(u8, u8, u8)>) {
     let gh = grid.len();
     let gw = if gh > 0 { grid[0].len() } else { 0 };
     let x0 = x.round().max(0.0) as usize;
@@ -222,11 +209,7 @@ fn draw_line(
 }
 
 /// 多边形：先画边框（连线），再做扫描线填充（凸多边形够用）。
-fn draw_polygon(
-    grid: &mut [Vec<Cell>],
-    points: &[(f32, f32)],
-    color: Option<(u8, u8, u8)>,
-) {
+fn draw_polygon(grid: &mut [Vec<Cell>], points: &[(f32, f32)], color: Option<(u8, u8, u8)>) {
     if points.len() < 2 {
         return;
     }

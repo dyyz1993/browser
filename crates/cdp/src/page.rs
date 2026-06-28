@@ -51,6 +51,24 @@ pub struct PageState {
     pub rendered_colored: String,
     /// Render width in chars.
     pub width: usize,
+    /// M70.4: HTTP status of the last navigate (for Network.responseReceived).
+    pub last_status: u16,
+    /// M70.4: Response headers of the last navigate (for Network.responseReceived).
+    pub last_headers: Vec<(String, String)>,
+    /// M70.4: Cookie jar (Send-safe owned cookies, for Network.getCookies/setCookie).
+    pub cookies: Vec<NetworkCookie>,
+}
+
+/// M70.4: A single cookie for the CDP Network domain. Owned + Send-safe
+/// (unlike browser_cookie::CookieHandle which is Rc<RefCell>).
+#[derive(Debug, Clone, Default)]
+pub struct NetworkCookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    pub secure: bool,
+    pub http_only: bool,
 }
 
 impl Default for PageState {
@@ -62,6 +80,9 @@ impl Default for PageState {
             rendered_text: String::new(),
             rendered_colored: String::new(),
             width: 80,
+            last_status: 0,
+            last_headers: Vec::new(),
+            cookies: Vec::new(),
         }
     }
 }
@@ -277,11 +298,33 @@ pub async fn dispatch(
                 .and_then(|p| p.get_str("url"))
                 .ok_or_else(|| CdpError::InvalidJson("missing url param".to_string()))?;
             let client = browser_net::HttpClient::new();
-            let bytes = client
-                .get(url)
+            // M70.4: 用 request_full_raw 拿完整 (status, body, headers)，
+            // 不报错返回非 2xx（让 404/500 页面也能渲染 + 发 Network.responseReceived）。
+            let (status, bytes, resp_headers) = client
+                .request_full_raw(url, "GET", None, None, None)
                 .await
                 .map_err(|e| CdpError::Io(format!("fetch: {e}")))?;
             let html = String::from_utf8_lossy(&bytes).to_string();
+            // M70.4: 提取响应头 + 解析 Set-Cookie 存入 jar。
+            let header_pairs: Vec<(String, String)> = resp_headers
+                .iter()
+                .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
+            {
+                let mut st = state
+                    .lock()
+                    .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
+                st.last_status = status;
+                st.last_headers = header_pairs.clone();
+                // 解析 Set-Cookie 入 jar
+                for (k, v) in &header_pairs {
+                    if k.eq_ignore_ascii_case("set-cookie") {
+                        if let Some(ck) = parse_set_cookie(v, url) {
+                            st.cookies.push(ck);
+                        }
+                    }
+                }
+            }
 
             // M68: ① parse HTML 存 tree（不 layout），给 JS 步骤留插入点。
             {
@@ -306,23 +349,29 @@ pub async fn dispatch(
             let url_owned = url.to_string();
             // 注意：SharedTree (Rc<RefCell<Tree>>) 是 !Send，不能跨 spawn_blocking
             // 返回。所以在闭包内部就 clone 成 owned Tree（Tree: Send），返回 Tree。
-            let js_tree: Tree = tokio::task::spawn_blocking(move || {
-                use std::panic::AssertUnwindSafe;
-                let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    browser_js_runtime::run_scripts_with_base_engine(
-                        tree_clone,
-                        Some(url_owned),
-                        &engine_kind,
-                    )
-                }));
-                match result {
-                    Ok((shared, _executed)) => shared.borrow().clone(),
-                    // panic → 回退静态树（重 parse），不杀 server。
-                    Err(_) => parse_html(""),
-                }
-            })
-            .await
-            .map_err(|e| CdpError::Io(format!("js task join: {e}")))?;
+            // M70.4: 同时 drain JS fetch/XHR 捕获的网络事件，返回给 navigate 发 CDP 事件。
+            let (js_tree, captured_net): (Tree, Vec<browser_js_runtime::CapturedNetworkEvent>) =
+                tokio::task::spawn_blocking(move || {
+                    use std::panic::AssertUnwindSafe;
+                    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        browser_js_runtime::run_scripts_with_base_engine(
+                            tree_clone,
+                            Some(url_owned),
+                            &engine_kind,
+                        )
+                    }));
+                    match result {
+                        Ok((shared, _executed)) => {
+                            let tree = shared.borrow().clone();
+                            let net = browser_js_runtime::drain_captured_network_events();
+                            (tree, net)
+                        }
+                        // panic → 回退静态树（重 parse），不杀 server。
+                        Err(_) => (parse_html(""), Vec::new()),
+                    }
+                })
+                .await
+                .map_err(|e| CdpError::Io(format!("js task join: {e}")))?;
 
             // M68: ③ JS 后 owned tree 回写 + 重新 layout+render。
             {
@@ -342,7 +391,145 @@ pub async fn dispatch(
             // M50: emit Page lifecycle events after navigate
             let frame_id = crate::discovery::TARGET_ID.to_string();
             let nav_url = url.to_string();
-            let events = vec![
+            // M70.4: Network.* 事件 — Chrome 在页面事件之前发。Puppeteer 的
+            // page.on('request'/'response') 依赖这三个事件。
+            let mime_type = header_pairs
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| {
+                    v.split(';')
+                        .next()
+                        .unwrap_or("text/html")
+                        .trim()
+                        .to_string()
+                })
+                .unwrap_or_else(|| "text/html".to_string());
+            let req_id = "1".to_string();
+            let network_events = vec![
+                // requestWillBeSent
+                CdpMessage::event(
+                    "Network.requestWillBeSent",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("requestId".to_string(), Json::String(req_id.clone()));
+                        let mut request = BTreeMap::new();
+                        request.insert("url".to_string(), Json::String(nav_url.clone()));
+                        request.insert("method".to_string(), Json::String("GET".to_string()));
+                        request.insert("headers".to_string(), Json::Object(BTreeMap::new()));
+                        p.insert("request".to_string(), Json::Object(request));
+                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p.insert("type".to_string(), Json::String("Document".to_string()));
+                        let mut init = BTreeMap::new();
+                        init.insert("url".to_string(), Json::String(nav_url.clone()));
+                        p.insert("initiator".to_string(), Json::Object(init));
+                        p
+                    }),
+                ),
+                // responseReceived
+                CdpMessage::event(
+                    "Network.responseReceived",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("requestId".to_string(), Json::String(req_id.clone()));
+                        let mut response = BTreeMap::new();
+                        response.insert("url".to_string(), Json::String(nav_url.clone()));
+                        response.insert("status".to_string(), Json::Number(f64::from(status)));
+                        response.insert(
+                            "statusText".to_string(),
+                            Json::String(status_text(status).to_string()),
+                        );
+                        let mut resp_hdrs = BTreeMap::new();
+                        for (k, v) in &header_pairs {
+                            resp_hdrs.insert(k.clone(), Json::String(v.clone()));
+                        }
+                        response.insert("headers".to_string(), Json::Object(resp_hdrs));
+                        response.insert("mimeType".to_string(), Json::String(mime_type.clone()));
+                        response
+                            .insert("protocol".to_string(), Json::String("http/1.1".to_string()));
+                        p.insert("response".to_string(), Json::Object(response));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p.insert("type".to_string(), Json::String("Document".to_string()));
+                        p
+                    }),
+                ),
+                // loadingFinished
+                CdpMessage::event(
+                    "Network.loadingFinished",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("requestId".to_string(), Json::String(req_id.clone()));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p.insert(
+                            "encodedDataLength".to_string(),
+                            Json::Number(f64::from(bytes.len() as u32)),
+                        );
+                        p
+                    }),
+                ),
+            ];
+            // M70.4: 为 JS fetch/XHR 捕获的网络请求生成 Network.* 事件。
+            // requestId 从 "2" 开始递增（"1" 是主文档）。
+            let mut network_events = network_events;
+            for (i, ev) in captured_net.iter().enumerate() {
+                let rid = (i + 2).to_string();
+                let ev_url = ev.url.clone();
+                let ev_method = ev.method.clone();
+                let ev_status = ev.status;
+                let ev_mime = ev.mime_type.clone();
+                let ev_size = ev.body_size;
+                // requestWillBeSent
+                network_events.push(CdpMessage::event(
+                    "Network.requestWillBeSent",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("requestId".to_string(), Json::String(rid.clone()));
+                        let mut request = BTreeMap::new();
+                        request.insert("url".to_string(), Json::String(ev_url.clone()));
+                        request.insert("method".to_string(), Json::String(ev_method.clone()));
+                        request.insert("headers".to_string(), Json::Object(BTreeMap::new()));
+                        p.insert("request".to_string(), Json::Object(request));
+                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p.insert("type".to_string(), Json::String("XHR".to_string()));
+                        p
+                    }),
+                ));
+                // responseReceived
+                network_events.push(CdpMessage::event(
+                    "Network.responseReceived",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("requestId".to_string(), Json::String(rid.clone()));
+                        let mut response = BTreeMap::new();
+                        response.insert("url".to_string(), Json::String(ev_url.clone()));
+                        response.insert("status".to_string(), Json::Number(f64::from(ev_status)));
+                        response.insert("statusText".to_string(), Json::String(String::new()));
+                        response.insert("headers".to_string(), Json::Object(BTreeMap::new()));
+                        response.insert("mimeType".to_string(), Json::String(ev_mime.clone()));
+                        response.insert("protocol".to_string(), Json::String("http/1.1".into()));
+                        p.insert("response".to_string(), Json::Object(response));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p.insert("type".to_string(), Json::String("XHR".to_string()));
+                        p
+                    }),
+                ));
+                // loadingFinished
+                network_events.push(CdpMessage::event(
+                    "Network.loadingFinished",
+                    Json::Object({
+                        let mut p = BTreeMap::new();
+                        p.insert("requestId".to_string(), Json::String(rid));
+                        p.insert("timestamp".to_string(), Json::Number(0.0));
+                        p.insert(
+                            "encodedDataLength".to_string(),
+                            Json::Number(ev_size as f64),
+                        );
+                        p
+                    }),
+                ));
+            }
+            let mut page_events = vec![
                 // 1. frameNavigated — tells FrameManager the frame URL changed
                 CdpMessage::event(
                     "Page.frameNavigated",
@@ -425,6 +612,9 @@ pub async fn dispatch(
                     }),
                 ),
             ];
+            // M70.4: Network.* 事件先于 Page.* 发出（Chrome 的顺序）。
+            let mut events = network_events;
+            events.append(&mut page_events);
             Ok(DispatchResult {
                 response: CdpMessage::ok_response(id, Json::Object(result)),
                 events,
@@ -569,6 +759,67 @@ pub async fn dispatch(
             response: CdpMessage::ok_empty(id),
             events: vec![],
         }),
+    }
+}
+
+/// M70.4: Parse a `Set-Cookie` header value into a NetworkCookie.
+///
+/// Handles `name=value; Domain=...; Path=...; Secure; HttpOnly`.
+/// Domain falls back to the request URL's host.
+fn parse_set_cookie(header: &str, request_url: &str) -> Option<NetworkCookie> {
+    let mut parts = header.split(';');
+    let nv = parts.next()?;
+    let (name, value) = nv.split_once('=')?;
+    let name = name.trim().to_string();
+    let value = value.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let host = url::Url::parse(request_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default();
+    let mut ck = NetworkCookie {
+        name,
+        value,
+        domain: host,
+        path: "/".to_string(),
+        secure: false,
+        http_only: false,
+    };
+    for attr in parts {
+        let attr = attr.trim();
+        let lower = attr.to_ascii_lowercase();
+        if lower == "secure" {
+            ck.secure = true;
+        } else if lower == "httponly" {
+            ck.http_only = true;
+        } else if let Some(d) = lower.strip_prefix("domain=") {
+            ck.domain = d.trim().to_string();
+        } else if let Some(p) = lower.strip_prefix("path=") {
+            ck.path = p.trim().to_string();
+        }
+    }
+    Some(ck)
+}
+
+/// M70.4: Minimal HTTP status text lookup (for Network.responseReceived.statusText).
+fn status_text(code: u16) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        _ => "",
     }
 }
 

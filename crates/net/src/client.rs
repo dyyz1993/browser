@@ -293,6 +293,64 @@ impl HttpClient {
         self.request_full(url, m, body, content_type, cookie_header)
             .await
     }
+
+    /// M70.4: Like [`request_full`] but **never errors on non-2xx status**.
+    ///
+    /// Returns `(status, body, headers)` for ALL HTTP responses (200/301/404/500...).
+    /// Only errors on network failures (DNS/TLS/connection). This is what CDP
+    /// `Network.responseReceived` needs — Chrome reports 404/500 pages with
+    /// their bodies; the old `request_full` dropped body+headers on `BadStatus`.
+    ///
+    /// # Errors
+    /// Only `NetError::InvalidUrl` / `UnsupportedScheme` / `RequestFailed` /
+    /// `ReadFailed`. Never `BadStatus`.
+    pub async fn request_full_raw(
+        &self,
+        url: &str,
+        method: &str,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> Result<(u16, Vec<u8>, HeaderMap), NetError> {
+        let parsed = Url::parse(url).map_err(|_| NetError::InvalidUrl {
+            url: url.to_string(),
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(NetError::UnsupportedScheme {
+                scheme: parsed.scheme().to_string(),
+            });
+        }
+        let m = match method.to_uppercase().as_str() {
+            "POST" => Method::POST,
+            "PUT" => Method::PUT,
+            "DELETE" => Method::DELETE,
+            "HEAD" => Method::HEAD,
+            "PATCH" => Method::PATCH,
+            _ => Method::GET,
+        };
+        let mut builder = self.inner.request(m, url);
+        if let Some(cookie) = cookie_header {
+            builder = builder.header("cookie", cookie);
+        }
+        if let Some(ct) = content_type {
+            builder = builder.header("content-type", ct);
+        }
+        if let Some(b) = body {
+            builder = builder.body(b.to_string());
+        }
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| NetError::RequestFailed(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let headers = resp.headers().clone();
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| NetError::ReadFailed(e.to_string()))?
+            .to_vec();
+        Ok((status, body, headers))
+    }
 }
 
 /// Convenience helper: build a one-shot client and GET a URL.
