@@ -996,10 +996,17 @@ const QUICKJS_GLOBAL_SHIM: &str = r#"
 // window 全局对象
 var window = globalThis;
 var self = globalThis;
-var top = globalThis;
-var parent = globalThis;
-
-// navigator
+	var top = globalThis;
+	var parent = globalThis;
+	
+	// M70.6: 全局 onload/onerror 桩（防止 `onload is not defined` 报错）。
+	// 某些框架（如 bing.com）直接引用 onload 全局变量而非 window.onload。
+	var onload = null;
+	var onerror = null;
+	window.onload = null;
+	window.onerror = null;
+	
+	// navigator
 window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
 
 // M66: 异步 event loop —— setTimeout/setInterval 不立刻执行，

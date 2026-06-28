@@ -546,8 +546,9 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 selector: selector.clone(),
                 only_main_content,
             };
-            let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
-                .map_err(|e| anyhow!("extract failed: {e}"))?;
+            let mut result =
+                browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
+                    .map_err(|e| anyhow!("extract failed: {e}"))?;
             if profile {
                 eprintln!(
                     "[profile] {:<20} {:>6}MB  {:>6.2}s",
@@ -563,10 +564,30 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 );
                 eprintln!("[profile] DOM nodes: {}", shared.borrow().len());
             }
-            // M59: 启发式提示——重 JS 站 boa 渲染慢/失败时，--no-js 取 SSR 兜底常更快。
+            // M70.6: 启发式检测——JS 执行后输出比原始 HTML 还差（JS 搞坏了页面），
+            // 自动回退到原始 HTML。
             if !no_js {
                 let content_len = result.content.trim().len();
-                if content_len < 50 {
+                let raw_len = html.trim().len();
+                if raw_len > 500 && content_len < raw_len / 5 {
+                    eprintln!(
+                        "[hint] JS output ({content_len}B) << raw HTML ({raw_len}B) \
+                         — JS likely broke the page; falling back to original HTML"
+                    );
+                    let static_tree = parse_html(&html);
+                    if let Ok(static_res) =
+                        browser_extractor::run_extract(&static_tree, base.as_deref(), &opts)
+                    {
+                        if static_res.content.trim().len() > content_len {
+                            result.content = static_res.content;
+                            result.title = static_res.title;
+                            eprintln!(
+                                "[hint] JS output ({content_len}B) → static ({static}B)",
+                                static = result.content.trim().len()
+                            );
+                        }
+                    }
+                } else if content_len < 50 {
                     eprintln!(
                         "[hint] output nearly empty after JS — try --no-js for SSR fallback (boa may have failed on this SPA)"
                     );
