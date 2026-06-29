@@ -60,7 +60,7 @@ export default {
           const cached = responseCache.get(cacheKey);
           if (cached && Date.now() - cached.ts < CACHE_TTL) {
             const result = { ...cached.data };
-            result._timing = { cached: true, age: Date.now() - cached.ts };
+            result._timing = cached.backendTiming || { cached: true, age: Date.now() - cached.ts };
             return json(result);
           }
 
@@ -76,10 +76,14 @@ export default {
             return json({ error: `Backend unavailable (${resp.status})`, content: '' }, 502);
           }
           const result = await resp.json();
-          result._timing = { backend: t1 - t0 };
+
+          // 保留后端耗时 + 添加 Worker 到后端的时间
+          const backendTiming = result._timing || {};
+          backendTiming.worker_ms = t1 - t0;
+          result._timing = backendTiming;
 
           // 写入缓存
-          responseCache.set(cacheKey, { ts: Date.now(), data: { ...result } });
+          responseCache.set(cacheKey, { ts: Date.now(), data: { ...result }, backendTiming });
 
           return json(result);
         }

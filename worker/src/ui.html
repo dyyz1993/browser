@@ -201,7 +201,7 @@
   <div class="meta">
     <span id="meta-status">Ready</span>
     <span id="meta-size"></span>
-    <span id="meta-time"></span>
+    <span id="meta-timing"></span>
   </div>
 
   <!-- Output -->
@@ -360,7 +360,7 @@ async function scrape() {
   var titleEl = document.getElementById('out-title');
   var status = document.getElementById('meta-status');
   var sizeEl = document.getElementById('meta-size');
-  var timeEl = document.getElementById('meta-time');
+  var timeEl = document.getElementById('meta-timing');
 
   btn.disabled = true;
   btn.className = 'loading';
@@ -391,7 +391,15 @@ async function scrape() {
     out.textContent = content;
     status.textContent = data.error || 'Done';
     sizeEl.textContent = data.content ? data.content.length + ' chars' : '';
-    timeEl.textContent = ms + 'ms';
+    // 显示后端耗时分解
+    var timing = data._timing || {};
+    var scripts = data._scripts;
+    var parts = [];
+    if (timing.total_ms) parts.push('total ' + timing.total_ms + 'ms');
+    if (timing.fetch_ms) parts.push('fetch ' + timing.fetch_ms + 'ms');
+    if (timing.js_ms && timing.js_ms > 10) parts.push('js ' + timing.js_ms + 'ms');
+    if (scripts !== undefined) parts.push(scripts + ' scripts');
+    timeEl.textContent = parts.join(' · ') || (ms + 'ms');
     titleEl.textContent = data.title || '';
 
     // show preview toggle for markdown
