@@ -865,18 +865,12 @@ fn run_scripts_quickjs(
         let borrowed = shared.borrow();
         extract_script_entries(&borrowed)
     };
-    eprintln!("[serve] total {} scripts in DOM", scripts.len());
-    for (i, s) in scripts.iter().enumerate() {
-        eprintln!("[serve]   script[{}]: {:?}", i, s);
-    }
+    let __t_scripts_start = std::time::Instant::now();
 
     for script in &scripts {
-        eprintln!("[serve] processing: {:?}", script);
         let code = match script {
             ScriptEntry::Inline(code) => {
-                eprintln!("[serve] script: inline ({} bytes)", code.len());
                 if has_ts_syntax(code) {
-                    eprintln!("[serve]   → skipped (TS syntax)");
                     continue;
                 }
                 Some(code.clone())
@@ -884,22 +878,16 @@ fn run_scripts_quickjs(
             ScriptEntry::External(src) => match resolve_script_url(src, base_url.as_deref()) {
                 Some(url) => {
                     if should_skip_script(&url) {
-                        eprintln!("[serve] script: {url} → skipped (analytics)");
                         continue;
                     }
-                    eprintln!("[serve] script: {url} → fetching");
-                    eprintln!("[serve] script: {url} → fetching");
                     match fetch_external_script(&url) {
                         Ok(code) => {
                             if has_ts_syntax(&code) {
-                                eprintln!("[serve]   → skipped (TS syntax in content)");
                                 continue;
                             }
-                            eprintln!("[serve]   → fetched {} bytes", code.len());
                             Some(code)
                         }
                         Err(e) => {
-                            eprintln!("[serve]   → fetch failed: {e}");
                             eprintln!("[js-runtime] QuickJS fetch failed: {url}: {e}");
                             continue;
                         }
@@ -980,6 +968,7 @@ fn run_scripts_quickjs(
     }
 
     // dispatch DOMContentLoaded/load
+    let __t_dcl_start = std::time::Instant::now();
     let _ = engine.eval(
         r#"try {
             if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
@@ -990,29 +979,13 @@ fn run_scripts_quickjs(
                 if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
                     window.dispatchEvent(ev1);
                     window.dispatchEvent(ev2);
-            // M70.13: 触发 scroll + hashchange → 通知 docsify 等框架内容就绪。
-            window.dispatchEvent(new Event('scroll'));
-            window.dispatchEvent(new Event('hashchange'));
-        }
-    }
-    // M70.13: 模拟用户访问首页 → 触发 docsify 路由（封面→内容页）。
-    // 用 Promise.then 确保在 microtask 队列中执行，让框架的 setTimeout(0)
-    // 初始化先完成。
-    Promise.resolve().then(function() {
-        window.scrollTo(0, 10000);
-        window.dispatchEvent(new Event('scroll'));
-        if (location && (!location.hash || location.hash === '#/' || location.hash === '')) {
-            var prev = location.hash;
-            location.hash = '#/#';
-            setTimeout(function() {
-                location.hash = prev || '#/';
-                window.dispatchEvent(new Event('hashchange'));
-                window.dispatchEvent(new Event('popstate'));
-            }, 10);
-        }
-    });
-        } catch(e) { if (typeof __log === 'function') __log('[dcl] ' + e.message); }"#,
+                }
+            }
+        } catch(e) {}"#,
     );
+    eprintln!("[serve] scripts: {}ms, dcl: {}ms",
+        __t_scripts_start.elapsed().as_millis(),
+        __t_dcl_start.elapsed().as_millis());
 
     // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
     // M66-fix: 必须先 drain Promise microtask（.then 回调），再 drain timer（setTimeout）。
@@ -1030,11 +1003,11 @@ fn run_scripts_quickjs(
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
     // 直到 pending timer 清空或动态 script 队列清空，或超时（3s 上限）。
-    // M70.13: 增加 idle 检测：连续 5 轮无活动且超过 500ms 宽限期 → 提前退出。
-    const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(3);
+    // M70.13: 事件循环参数——缩短超时 + 更快 idle 退出。
+    const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(2);
     const EL_TICK_MS: u64 = 5;
-    const EL_IDLE_ROUNDS: u32 = 5;
-    const EL_IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+    const EL_IDLE_ROUNDS: u32 = 3;
+    const EL_IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
     let el_start = std::time::Instant::now();
     let mut idle_rounds: u32 = 0;
     let mut idle_start: Option<std::time::Duration> = None;
@@ -1090,6 +1063,7 @@ fn run_scripts_quickjs(
     // M66-fix: 最后再 drain 一轮（最后一波 timer 回调可能 schedule 了 microtask）。
     engine.run_jobs();
     engine.gc();
+    eprintln!("[serve] event_loop: {}ms", el_start.elapsed().as_millis());
 
     (shared, executed)
 }
