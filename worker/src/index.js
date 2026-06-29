@@ -21,7 +21,9 @@ let wasmInitialized = false;
 
 // 简单内存缓存（URL+格式 → 结果，60s TTL）
 const responseCache = new Map();
-const CACHE_TTL = 60_000;
+// M70.14: 缓存 TTL 分级——SSR 站内容稳定，缓存 5 分钟；SPA 站缓存 2 分钟
+const SSR_CACHE_TTL = 300_000;  // 5 min
+const SPA_CACHE_TTL = 120_000;  // 2 min
 
 async function ensureWasm() {
   if (!wasmInitialized) {
@@ -77,8 +79,10 @@ export default {
 
         // 简单内存缓存：同一个 URL+格式 60s 内复用
         const cacheKey = `${targetUrl}:${format}`;
-        const cached = responseCache.get(cacheKey);
-        if (cached && Date.now() - cached.ts < CACHE_TTL) {
+          const cached = responseCache.get(cacheKey);
+          if (cached) {
+            const ttl = cached.data._source === 'backend-spa' ? SPA_CACHE_TTL : SSR_CACHE_TTL;
+            if (Date.now() - cached.ts < ttl) {
           const result = { ...cached.data };
           result._timing = cached.backendTiming || { cached: true, age: Date.now() - cached.ts };
           return json(result);
