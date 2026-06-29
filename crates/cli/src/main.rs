@@ -7,6 +7,7 @@
 //! - `browser render-script <file>`   parse + execute scripts + layout + render
 //! - `browser render-url  <url>`      fetch + parse + execute scripts + render
 
+mod ai;
 mod img_ascii;
 mod sandbox;
 mod screenshot;
@@ -120,9 +121,21 @@ enum Cmd {
     /// by --format (markdown|html|text|links).
     Fetch {
         url: String,
-        /// Output format: markdown (default), html, text, or links.
+        /// Output format: markdown (default), html, text, links, images, highlights, branding.
         #[arg(long, default_value = "markdown")]
         format: String,
+        /// M70.8: AI summary (calls external pi CLI). Equivalent to Firecrawl "Summary" format.
+        #[arg(long)]
+        ai_summarize: bool,
+        /// M70.8: AI question-answering (calls external pi CLI). Equivalent to Firecrawl "Question" format.
+        #[arg(long)]
+        ai_question: Option<String>,
+        /// M70.8: AI provider (env: AI_PROVIDER, default: opencode-go).
+        #[arg(long)]
+        ai_provider: Option<String>,
+        /// M70.8: AI model (env: AI_MODEL, default: deepseek-v4-flash).
+        #[arg(long)]
+        ai_model: Option<String>,
         /// CSS selector to extract only matching subtrees (e.g. "table tr").
         #[arg(long)]
         selector: Option<String>,
@@ -435,6 +448,10 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             width: _width,
             profile,
             js_engine,
+            ai_summarize,
+            ai_question,
+            ai_provider,
+            ai_model,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
@@ -625,6 +642,32 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 // 错误路径下可能提前 return，导致缓冲区未刷。
                 use std::io::Write;
                 let _ = std::io::stdout().flush();
+            }
+            // M70.8: AI 后处理（摘要/问答），在输出完成后追加。
+            if ai_summarize || ai_question.is_some() {
+                let content = &result.content;
+                if let Some(q) = &ai_question {
+                    match crate::ai::ask_question(
+                        content,
+                        q,
+                        ai_provider.as_deref(),
+                        ai_model.as_deref(),
+                    ) {
+                        Ok(answer) => {
+                            eprintln!("\n[AI] Question: {q}\n[AI] Answer: {answer}");
+                        }
+                        Err(e) => eprintln!("[AI] question failed: {e}"),
+                    }
+                }
+                if ai_summarize {
+                    match crate::ai::summarize(content, ai_provider.as_deref(), ai_model.as_deref())
+                    {
+                        Ok(summary) => {
+                            eprintln!("\n[AI] Summary:\n{summary}");
+                        }
+                        Err(e) => eprintln!("[AI] summarize failed: {e}"),
+                    }
+                }
             }
             Ok(())
         }

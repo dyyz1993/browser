@@ -279,6 +279,13 @@ fn handle_element(ctx: &mut MdCtx, id: NodeId, tag: &str, attrs: &[(String, Stri
             walk_children(ctx, id);
         }
         // 其余未识别 tag：透传子节点（保内容，丢语义）。
+        // 但 script/style 的内容不应泄漏到 markdown 中。
+        "script" | "style" | "noscript" | "template" => {
+            // 忽略标签内容，不进入 markdown
+        }
+        "svg" => {
+            // SVG 图形描述标签，不应进入 markdown
+        }
         _ => {
             walk_children(ctx, id);
         }

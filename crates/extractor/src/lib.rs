@@ -11,7 +11,10 @@
 #![forbid(unsafe_code)]
 
 pub mod clean;
+pub mod format_branding;
+pub mod format_highlights;
 pub mod format_html;
+pub mod format_images;
 pub mod format_links;
 pub mod format_md;
 pub mod format_text;
@@ -32,6 +35,12 @@ pub enum OutputFormat {
     Markdown,
     /// 超链接地图（文本 → URL，绝对化 + 去重）。
     Links,
+    /// 图片地图（alt → URL）。
+    Images,
+    /// 强调/高亮内容（[tag] text）。
+    Highlights,
+    /// 品牌/SEO 元数据（title/meta/og/icon）。
+    Branding,
 }
 
 impl OutputFormat {
@@ -46,8 +55,11 @@ impl OutputFormat {
             "text" | "txt" | "plain" => Ok(Self::Text),
             "markdown" | "md" => Ok(Self::Markdown),
             "links" | "link" => Ok(Self::Links),
+            "images" | "img" | "image" => Ok(Self::Images),
+            "highlights" | "highlight" => Ok(Self::Highlights),
+            "branding" | "meta" => Ok(Self::Branding),
             other => Err(format!(
-                "unknown format '{other}' (expected: html|text|markdown|links|original-html)"
+                "unknown format '{other}' (expected: html|text|markdown|links|original-html|images|highlights|branding)"
             )),
         }
     }
@@ -133,6 +145,9 @@ fn extract_with_clean(
             // 若被调用（如测试），返回空（无意义但安全）。
             Ok(String::new())
         }
+        OutputFormat::Images => format_images::to_images(tree, base_url, selector, &excluded),
+        OutputFormat::Highlights => format_highlights::to_highlights(tree, selector, &excluded),
+        OutputFormat::Branding => format_branding::to_branding(tree, base_url, selector, &excluded),
     }
 }
 
@@ -181,6 +196,15 @@ mod tests {
         assert_eq!(
             OutputFormat::parse("pre-js").unwrap(),
             OutputFormat::OriginalHtml
+        );
+        assert_eq!(OutputFormat::parse("images").unwrap(), OutputFormat::Images);
+        assert_eq!(
+            OutputFormat::parse("highlights").unwrap(),
+            OutputFormat::Highlights
+        );
+        assert_eq!(
+            OutputFormat::parse("branding").unwrap(),
+            OutputFormat::Branding
         );
     }
 
