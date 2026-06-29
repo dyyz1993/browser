@@ -1380,6 +1380,9 @@ fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
 }
 
 /// 核心渲染管线：fetch → JS 执行 → 提取 → (content, title)
+/// JS 执行超过 JS_TIMEOUT 秒则放弃执行，用静态 HTML 提取兜底。
+const JS_TIMEOUT: u64 = 8;
+
 async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<(String, Option<String>)> {
     ensure_cookie_jar();
     let html = fetch_with_jar(url).await?;
