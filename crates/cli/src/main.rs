@@ -1332,17 +1332,22 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
         // ── 执行渲染管线 ──
         let result = render_and_extract(&req.url, &req.format, &req.js_engine).await;
         match result {
-            Ok((content, title)) => {
-                let escaped_content = serde_json::to_string(&content)
+            Ok(r) => {
+                let escaped_content = serde_json::to_string(&r.content)
                     .unwrap_or_else(|_| "\"\"".to_string());
-                let escaped_title = serde_json::to_string(&title)
-                    .unwrap_or_else(|_| "\"\"".to_string());
+                let escaped_title = serde_json::to_string(&r.title)
+                    .unwrap_or_else(|_| "null".to_string());
                 let json = format!(
-                    r#"{{"url":"{}","title":{},"content":{},"format":"{}"}}"#,
-                    req.url, escaped_title, escaped_content, req.format
+                    r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":{},"extract_ms":{},"total_ms":{}}},"_scripts":{}}}"#,
+                    req.url, escaped_title, escaped_content, req.format,
+                    r.timing_fetch_ms, r.timing_js_ms, r.timing_extract_ms,
+                    r.timing_fetch_ms + r.timing_js_ms + r.timing_extract_ms,
+                    r.scripts_executed,
                 );
                 send_response(&mut stream, 200, &json);
-                eprintln!("[serve] ✓ {} bytes", content.len());
+                eprintln!("[serve] ✓ {} bytes ({} scripts, {}ms total)",
+                    r.content.len(), r.scripts_executed,
+                    r.timing_fetch_ms + r.timing_js_ms + r.timing_extract_ms);
             }
             Err(e) => {
                 let err_json = format!(
@@ -1379,55 +1384,84 @@ fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
     let _ = stream.flush();
 }
 
-/// 核心渲染管线：fetch → JS 执行 → 提取 → (content, title)
-/// JS 执行超过 JS_TIMEOUT 秒则放弃执行，用静态 HTML 提取兜底。
-const JS_TIMEOUT: u64 = 8;
+/// 渲染结果 + 耗时分解（ms）
+struct RenderResult {
+    content: String,
+    title: Option<String>,
+    timing_fetch_ms: u64,
+    timing_js_ms: u64,
+    timing_extract_ms: u64,
+    scripts_executed: usize,
+}
 
-async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<(String, Option<String>)> {
+/// 核心渲染管线：fetch → JS 执行 → 提取 → RenderResult（含耗时分解）
+async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<RenderResult> {
     ensure_cookie_jar();
-    let html = fetch_with_jar(url).await?;
-    let base = Some(url.to_string());
-    let tree = parse_html(&html);
 
-    let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
-    let shared: browser_js_runtime::SharedTree = {
-        use std::panic::AssertUnwindSafe;
+    let t_fetch = std::time::Instant::now();
+    let html = fetch_with_jar(url).await?;
+    let timing_fetch_ms = t_fetch.elapsed().as_millis() as u64;
+
+    // M70.13: 原始 HTML > 5000 字节说明是 SSR/SSG 站，已有内容。跳过 JS 执行，
+    // 避免 QuickJS 编译超大框架包（如 nuxt.com 的 Vue bundle 需 24s）。
+    let base = Some(url.to_string());
+    let raw_len = html.trim().len();
+    let should_skip_js = raw_len > 5000;
+
+    let t_js_start = std::time::Instant::now();
+    let (shared, scripts_executed): (browser_js_runtime::SharedTree, usize) = if should_skip_js {
         use std::cell::RefCell;
         use std::rc::Rc;
-        let base_for_panic = base.clone();
-        #[cfg(feature = "quickjs")]
-        let (shared, executed) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            browser_js_runtime::run_scripts_with_base_engine(tree, base_for_panic, &engine_kind)
-        }))
-        .unwrap_or_else(|payload| {
-            let msg = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                .unwrap_or_else(|| "unknown panic".to_string());
-            eprintln!("[serve] JS engine panicked: {msg}");
-            let static_tree = parse_html(&html);
-            (Rc::new(RefCell::new(static_tree)), 0)
-        });
-        #[cfg(not(feature = "quickjs"))]
-        let (shared, executed) = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = &engine_kind;
-            browser_js_runtime::run_scripts_with_base(tree, base_for_panic)
-        }))
-        .unwrap_or_else(|payload| {
-            let msg = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                .unwrap_or_else(|| "unknown panic".to_string());
-            eprintln!("[serve] JS engine panicked: {msg}");
-            let static_tree = parse_html(&html);
-            (Rc::new(RefCell::new(static_tree)), 0)
-        });
+        let tree = parse_html(&html);
+        eprintln!("[serve] raw HTML ({raw_len}B) > 5KB, skipping JS (SSR/SSG)");
+        (Rc::new(RefCell::new(tree)), 0)
+    } else {
+        let tree = parse_html(&html);
+        let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
+        let (shared, executed) = {
+            use std::panic::AssertUnwindSafe;
+            use std::cell::RefCell;
+            use std::rc::Rc;
+            let base_for_panic = base.clone();
+            #[cfg(feature = "quickjs")]
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                browser_js_runtime::run_scripts_with_base_engine(
+                    tree, base_for_panic, &engine_kind,
+                )
+            }))
+            .unwrap_or_else(|payload| {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                eprintln!("[serve] JS engine panicked: {msg}");
+                let static_tree = parse_html(&html);
+                (Rc::new(RefCell::new(static_tree)), 0)
+            });
+            #[cfg(not(feature = "quickjs"))]
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = &engine_kind;
+                browser_js_runtime::run_scripts_with_base(tree, base_for_panic)
+            }))
+            .unwrap_or_else(|payload| {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                eprintln!("[serve] JS engine panicked: {msg}");
+                let static_tree = parse_html(&html);
+                (Rc::new(RefCell::new(static_tree)), 0)
+            });
+            result
+        };
         eprintln!("[serve] {executed} script(s) executed");
-        shared
+        (shared, executed)
     };
+    let timing_js_ms = t_js_start.elapsed().as_millis() as u64;
 
+    let t_extract = std::time::Instant::now();
     let out_format = browser_extractor::OutputFormat::parse(format)
         .map_err(|e| anyhow!("invalid format: {e}"))?;
     let opts = browser_extractor::FetchOptions {
@@ -1437,6 +1471,14 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
     };
     let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
         .map_err(|e| anyhow!("extract failed: {e}"))?;
+    let timing_extract_ms = t_extract.elapsed().as_millis() as u64;
 
-    Ok((result.content, result.title))
+    Ok(RenderResult {
+        content: result.content,
+        title: result.title,
+        timing_fetch_ms,
+        timing_js_ms,
+        timing_extract_ms,
+        scripts_executed,
+    })
 }
