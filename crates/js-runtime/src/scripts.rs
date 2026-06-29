@@ -691,6 +691,11 @@ fn script_cache() -> &'static Mutex<HashMap<String, String>> {
     SCRIPT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// M70.14: 公开 script_cache 给 serve 主进程用于预取。
+pub fn script_cache_public() -> &'static Mutex<HashMap<String, String>> {
+    script_cache()
+}
+
 /// 预先初始化全局 HttpClient。在事件循环开始前调用，避免首脚本延迟。
 pub(crate) fn ensure_script_client() {
     SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());

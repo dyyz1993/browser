@@ -1393,7 +1393,9 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
                 req.url, escaped_t, escaped_c, req.format, total_ms, total_ms,
             )
         } else {
-            // 纯 SPA：子进程隔离 QuickJS（传入已 fetch 的 HTML）
+            // 纯 SPA：预取外链 JS 脚本（写入全局缓存，子进程 fork 后继承）
+            prefetch_external_scripts(&html, &req.url).await;
+            // 子进程隔离 QuickJS（传入已 fetch 的 HTML，外链 JS 已在缓存中）
             match render_in_subprocess(&req, &html) {
                 Ok(json) => json,
                 Err(e) => {
@@ -1534,6 +1536,94 @@ fn render_in_subprocess(req: &ServeRequest, html: &str) -> Result<String> {
             Ok(format!(r#"{{"error":"child error: {}","content":""}}"#, e))
         }
     }
+}
+
+/// M70.14: 预取 HTML 中所有外链 <script src>，写入全局 SCRIPT_CACHE。
+/// 子进程 fork 后继承缓存，fetch_external_script 直接命中（省 CDN 网络等待）。
+/// 并行 fetch 所有脚本（用 tokio spawn），不串行等待。
+async fn prefetch_external_scripts(html: &str, base_url: &str) {
+    use std::sync::Arc;
+    // 解析所有 <script src="...">
+    let srcs: Vec<String> = extract_script_srcs(html, base_url);
+    if srcs.is_empty() {
+        return;
+    }
+    eprintln!("[serve] prefetching {} external scripts", srcs.len());
+    // 并行 fetch 所有脚本
+    let mut handles = Vec::new();
+    for url in srcs {
+        let url = Arc::new(url);
+        handles.push(tokio::spawn(async move {
+            // 检查缓存是否已有
+            if let Ok(cache) = browser_js_runtime::script_cache_public().lock() {
+                if cache.contains_key(&*url) {
+                    return; // 已缓存
+                }
+            }
+            drop(browser_js_runtime::script_cache_public()); // 释放锁
+            // fetch 脚本
+            let client = browser_net::HttpClient::new();
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                client.get(&url),
+            ).await {
+                Ok(Ok(bytes)) => {
+                    if let Ok(code) = String::from_utf8(bytes) {
+                        if let Ok(mut cache) = browser_js_runtime::script_cache_public().lock() {
+                            cache.insert((*url).clone(), code);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }));
+    }
+    // 等待所有预取完成（最多 8s）
+    for h in handles {
+        let _ = h.await;
+    }
+}
+
+/// 从 HTML 中提取所有 <script src="..."> 的绝对 URL。
+fn extract_script_srcs(html: &str, base_url: &str) -> Vec<String> {
+    let tree = parse_html(html);
+    let mut srcs = Vec::new();
+    let mut stack: Vec<browser_dom::NodeId> = vec![tree.root()];
+    while let Some(id) = stack.pop() {
+        let node = tree.get(id);
+        if let browser_dom::NodeData::Element { tag, attrs } = &node.data {
+            if tag.eq_ignore_ascii_case("script") {
+                for (k, v) in attrs {
+                    if k.eq_ignore_ascii_case("src") && !v.is_empty() {
+                        // 解析为绝对 URL
+                        let resolved = if v.starts_with("http://") || v.starts_with("https://") {
+                            v.clone()
+                        } else if v.starts_with("//") {
+                            format!("https:{}", v)
+                        } else if let Ok(base) = url::Url::parse(base_url) {
+                            base.join(v).map(|u| u.to_string()).unwrap_or(v.clone())
+                        } else {
+                            v.clone()
+                        };
+                        // 跳过 analytics
+                        let lower = resolved.to_lowercase();
+                        if lower.contains("cloudflareinsights") || lower.contains("google-analytics")
+                            || lower.contains("googletagmanager") || lower.contains("doubleclick")
+                            || lower.contains("facebook.net") || lower.contains("sentry.io")
+                            || lower.contains("hotjar") || lower.contains("fullstory")
+                            || lower.contains("usefathom") {
+                            continue;
+                        }
+                        srcs.push(resolved);
+                    }
+                }
+            }
+        }
+        for &child in &node.children {
+            stack.push(child);
+        }
+    }
+    srcs
 }
 
 fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
