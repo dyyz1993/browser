@@ -191,15 +191,17 @@
 
   <!-- Quick sample URLs -->
   <div class="samples">
-    <span class="sample" onclick="fillUrl('https://react.dev/')">React</span>
-    <span class="sample" onclick="fillUrl('https://nuxt.com/')">Nuxt</span>
-    <span class="sample" onclick="fillUrl('https://svelte.dev/')">Svelte</span>
-    <span class="sample" onclick="fillUrl('https://vuejs.org/')">Vue.js</span>
+    <span class="sample" onclick="fillUrl('https://react.dev/')">React SSR</span>
+    <span class="sample" onclick="fillUrl('https://nuxt.com/')">Nuxt SSR</span>
+    <span class="sample" onclick="fillUrl('https://jj.zhenzhunsp.cn/')">好运计算器 SPA</span>
+    <span class="sample" onclick="fillUrl('https://todomvc.com/examples/vue/dist/')">TodoMVC SPA</span>
+    <span class="sample" onclick="fillUrl('https://bark.netlify.app/')">Bark SPA</span>
   </div>
 
   <!-- Meta -->
   <div class="meta">
     <span id="meta-status">Ready</span>
+    <span id="meta-source"></span>
     <span id="meta-size"></span>
     <span id="meta-timing"></span>
   </div>
@@ -400,6 +402,16 @@ async function scrape() {
     if (timing.js_ms && timing.js_ms > 10) parts.push('js ' + timing.js_ms + 'ms');
     if (scripts !== undefined) parts.push(scripts + ' scripts');
     timeEl.textContent = parts.join(' · ') || (ms + 'ms');
+    // 显示来源（wasm-ssr / backend-spa / wasm-only / wasm-fallback）
+    var badge = document.getElementById('meta-source');
+    if (badge) {
+      var src = data._source || '';
+      if (src === 'wasm-ssr') badge.textContent = 'SSR ✓';
+      else if (src === 'backend-spa') badge.textContent = 'SPA ✓';
+      else if (src === 'wasm-only') badge.textContent = 'Static';
+      else if (src === 'wasm-fallback') badge.textContent = 'Static ⚠';
+      else badge.textContent = '';
+    }
     titleEl.textContent = data.title || '';
 
     // show preview toggle for markdown
