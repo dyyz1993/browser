@@ -19,11 +19,12 @@ pub fn to_highlights(
             return true;
         }
         if let NodeData::Element { tag, .. } = &tree.get(id).data {
-            let highlight_tags = ["mark", "strong", "em", "b", "i"];
+            let highlight_tags = ["mark", "strong", "em", "b"];
             if highlight_tags.iter().any(|t| tag.eq_ignore_ascii_case(t)) {
                 let text = collect_text(tree, id, excluded);
                 let text = text.trim();
-                if !text.is_empty() {
+                // 跳过过短内容（通常是图标字体或装饰性元素，非真正强调）
+                if text.len() >= 3 && text.chars().any(|c| c.is_ascii_alphanumeric()) {
                     results.push(format!("[{tag}] {text}"));
                 }
             }
