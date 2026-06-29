@@ -64,7 +64,16 @@ export default {
     // Scrape API
     if (url.pathname === "/api/scrape" && request.method === "POST") {
       try {
-        const { url: targetUrl, format } = await request.json();
+        const { url: rawUrl, format } = await request.json();
+
+        // M70.13: 自动补全协议——用户输入 "bark.day.app" → "https://bark.day.app"
+        let targetUrl = rawUrl.trim();
+        if (!targetUrl) {
+          return json({ error: 'URL is required', content: '' }, 400);
+        }
+        if (!/^https?:\/\//i.test(targetUrl)) {
+          targetUrl = 'https://' + targetUrl;
+        }
 
         // 简单内存缓存：同一个 URL+格式 60s 内复用
         const cacheKey = `${targetUrl}:${format}`;
