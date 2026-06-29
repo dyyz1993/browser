@@ -2,9 +2,24 @@
 /* eslint-disable */
 
 /**
+ * 提取品牌信息（title/description/og:tags/icon）。
+ */
+export function extract_branding(html: string, base_url?: string | null): string;
+
+/**
+ * 提取高亮文本（mark/strong/em/b）。
+ */
+export function extract_highlights(html: string, base_url?: string | null): string;
+
+/**
  * 解析 HTML + 提取完整 HTML（序列化 DOM）。
  */
 export function extract_html(html: string, base_url?: string | null): string;
+
+/**
+ * 提取图片（alt text → URL）。
+ */
+export function extract_images(html: string, base_url?: string | null): string;
 
 /**
  * 解析 HTML + 提取链接地图。
@@ -30,7 +45,10 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly extract_branding: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly extract_highlights: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly extract_html: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly extract_images: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly extract_links: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly extract_markdown: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly extract_text: (a: number, b: number, c: number, d: number, e: number) => void;

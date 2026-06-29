@@ -65,6 +65,51 @@ pub fn extract_html(html: &str, base_url: Option<String>) -> String {
     }
 }
 
+/// 提取图片（alt text → URL）。
+#[wasm_bindgen]
+pub fn extract_images(html: &str, base_url: Option<String>) -> String {
+    let tree = browser_html_parser::parse(html);
+    let opts = FetchOptions {
+        format: OutputFormat::Images,
+        only_main_content: true,
+        ..Default::default()
+    };
+    match run_extract(&tree, base_url.as_deref(), &opts) {
+        Ok(result) => result.content,
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+/// 提取高亮文本（mark/strong/em/b）。
+#[wasm_bindgen]
+pub fn extract_highlights(html: &str, base_url: Option<String>) -> String {
+    let tree = browser_html_parser::parse(html);
+    let opts = FetchOptions {
+        format: OutputFormat::Highlights,
+        only_main_content: true,
+        ..Default::default()
+    };
+    match run_extract(&tree, base_url.as_deref(), &opts) {
+        Ok(result) => result.content,
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+/// 提取品牌信息（title/description/og:tags/icon）。
+#[wasm_bindgen]
+pub fn extract_branding(html: &str, base_url: Option<String>) -> String {
+    let tree = browser_html_parser::parse(html);
+    let opts = FetchOptions {
+        format: OutputFormat::Branding,
+        only_main_content: true,
+        ..Default::default()
+    };
+    match run_extract(&tree, base_url.as_deref(), &opts) {
+        Ok(result) => result.content,
+        Err(e) => format!("error: {e}"),
+    }
+}
+
 /// 提取页面标题。
 #[wasm_bindgen]
 pub fn extract_title(html: &str) -> String {
