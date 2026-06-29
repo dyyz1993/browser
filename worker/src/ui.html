@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<title>Browser Fetch — SPA Scraper</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* ── Header ── */
+  .header { background: #161b22; padding: 10px 16px; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .logo { font-weight: 700; font-size: 16px; color: #58a6ff; white-space: nowrap; }
+  .tabs { display: flex; gap: 3px; }
+  .tab { padding: 5px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; color: #8b949e; white-space: nowrap; }
+  .tab.active { background: #1f6feb; color: #fff; }
+  .tab.disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ── Main ── */
+  .main { max-width: 920px; width: 100%; margin: 0 auto; padding: 16px; flex: 1; }
+
+  /* ── URL row ── */
+  .input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+  .input-row input[type="text"] {
+    flex: 1; min-width: 0;
+    padding: 10px 12px; background: #161b22; border: 1px solid #30363d;
+    border-radius: 6px; color: #c9d1d9; font-size: 14px; outline: none;
+  }
+  .input-row input[type="text"]:focus { border-color: #1f6feb; }
+  .input-row select {
+    padding: 10px 8px; background: #161b22; border: 1px solid #30363d;
+    border-radius: 6px; color: #c9d1d9; font-size: 13px; cursor: pointer; outline: none;
+  }
+  .input-row button {
+    padding: 10px 18px; background: #238636; color: #fff; border: none;
+    border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 600;
+    white-space: nowrap; min-height: 42px;
+  }
+  .input-row button:hover { background: #2ea043; }
+  .input-row button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+  .input-row button.loading { background: #1f6feb; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+  /* ── Format quick-pick chips ── */
+  .formats { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+  .fmt {
+    padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;
+    border: 1px solid #30363d; background: #161b22; color: #8b949e; user-select: none;
+    transition: all .15s;
+  }
+  .fmt:hover { border-color: #58a6ff; color: #58a6ff; }
+  .fmt.active { border-color: #1f6feb; background: #0d2240; color: #58a6ff; }
+
+  /* ── Quick-sample URLs ── */
+  .samples { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }
+  .sample {
+    padding: 3px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;
+    background: #0d2240; color: #58a6ff; border: 1px solid #1f6feb33;
+    transition: all .15s;
+  }
+  .sample:hover { background: #1f6feb22; }
+
+  /* ── Meta bar ── */
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; font-size: 12px; color: #8b949e; }
+  .meta span { background: #161b22; padding: 3px 8px; border-radius: 4px; border: 1px solid #30363d; }
+
+  /* ── Output ── */
+  .result { margin-top: 8px; }
+
+  /* Output toolbar */
+  .out-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .out-toolbar .spacer { flex: 1; }
+  .out-toolbar button {
+    padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+    border: 1px solid #30363d; background: #161b22; color: #8b949e;
+    transition: all .15s; display: flex; align-items: center; gap: 4px;
+  }
+  .out-toolbar button:hover { border-color: #58a6ff; color: #c9d1d9; }
+  .out-toolbar button.active { border-color: #1f6feb; background: #0d2240; color: #58a6ff; }
+  .out-toolbar .view-group { display: flex; gap: 0; }
+  .out-toolbar .view-group button { border-radius: 0; }
+  .out-toolbar .view-group button:first-child { border-radius: 4px 0 0 4px; }
+  .out-toolbar .view-group button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+  .out-toolbar .title-badge { font-size: 11px; color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+
+  pre {
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    padding: 14px; overflow: auto; max-height: 70vh; min-height: 80px;
+    white-space: pre-wrap; word-wrap: break-word; font-size: 13px; line-height: 1.5;
+  }
+  .placeholder { color: #484f58; }
+
+  /* Rendered markdown preview */
+  .rendered {
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    padding: 16px 20px; overflow: auto; max-height: 70vh; min-height: 80px;
+    font-size: 14px; line-height: 1.7; color: #c9d1d9;
+  }
+  .rendered h1 { font-size: 22px; margin: 16px 0 8px; border-bottom: 1px solid #30363d; padding-bottom: 6px; color: #e6edf3; }
+  .rendered h2 { font-size: 18px; margin: 14px 0 6px; border-bottom: 1px solid #21262d; padding-bottom: 4px; color: #e6edf3; }
+  .rendered h3 { font-size: 16px; margin: 12px 0 4px; color: #e6edf3; }
+  .rendered h4, .rendered h5, .rendered h6 { font-size: 14px; margin: 10px 0 4px; color: #e6edf3; }
+  .rendered p { margin: 6px 0; }
+  .rendered a { color: #58a6ff; text-decoration: none; }
+  .rendered a:hover { text-decoration: underline; }
+  .rendered strong { color: #e6edf3; font-weight: 600; }
+  .rendered em { font-style: italic; }
+  .rendered code {
+    background: #0d1117; padding: 2px 5px; border-radius: 3px; font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace; color: #f0883e;
+  }
+  .rendered pre {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 12px; overflow: auto; margin: 8px 0; font-size: 12px; line-height: 1.5;
+  }
+  .rendered pre code { background: none; padding: 0; color: #c9d1d9; }
+  .rendered ul, .rendered ol { margin: 6px 0; padding-left: 22px; }
+  .rendered li { margin: 3px 0; }
+  .rendered blockquote {
+    border-left: 3px solid #30363d; padding: 4px 12px; margin: 8px 0;
+    color: #8b949e; background: #0d1117; border-radius: 0 4px 4px 0;
+  }
+  .rendered hr { border: none; border-top: 1px solid #30363d; margin: 16px 0; }
+  .rendered img { max-width: 100%; border-radius: 4px; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #238636; color: #fff; padding: 8px 18px; border-radius: 6px;
+    font-size: 13px; font-weight: 500; opacity: 0; transition: opacity .25s;
+    pointer-events: none; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ═══════════ Mobile (≤640px) ═══════════ */
+  @media (max-width: 640px) {
+    .header { padding: 8px 12px; }
+    .main { padding: 12px; }
+    .input-row { flex-direction: column; gap: 8px; }
+    .input-row input[type="text"],
+    .input-row select,
+    .input-row button { width: 100%; }
+    .input-row button { min-height: 44px; font-size: 16px; }
+    .meta { gap: 6px; }
+    .meta span { font-size: 11px; }
+    pre, .rendered { max-height: 60vh; font-size: 12px; }
+    .formats { gap: 4px; }
+    .fmt { font-size: 10px; padding: 4px 7px; }
+    .out-toolbar { font-size: 10px; }
+    .out-toolbar .title-badge { max-width: 140px; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">🌐 Browser Fetch</div>
+  <div class="tabs">
+    <span class="tab active">Scrape</span>
+    <span class="tab disabled" title="Coming soon">Search</span>
+    <span class="tab disabled" title="Coming soon">Map</span>
+    <span class="tab disabled" title="Coming soon">Crawl</span>
+  </div>
+</div>
+<div class="main">
+
+  <!-- URL input -->
+  <div class="input-row">
+    <input type="text" id="url" placeholder="https://example.com" value="https://vuejs.org/" autofocus>
+    <select id="format">
+      <option value="markdown">Markdown</option>
+      <option value="html">HTML</option>
+      <option value="text">Text</option>
+      <option value="links">Links</option>
+      <option value="images">Images</option>
+      <option value="highlights">Highlights</option>
+      <option value="branding">Branding</option>
+    </select>
+    <button id="btn" onclick="scrape()">🚀 Scrape</button>
+  </div>
+
+  <!-- Format quick-pick chips -->
+  <div class="formats" id="fmt-chips">
+    <span class="fmt" data-fmt="markdown" onclick="pickFormat('markdown')">Markdown</span>
+    <span class="fmt" data-fmt="html" onclick="pickFormat('html')">HTML</span>
+    <span class="fmt" data-fmt="text" onclick="pickFormat('text')">Text</span>
+    <span class="fmt" data-fmt="links" onclick="pickFormat('links')">Links</span>
+    <span class="fmt" data-fmt="images" onclick="pickFormat('images')">Images</span>
+    <span class="fmt" data-fmt="highlights" onclick="pickFormat('highlights')">Highlights</span>
+    <span class="fmt" data-fmt="branding" onclick="pickFormat('branding')">Branding</span>
+  </div>
+
+  <!-- Quick sample URLs -->
+  <div class="samples">
+    <span class="sample" onclick="fillUrl('https://vuejs.org/')">Vue.js</span>
+    <span class="sample" onclick="fillUrl('https://react.dev/')">React</span>
+    <span class="sample" onclick="fillUrl('https://news.ycombinator.com/')">HN</span>
+    <span class="sample" onclick="fillUrl('https://example.com/')">example.com</span>
+  </div>
+
+  <!-- Meta -->
+  <div class="meta">
+    <span id="meta-status">Ready</span>
+    <span id="meta-size"></span>
+    <span id="meta-time"></span>
+  </div>
+
+  <!-- Output -->
+  <div class="result" id="result-area">
+    <div class="out-toolbar" id="out-toolbar" style="display:none">
+      <span class="title-badge" id="out-title"></span>
+      <span class="spacer"></span>
+      <div class="view-group" id="view-group" style="display:none">
+        <button id="view-raw" class="active" onclick="toggleView('raw')">Raw</button>
+        <button id="view-preview" onclick="toggleView('preview')">Preview</button>
+      </div>
+      <button onclick="copyContent()" title="Copy to clipboard">📋 Copy</button>
+    </div>
+    <pre id="output" class="placeholder">Enter a URL and click &quot;Scrape&quot;</pre>
+    <div id="output-rendered" class="rendered" style="display:none"></div>
+  </div>
+
+  <!-- Toast (hidden) -->
+  <div class="toast" id="toast"></div>
+</div>
+
+<div class="footer">
+  Powered by <a href="https://browser-fetch.dyyz1993.workers.dev" target="_blank">Browser Fetch</a> &nbsp;·&nbsp; core crate compiled to wasm
+</div>
+
+<script>
+// ── current result data ──
+var _lastContent = '';
+var _lastFormat = 'markdown';
+
+// ── Markdown → HTML renderer (no external deps) ──
+function renderMarkdown(md) {
+  if (!md) return '';
+  // escape HTML special chars
+  var h = md
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // protect fenced code blocks ```...```
+  var codeBlocks = [];
+  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    var idx = codeBlocks.length;
+    codeBlocks.push('<pre><code>' + code.trim() + '</code></pre>');
+    return '\x00CODE' + idx + '\x00';
+  });
+
+  // inline code
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // horizontal rules
+  h = h.replace(/^---+$/gm, '<hr>');
+
+  // h1-h6
+  h = h.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
+  h = h.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
+  h = h.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+  h = h.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+  h = h.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+
+  // blockquotes
+  h = h.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // unordered lists
+  h = h.replace(/^[\s]*[-*+]\s+(.+)$/gm, '<li>$1</li>');
+  h = h.replace(/(<li>.*<\/li>\n?)+/g, function(m) { return '<ul>' + m.replace(/\n/g, '') + '</ul>'; });
+
+  // ordered lists
+  h = h.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+  h = h.replace(/(<li>.*?<\/li>\s*)+/g, function(m) {
+    if (m.indexOf('<ul>') === -1) return '<ol>' + m.trim() + '</ol>';
+    return m;
+  });
+
+  // bold
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // italic
+  h = h.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  // links
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // images
+  h = h.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">');
+
+  // restore code blocks
+  h = h.replace(/\x00CODE(\d+)\x00/g, function(_, idx) { return codeBlocks[parseInt(idx)] || ''; });
+
+  // paragraphs
+  h = '<p>' + h.replace(/\n{2,}/g, '</p><p>') + '</p>';
+  h = h.replace(/<p><\/p>/g, '');
+  h = h.replace(/<p>(<(?:h[1-6]|ul|ol|blockquote|hr|pre))([\s\S]*?)<\/p>/g, '$1$2');
+
+  return h;
+}
+
+// ── View toggle ──
+function toggleView(mode) {
+  var raw = document.getElementById('output');
+  var rendered = document.getElementById('output-rendered');
+  var isPreview = mode === 'preview';
+  raw.style.display = isPreview ? 'none' : '';
+  rendered.style.display = isPreview ? '' : 'none';
+  document.getElementById('view-raw').className = isPreview ? '' : 'active';
+  document.getElementById('view-preview').className = isPreview ? 'active' : '';
+}
+
+// ── Copy ──
+function copyContent() {
+  if (!_lastContent) return;
+  var text = _lastContent;
+  // if preview is visible, get rendered text content
+  var rendered = document.getElementById('output-rendered');
+  var isPreview = rendered.style.display !== 'none' && rendered.style.display !== '';
+  if (isPreview && _lastFormat === 'markdown') {
+    text = rendered.textContent || _lastContent;
+  }
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast('Copied!');
+    }).catch(function() {
+      fallbackCopy(text);
+    });
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  showToast('Copied!');
+}
+
+function showToast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show';
+  setTimeout(function() { el.className = 'toast'; }, 1800);
+}
+
+// ── Scrape ──
+async function scrape() {
+  var url = document.getElementById('url').value.trim();
+  if (!url) { document.getElementById('url').focus(); return; }
+  var format = document.getElementById('format').value;
+  var btn = document.getElementById('btn');
+  var out = document.getElementById('output');
+  var rendered = document.getElementById('output-rendered');
+  var toolbar = document.getElementById('out-toolbar');
+  var titleEl = document.getElementById('out-title');
+  var status = document.getElementById('meta-status');
+  var sizeEl = document.getElementById('meta-size');
+  var timeEl = document.getElementById('meta-time');
+
+  btn.disabled = true;
+  btn.className = 'loading';
+  btn.textContent = 'Scraping...';
+  status.textContent = 'Fetching...';
+  out.textContent = '';
+  out.className = '';
+  out.style.display = '';
+  rendered.style.display = 'none';
+  rendered.innerHTML = '';
+  toolbar.style.display = 'none';
+  document.getElementById('view-group').style.display = 'none';
+  _lastContent = '';
+  _lastFormat = format;
+  var t0 = Date.now();
+
+  try {
+    var resp = await fetch('/api/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, format: format }),
+    });
+    var data = await resp.json();
+    var ms = Date.now() - t0;
+    var content = data.content || '(empty)';
+    _lastContent = data.content || '';
+
+    out.textContent = content;
+    status.textContent = data.error || 'Done';
+    sizeEl.textContent = data.content ? data.content.length + ' chars' : '';
+    timeEl.textContent = ms + 'ms';
+    titleEl.textContent = data.title || '';
+
+    // show preview toggle for markdown
+    if (format === 'markdown' && data.content) {
+      rendered.innerHTML = renderMarkdown(data.content);
+      document.getElementById('view-group').style.display = '';
+      toggleView('preview');
+    }
+    toolbar.style.display = '';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    out.textContent = 'Request failed. Check the URL and try again.';
+    out.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.className = '';
+    btn.textContent = 'Scrape';
+  }
+}
+
+function pickFormat(fmt) {
+  document.getElementById('format').value = fmt;
+  var chips = document.querySelectorAll('.fmt');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].className = chips[i].dataset.fmt === fmt ? 'fmt active' : 'fmt';
+  }
+}
+
+function fillUrl(url) {
+  document.getElementById('url').value = url;
+  document.getElementById('url').focus();
+}
+
+// DOM ready
+document.addEventListener('DOMContentLoaded', function() {
+  var curFmt = document.getElementById('format').value;
+  var chips = document.querySelectorAll('.fmt');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].className = chips[i].dataset.fmt === curFmt ? 'fmt active' : 'fmt';
+  }
+});
+
+// Sync format chips
+document.getElementById('format').addEventListener('change', function(e) {
+  var chips = document.querySelectorAll('.fmt');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].className = chips[i].dataset.fmt === e.target.value ? 'fmt active' : 'fmt';
+  }
+});
+
+// Enter to scrape
+document.getElementById('url').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') scrape();
+});
+</script>
+</body>
+</html>

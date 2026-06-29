@@ -9,7 +9,7 @@ routes = [
 ]
 
 # wasm 由 wasm-pack 生成到 ../crates/worker-wasm/pkg/
-# index.js 从那里 import
 rules = [
+  { type = "Text", globs = ["**/ui.html"] },
   { type = "CompiledWasm", globs = ["**/*.wasm"], fallthrough = false }
 ]
