@@ -1021,8 +1021,11 @@ fn run_scripts_quickjs(
         dyn_executed = drain_and_eval_dynamic_scripts(engine);
         executed += dyn_executed;
         let fired = engine.eval_i32("__drainDueTimers()").unwrap_or(0);
+        // M70.13: drain CSS transition 队列——触发到期的 transitionend/animationend。
+        // 在 timer drain 之后、microtask drain 之前执行（transition 回调可能 schedule 新 timer）。
+        let trans_fired = engine.eval_i32("__drainDueTransitions()").unwrap_or(0);
         // M66-fix: 每轮 timer 回调触发后，drain 其 schedule 的新 Promise microtask。
-        if fired > 0 || dyn_executed > 0 {
+        if fired > 0 || dyn_executed > 0 || trans_fired > 0 {
             engine.run_jobs();
             idle_start = None;
             idle_rounds = 0;
@@ -1049,9 +1052,10 @@ fn run_scripts_quickjs(
                     }
                 }
             }
-        if fired == 0 && dyn_executed == 0 {
+        if fired == 0 && dyn_executed == 0 && trans_fired == 0 {
             let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
-            if !has {
+            let has_trans = engine.eval_js_bool("__hasPendingTransitions()").unwrap_or(false);
+            if !has && !has_trans {
                 break;
             }
         }
@@ -1664,14 +1668,45 @@ Object.defineProperty(Element.prototype, 'nodeType', {
 });
 Object.defineProperty(Element.prototype, 'style', {
     get: function() {
+        // M70.13: 返回一个可写 style 对象，属性变更时触发 __onStyleChange（CSS transition 仿真）。
         var self = this;
-        return {
-            getPropertyValue: function(p) { return ''; },
-            setProperty: function(p, v) {},
-            removeProperty: function(p) {},
+        if (self.__styleProxy) return self.__styleProxy;
+        var styleObj = {
+            getPropertyValue: function(p) { return styleObj[p] || ''; },
+            setProperty: function(p, v) {
+                var old = styleObj[p];
+                styleObj[p] = v;
+                __onStyleChange(self, p, old, v);
+            },
+            removeProperty: function(p) {
+                var old = styleObj[p];
+                delete styleObj[p];
+                __onStyleChange(self, p, old, undefined);
+            },
             get cssText() { return __getAttr(self.__nodeId, 'style') || ''; },
             set cssText(v) { __setAttr(self.__nodeId, 'style', String(v)); }
         };
+        // M70.13: 拦截常用 CSS 属性的赋值 → 通知 transition manager。
+        // 用 defineProperty 给 styleObj 加 getter/setter，赋值时触发 __onStyleChange。
+        var watchProps = ['opacity', 'transform', 'display', 'visibility',
+                          'width', 'height', 'left', 'top', 'transition',
+                          'WebkitTransition', 'color', 'backgroundColor',
+                          'margin', 'padding', 'position'];
+        for (var i = 0; i < watchProps.length; i++) {
+            (function(prop) {
+                Object.defineProperty(styleObj, prop, {
+                    get: function() { return styleObj['__' + prop] || ''; },
+                    set: function(v) {
+                        var old = styleObj['__' + prop];
+                        styleObj['__' + prop] = v;
+                        __onStyleChange(self, prop, old, v);
+                    },
+                    enumerable: true, configurable: true
+                });
+            })(watchProps[i]);
+        }
+        self.__styleProxy = styleObj;
+        return styleObj;
     },
     enumerable: true, configurable: true
 });
@@ -1726,6 +1761,116 @@ Object.defineProperty(Element.prototype, 'outerHTML', {
     },
     enumerable: true, configurable: true
 });
+
+// ── M70.13: CSS Transition 仿真（DOM 层通用，非特定站 hack）──
+//
+// 原理：很多 SPA 框架（Docsify cover、Vue <transition>、React Framer Motion）
+// 依赖 CSS transition + transitionend 事件来推进渲染流程。
+// 我们没有 CSS 引擎，但当 JS 修改 element.style.opacity/transform/display 时，
+// 我们可以读取该元素的 transition 定义（inline style 或 __pendingTransitions），
+// 在预估 duration 后自动 dispatch transitionend 事件。
+//
+// 不 hack 任何特定站点——任何用 CSS transition 的框架都受益。
+
+// TransitionEvent 构造器（对齐 Web 标准）
+window.TransitionEvent = function(type, options) {
+    this.type = type;
+    this.propertyName = (options && options.propertyName) || '';
+    this.elapsedTime = (options && options.elapsedTime) || 0;
+    this.pseudoElement = (options && options.pseudoElement) || '';
+    this.bubbles = true;
+    this.cancelable = true;
+    this.target = null;
+    this.currentTarget = null;
+};
+window.TransitionEvent.prototype = Object.create(window.Event ? window.Event.prototype : {});
+
+// AnimationEvent（框架常用，如 Animate.css / Web Animations API fallback）
+window.AnimationEvent = function(type, options) {
+    this.type = type;
+    this.animationName = (options && options.animationName) || '';
+    this.elapsedTime = (options && options.elapsedTime) || 0;
+    this.bubbles = true;
+};
+window.AnimationEvent.prototype = Object.create(window.Event ? window.Event.prototype : {});
+
+// 全局 pending transition 队列（在事件循环里 drain）
+window.__pendingTransitions = [];
+
+// __onStyleChange：当 style 属性变更时检测 transition 并入队。
+// 在 Element.style 的 Proxy/setter 里调用。
+window.__onStyleChange = function(el, prop, oldVal, newVal) {
+    if (oldVal === newVal) return;
+    if (!el || typeof el.__nodeId !== 'number') return;
+    // 只关心 transition 相关属性
+    var transitionProps = ['opacity', 'transform', 'display', 'visibility',
+                           'width', 'height', 'left', 'top', 'right', 'bottom',
+                           'margin', 'padding', 'color', 'background-color'];
+    if (transitionProps.indexOf(prop) < 0) return;
+
+    // 读取该元素的 transition 定义
+    var style = el.style || {};
+    var tDef = style.transition || style.WebkitTransition || '';
+    if (!tDef || tDef === 'none' || tDef === 'all 0s') return;
+
+    // 解析 "opacity 0.3s ease 0s" 或 "all 0.4s"
+    // 格式: <property> <duration> <timing-function> <delay>
+    var parts = String(tDef).trim().split(/\s+/);
+    var tProp = parts[0] || 'all';
+    var tDuration = parseFloat(parts[1]) || 0;
+    var tDelay = parseFloat(parts[3]) || 0;
+
+    if (tDuration <= 0) return;
+    // 如果 transition 只针对特定属性，检查 prop 是否匹配
+    if (tProp !== 'all' && tProp !== prop) return;
+
+    var totalMs = (tDuration + tDelay) * 1000;
+    // 入队：{ element, propertyName, fireAt }
+    window.__pendingTransitions.push({
+        element: el,
+        propertyName: prop,
+        fireAt: Date.now() + totalMs
+    });
+};
+
+// __drainDueTransitions：触发到期的 transitionend 事件。
+// 由事件循环每轮调用（和 __drainDueTimers 类似）。
+window.__drainDueTransitions = function() {
+    var now = Date.now();
+    var remaining = [];
+    var fired = 0;
+    for (var i = 0; i < window.__pendingTransitions.length; i++) {
+        var t = window.__pendingTransitions[i];
+        if (now >= t.fireAt) {
+            // dispatch transitionend
+            try {
+                var ev = new TransitionEvent('transitionend', {
+                    propertyName: t.propertyName,
+                    elapsedTime: 0.3
+                });
+                ev.target = t.element;
+                t.element.dispatchEvent(ev);
+                // 也触发 animationend（部分框架用它）
+                var aev = new AnimationEvent('animationend', {
+                    animationName: t.propertyName,
+                    elapsedTime: 0.3
+                });
+                t.element.dispatchEvent(aev);
+            } catch(e) {
+                if (typeof __log === 'function') __log('[transition] dispatch error: ' + e.message);
+            }
+            fired++;
+        } else {
+            remaining.push(t);
+        }
+    }
+    window.__pendingTransitions = remaining;
+    return fired;
+};
+
+window.__hasPendingTransitions = function() {
+    return window.__pendingTransitions.length > 0;
+};
 undefined;
 "#;
 
