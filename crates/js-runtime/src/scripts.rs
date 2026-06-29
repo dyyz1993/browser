@@ -963,16 +963,6 @@ fn run_scripts_quickjs(
                 Ok(_) => executed += 1,
                 Err(e) => eprintln!("[js] [quickjs] {e}"),
             }
-            // M70.13: DOM 已有**正文内容**则提前停止执行后续脚本。
-            // 阈值 >500 排除 script 标签自身的文本（如 inline script 的 JS 代码 ~339B）。
-            if executed > 0 {
-                if engine
-                    .eval_js_bool("var b=__findTag('body');b>0&&__getText(b).length>500")
-                    .unwrap_or(false)
-                {
-                    break;
-                }
-            }
         }
     }
 
@@ -1307,6 +1297,39 @@ window.dispatchEvent = function(ev) {
 // M66: customElements + HTMLElement（no-op，不存引用避免 GC 泄漏）
 window.customElements = { define: function(){}, get: function(){return undefined;}, upgrade: function(){}, whenDefined: function(){return Promise.resolve();} };
 if (typeof window.HTMLElement === 'undefined') { window.HTMLElement = Element; }
+// M70.13: SVG/数学/表单元素构造器——框架（Vue/React）用 instanceof 检查元素类型。
+// 对齐 Web 标准：所有 SVG 元素继承自 SVGElement → GraphicsElement → Element。
+if (typeof window.SVGElement === 'undefined') { window.SVGElement = Element; }
+if (typeof window.SVGSVGElement === 'undefined') { window.SVGSVGElement = Element; }
+if (typeof window.HTMLCanvasElement === 'undefined') { window.HTMLCanvasElement = Element; }
+if (typeof window.HTMLInputElement === 'undefined') { window.HTMLInputElement = Element; }
+if (typeof window.HTMLButtonElement === 'undefined') { window.HTMLButtonElement = Element; }
+if (typeof window.HTMLDivElement === 'undefined') { window.HTMLDivElement = Element; }
+if (typeof window.HTMLSpanElement === 'undefined') { window.HTMLSpanElement = Element; }
+if (typeof window.HTMLAnchorElement === 'undefined') { window.HTMLAnchorElement = Element; }
+if (typeof window.HTMLImageElement === 'undefined') { window.HTMLImageElement = Element; }
+if (typeof window.HTMLSelectElement === 'undefined') { window.HTMLSelectElement = Element; }
+if (typeof window.HTMLTextAreaElement === 'undefined') { window.HTMLTextAreaElement = Element; }
+if (typeof window.HTMLFormElement === 'undefined') { window.HTMLFormElement = Element; }
+if (typeof window.HTMLTableElement === 'undefined') { window.HTMLTableElement = Element; }
+if (typeof window.HTMLUListElement === 'undefined') { window.HTMLUListElement = Element; }
+if (typeof window.HTMLLIElement === 'undefined') { window.HTMLLIElement = Element; }
+if (typeof window.HTMLOptionElement === 'undefined') { window.HTMLOptionElement = Element; }
+if (typeof window.HTMLLabelElement === 'undefined') { window.HTMLLabelElement = Element; }
+if (typeof window.HTMLHeadingElement === 'undefined') { window.HTMLHeadingElement = Element; }
+if (typeof window.HTMLParagraphElement === 'undefined') { window.HTMLParagraphElement = Element; }
+if (typeof window.HTMLBodyElement === 'undefined') { window.HTMLBodyElement = Element; }
+if (typeof window.HTMLHeadElement === 'undefined') { window.HTMLHeadElement = Element; }
+if (typeof window.HTMLScriptElement === 'undefined') { window.HTMLScriptElement = Element; }
+if (typeof window.HTMLLinkElement === 'undefined') { window.HTMLLinkElement = Element; }
+if (typeof window.HTMLStyleElement === 'undefined') { window.HTMLStyleElement = Element; }
+if (typeof window.HTMLMetaElement === 'undefined') { window.HTMLMetaElement = Element; }
+if (typeof window.HTMLDataListElement === 'undefined') { window.HTMLDataListElement = Element; }
+if (typeof window.HTMLOutputElement === 'undefined') { window.HTMLOutputElement = Element; }
+if (typeof window.HTMLProgressElement === 'undefined') { window.HTMLProgressElement = Element; }
+if (typeof window.HTMLMeterElement === 'undefined') { window.HTMLMeterElement = Element; }
+if (typeof window.HTMLFieldSetElement === 'undefined') { window.HTMLFieldSetElement = Element; }
+if (typeof window.HTMLLegendElement === 'undefined') { window.HTMLLegendElement = Element; }
 
 // M66: 框架全局变量桩（SSR hydration key / Next.js / Qwik 等）
 // SvelteKit hydration key（svelte.dev）
