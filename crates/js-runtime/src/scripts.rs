@@ -675,17 +675,29 @@ fn resolve_script_url(src: &str, base_url: Option<&str>) -> Option<String> {
     None
 }
 
+use std::sync::OnceLock;
+
+/// M70.13: 脚本 fetch 用全局复用 HttpClient（避免每脚本新建 TLS 连接）。
+static SCRIPT_FETCH_CLIENT: OnceLock<browser_net::HttpClient> = OnceLock::new();
+
+/// 预先初始化全局 HttpClient。在事件循环开始前调用，避免首脚本延迟。
+pub(crate) fn ensure_script_client() {
+    SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
+}
+
+/// M4: 收集所有 <script> 并逐一 eval（同步，按文档顺序）。
 fn fetch_external_script(url: &str) -> Result<String, String> {
     // M65: 外部脚本用独立 spawn + 新 HttpClient（而非 net worker）。
     // 原因：大 bundle（如 nuxt 1.3MB）经 brotli 压缩，持久化 client 的
     // 连接复用偶尔出解码问题。spawn + 新 client 更可靠。
+    // M70.13: 改用全局 OnceLock+HtppClient，TLS 连接池跨脚本复用。
     let url = url.to_string();
     let handle = std::thread::spawn(move || {
+        let client = SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        let client = browser_net::HttpClient::new();
         let bytes = rt
             .block_on(client.get(&url))
             .map_err(|e| format!("{e:?}"))?;
@@ -719,6 +731,11 @@ fn should_skip_script(url: &str) -> bool {
         || url.contains("cloudflareinsights.com")
         || url.contains("google-analytics")
         || url.contains("googletagmanager")
+        || url.contains("doubleclick.net")
+        || url.contains("facebook.net")
+        || url.contains("sentry.io")
+        || url.contains("hotjar")
+        || url.contains("fullstory")
         || url.ends_with(".ts")
         || url.contains(".ts?")
 }
@@ -775,6 +792,9 @@ fn run_scripts_quickjs(
     let nav = browser_navigation::new_navigation(&initial_url);
     crate::bridge::install_navigation(nav);
     crate::bridge::ensure_cookie_jar();
+
+    // M70.13: 预初始化脚本 fetch 的 HttpClient（避免首脚本冷启动延迟）。
+    ensure_script_client();
 
     let mut executed = 0;
 
@@ -910,6 +930,15 @@ fn run_scripts_quickjs(
                 Ok(_) => executed += 1,
                 Err(e) => eprintln!("[js] [quickjs] {e}"),
             }
+            // M70.13: DOM 已有内容则提前停止执行后续脚本（爬虫不需要等全部框架 JS 加载完）。
+            if executed > 0 {
+                if engine
+                    .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+            }
         }
     }
 
@@ -944,10 +973,15 @@ fn run_scripts_quickjs(
     let _ = engine.eval_i32("__drainDueTimers()");
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
-    // 直到 pending timer 清空或动态 script 队列清空，或超时（8s 上限，和 boa 一致）。
-    const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
-    const EL_TICK_MS: u64 = 20;
+    // 直到 pending timer 清空或动态 script 队列清空，或超时（3s 上限）。
+    // M70.13: 增加 idle 检测：连续 5 轮无活动且超过 500ms 宽限期 → 提前退出。
+    const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(3);
+    const EL_TICK_MS: u64 = 5;
+    const EL_IDLE_ROUNDS: u32 = 5;
+    const EL_IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
     let el_start = std::time::Instant::now();
+    let mut idle_rounds: u32 = 0;
+    let mut idle_start: Option<std::time::Duration> = None;
     loop {
         // M69: 每轮先 drain 动态 script（上一轮 timer 回调/onload 可能 appendChild
         // 新 chunk 入队）。eval 出的代码可能又入队，下一轮处理（支持多层链式加载）。
@@ -957,7 +991,31 @@ fn run_scripts_quickjs(
         // M66-fix: 每轮 timer 回调触发后，drain 其 schedule 的新 Promise microtask。
         if fired > 0 || dyn_executed > 0 {
             engine.run_jobs();
-        }
+            idle_start = None;
+            idle_rounds = 0;
+            } else {
+                // 无活动 → idle 检测 + DOM 稳定检测
+                if idle_start.is_none() {
+                    idle_start = Some(el_start.elapsed());
+                }
+                if idle_start.unwrap() >= EL_IDLE_GRACE {
+                    idle_rounds += 1;
+                    if idle_rounds >= EL_IDLE_ROUNDS {
+                        break;
+                    }
+                } else {
+                    idle_rounds = 0;
+                }
+                // M70.13: DOM 稳定检测——body 有子节点则内容已就绪，提前退出。
+                if idle_start.unwrap() >= EL_IDLE_GRACE {
+                    let dom_ready = engine
+                        .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
+                        .unwrap_or(false);
+                    if dom_ready {
+                        break;
+                    }
+                }
+            }
         if fired == 0 && dyn_executed == 0 {
             let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
             if !has {
@@ -1068,8 +1126,16 @@ window.__drainDueTimers = function() {
     return fired;
 };
 
-// M66: 检查是否还有 pending timer（event loop 判断是否继续循环）。
-window.__hasPendingTimers = function() { return __pendingTimers.length > 0; };
+// M66: 检查是否还有短期内会触发的 pending timer（event loop 判断是否继续循环）。
+// 忽略 fireAt > 2s 的长延迟定时器（analytics/telemetry 等，不阻塞退出）。
+window.__hasPendingTimers = function() {
+    var now = Date.now();
+    var limit = now + 2000;
+    for (var i = 0; i < __pendingTimers.length; i++) {
+        if (__pendingTimers[i].fireAt <= limit) return true;
+    }
+    return false;
+};
 window.__pendingTimerCount = function() { return __pendingTimers.length; };
 window.__pendingTimerNames = function() {
     var s = '';
@@ -1800,15 +1866,16 @@ undefined;
 /// `ctx.eval` 不返回值我们也不关心（回调的副作用在 DOM 上，不在返回值）。
 fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
-    const MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(8);
-    const MAX_SLEEP_MS: u64 = 200;
+    // M70.13: 硬超时从 8s 降到 3s——爬虫不需要等 analytics timer。
+    const MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(3);
+    const MAX_SLEEP_MS: u64 = 50;
     // M65: networkidle 检测——连续 IDLE_ROUNDS 轮无任何事件（timer/WS/Promise）
     // 就提前退出。大多数 SPA 在 DOMContentLoaded 后 1-2 秒就稳定了，
-    // 不必等满 8 秒 hard timeout。Puppeteer 的 networkidle0/2 也是类似策略。
-    const IDLE_ROUNDS: u32 = 2;
+    // 不必等满 3 秒 hard timeout。Puppeteer 的 networkidle0/2 也是类似策略。
+    const IDLE_ROUNDS: u32 = 3;
     // M65: idle 检测的宽限期——允许页面初始的 setTimeout 链跑完再开始计数。
-    // 太短会导致 docsify 的 XHR 还在飞就退出（拿不到 markdown 内容）。
-    const IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(800);
+    // M70.13: 从 800ms 降到 300ms。
+    const IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
     let started_at = std::time::Instant::now();
     let mut invoked = 0;
     // M23.5: WS 是长连接异步，握手/收消息在后台线程。即使 timer idle，
