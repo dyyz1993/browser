@@ -842,11 +842,18 @@ fn run_scripts_quickjs(
         let borrowed = shared.borrow();
         extract_script_entries(&borrowed)
     };
+    eprintln!("[serve] total {} scripts in DOM", scripts.len());
+    for (i, s) in scripts.iter().enumerate() {
+        eprintln!("[serve]   script[{}]: {:?}", i, s);
+    }
 
     for script in &scripts {
+        eprintln!("[serve] processing: {:?}", script);
         let code = match script {
             ScriptEntry::Inline(code) => {
+                eprintln!("[serve] script: inline ({} bytes)", code.len());
                 if has_ts_syntax(code) {
+                    eprintln!("[serve]   → skipped (TS syntax)");
                     continue;
                 }
                 Some(code.clone())
@@ -854,16 +861,22 @@ fn run_scripts_quickjs(
             ScriptEntry::External(src) => match resolve_script_url(src, base_url.as_deref()) {
                 Some(url) => {
                     if should_skip_script(&url) {
+                        eprintln!("[serve] script: {url} → skipped (analytics)");
                         continue;
                     }
+                    eprintln!("[serve] script: {url} → fetching");
+                    eprintln!("[serve] script: {url} → fetching");
                     match fetch_external_script(&url) {
                         Ok(code) => {
                             if has_ts_syntax(&code) {
+                                eprintln!("[serve]   → skipped (TS syntax in content)");
                                 continue;
                             }
+                            eprintln!("[serve]   → fetched {} bytes", code.len());
                             Some(code)
                         }
                         Err(e) => {
+                            eprintln!("[serve]   → fetch failed: {e}");
                             eprintln!("[js-runtime] QuickJS fetch failed: {url}: {e}");
                             continue;
                         }
@@ -930,10 +943,11 @@ fn run_scripts_quickjs(
                 Ok(_) => executed += 1,
                 Err(e) => eprintln!("[js] [quickjs] {e}"),
             }
-            // M70.13: DOM 已有内容则提前停止执行后续脚本（爬虫不需要等全部框架 JS 加载完）。
+            // M70.13: DOM 已有**正文内容**则提前停止执行后续脚本。
+            // 阈值 >500 排除 script 标签自身的文本（如 inline script 的 JS 代码 ~339B）。
             if executed > 0 {
                 if engine
-                    .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
+                    .eval_js_bool("var b=__findTag('body');b>0&&__getText(b).length>500")
                     .unwrap_or(false)
                 {
                     break;
@@ -1066,6 +1080,21 @@ var self = globalThis;
 	
 	// navigator
 window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
+window.scrollTo = window.scroll = function() {};
+window.scrollX = window.scrollY = window.pageXOffset = window.pageYOffset = 0;
+window.innerWidth = 1024;
+window.innerHeight = 768;
+// Promise.allSettled（ES2020，QuickJS 原生支持但 shim 可能覆盖）
+if (!Promise.allSettled) {
+    Promise.allSettled = function(promises) {
+        return Promise.all(promises.map(function(p) {
+            return Promise.resolve(p).then(
+                function(v) { return { status: 'fulfilled', value: v }; },
+                function(e) { return { status: 'rejected', reason: e }; }
+            );
+        }));
+    };
+}
 
 // M66: 异步 event loop —— setTimeout/setInterval 不立刻执行，
 // 存到 __pendingTimers 队列，脚本执行完后由 Rust event loop 逐条触发。
@@ -1188,6 +1217,7 @@ window.location = {
     pathname: '/' + ((__locHref.split('://')[1] || '').split('/').slice(1).join('/')),
     search: '', hash: '',
     origin: (__locHref.split('://')[0] + '://' + (__locHref.split('://')[1] || '').split('/')[0]),
+    reload: function() {},
     replace: function(u) { this.href = u; },
     assign: function(u) { this.href = u; },
     toString: function() { return this.href; }
@@ -1269,7 +1299,7 @@ window.performance = {
 // svelte 用 document.currentScript.parentElement
 window.parentElement = null;
 document.parentElement = null;
-document.currentScript = { parentElement: null };
+document.currentScript = { parentElement: null, hasAttribute: function() { return false; } };
 
 // localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
 var __localStorage = {};
