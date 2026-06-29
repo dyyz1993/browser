@@ -51,22 +51,17 @@ export default {
         // M70.12: 如果有 BROWSER_BACKEND 环境变量，转发到后端做完整 JS 渲染
         const backend = env.BROWSER_BACKEND;
         if (backend) {
-          try {
-            const backendUrl = `${backend.replace(/\/$/, '')}/`;
-            const resp = await fetch(backendUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ url: targetUrl, format, js_engine: 'quickjs' }),
-            });
-            if (resp.ok) {
-              const result = await resp.json();
-              return json(result);
-            }
-            // 后端不可用 → 静默回退到静态提取
-            console.error(`[backend] ${resp.status} - ${await resp.text()}`);
-          } catch (e) {
-            console.error(`[backend] error: ${e.message}`);
+          const backendUrl = `${backend.replace(/\/$/, '')}/`;
+          const resp = await fetch(backendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: targetUrl, format, js_engine: 'quickjs' }),
+          });
+          if (!resp.ok) {
+            return json({ error: `Backend unavailable (${resp.status})`, content: '' }, 502);
           }
+          const result = await resp.json();
+          return json(result);
         }
 
         // 1. Workers fetch 拿 HTML（无 JS 渲染的静态提取）
