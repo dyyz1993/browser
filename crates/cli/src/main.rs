@@ -1393,8 +1393,8 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
                 req.url, escaped_t, escaped_c, req.format, total_ms, total_ms,
             )
         } else {
-            // 纯 SPA：子进程隔离 QuickJS
-            match render_in_subprocess(&req) {
+            // 纯 SPA：子进程隔离 QuickJS（传入已 fetch 的 HTML）
+            match render_in_subprocess(&req, &html) {
                 Ok(json) => json,
                 Err(e) => {
                     eprintln!("[serve] render failed: {e}");
@@ -1418,45 +1418,80 @@ async fn serve_child() -> Result<()> {
         .read_to_string(&mut input)
         .map_err(|e| anyhow!("serve_child: read stdin failed: {e}"))?;
 
-    let req: ServeRequest = serde_json::from_str(&input)
-        .map_err(|e| anyhow!("serve_child: bad request: {e}"))?;
+    // 解析 stdin payload：url \x1f format \x1f html
+    let mut parts = input.splitn(3, '\x1f');
+    let url = parts.next().unwrap_or("").trim().to_string();
+    let format = parts.next().unwrap_or("markdown").trim().to_string();
+    let html = parts.next().unwrap_or("");
 
-    let result = render_and_extract(&req.url, &req.format, &req.js_engine).await;
-    let json = match result {
-        Ok(r) => {
-            let escaped_content = serde_json::to_string(&r.content).unwrap_or_else(|_| "\"\"".to_string());
-            let escaped_title = serde_json::to_string(&r.title).unwrap_or_else(|_| "null".to_string());
-            format!(
-                r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":{},"extract_ms":{},"total_ms":{}}},"_scripts":{}}}"#,
-                req.url, escaped_title, escaped_content, req.format,
-                r.timing_fetch_ms, r.timing_js_ms, r.timing_extract_ms,
-                r.timing_fetch_ms + r.timing_js_ms + r.timing_extract_ms,
-                r.scripts_executed,
-            )
-        }
-        Err(e) => {
-            format!(
-                r#"{{"url":"{}","error":"{}","content":""}}"#,
-                req.url, e.to_string().replace('"', "'")
-            )
-        }
+    // 子进程不重复 fetch——用主进程传入的 HTML 直接跑 JS + 提取
+    let base = if url.is_empty() { None } else { Some(url.clone()) };
+    let tree = parse_html(html);
+    let engine_kind = browser_js_runtime::EngineKind::parse_str("quickjs");
+    let t_js = std::time::Instant::now();
+    let (shared, executed) = {
+        use std::panic::AssertUnwindSafe;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let base_for_panic = base.clone();
+        #[cfg(feature = "quickjs")]
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            browser_js_runtime::run_scripts_with_base_engine(tree, base_for_panic, &engine_kind)
+        }))
+        .unwrap_or_else(|_| {
+            let static_tree = parse_html(html);
+            (Rc::new(RefCell::new(static_tree)), 0)
+        });
+        #[cfg(not(feature = "quickjs"))]
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            browser_js_runtime::run_scripts_with_base(parse_html(html), base_for_panic)
+        }))
+        .unwrap_or_else(|_| {
+            let static_tree = parse_html(html);
+            (Rc::new(RefCell::new(static_tree)), 0)
+        });
+        result
     };
+    let js_ms = t_js.elapsed().as_millis() as u64;
+
+    let out_format = browser_extractor::OutputFormat::parse(&format)
+        .unwrap_or(browser_extractor::OutputFormat::Markdown);
+    let opts = browser_extractor::FetchOptions {
+        format: out_format,
+        selector: None,
+        only_main_content: false,
+    };
+    let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
+        .unwrap_or(browser_extractor::ExtractResult { content: String::new(), title: None });
+
+    let escaped_c = serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
+    let escaped_t = serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
+    let json = format!(
+        r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":0,"js_ms":{},"extract_ms":0,"total_ms":{}}},"_scripts":{}}}"#,
+        url, escaped_t, escaped_c, format, js_ms, js_ms, executed,
+    );
 
     let mut stdout = std::io::stdout();
     stdout.write_all(json.as_bytes())
         .map_err(|e| anyhow!("serve_child: write stdout failed: {e}"))?;
-    stdout.flush()
-        .map_err(|e| anyhow!("serve_child: flush failed: {e}"))?;
+    stdout.flush()?;
     Ok(())
 }
 
 /// M70.14: 在子进程里跑渲染管线，返回 JSON 字符串。
 /// 任何错误都返回 Err（不会 panic 或 abort serve 主进程）。
-fn render_in_subprocess(req: &ServeRequest) -> Result<String> {
+/// M70.14: 子进程渲染。主进程已 fetch HTML，传给子进程避免重复请求。
+fn render_in_subprocess(req: &ServeRequest, html: &str) -> Result<String> {
     let exe = std::env::current_exe()
         .map_err(|e| anyhow!("cannot resolve current_exe: {e}"))?;
-    let req_json = serde_json::to_string(req)
-        .map_err(|e| anyhow!("serialize request failed: {e}"))?;
+
+    // 构造 stdin payload：URL \x1f format \x1f html（用分隔符避免 JSON 转义问题）
+    let mut payload = String::with_capacity(html.len() + req.url.len() + 64);
+    payload.push_str(&req.url);
+    payload.push('\x1f');
+    payload.push_str(&req.format);
+    payload.push('\x1f');
+    payload.push_str(html);
 
     let mut child = std::process::Command::new(&exe)
         .arg("serve-child")
@@ -1468,19 +1503,16 @@ fn render_in_subprocess(req: &ServeRequest) -> Result<String> {
         .spawn()
         .map_err(|e| anyhow!("spawn serve-child failed: {e}"))?;
 
-    // 写 stdin 后立即 drop（关闭管道通知子进程输入结束）
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
-        let _ = stdin.write_all(req_json.as_bytes());
+        let _ = stdin.write_all(payload.as_bytes());
     }
 
-    // 先 take stdout（避免管道满死锁）
     let mut child_stdout = child.stdout.take();
-
     let child_pid = child.id();
     match sandbox::ChildWaitTimeoutExt::wait_timeout_mem(
         &mut child,
-        std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(20),
         child_pid,
         400,
     ) {
@@ -1492,12 +1524,10 @@ fn render_in_subprocess(req: &ServeRequest) -> Result<String> {
             }
             Ok(buf)
         }
-        Ok(Some(_)) => {
-            Ok(String::from(r#"{"error":"child crashed","content":""}"#))
-        }
+        Ok(Some(_)) => Ok(String::from(r#"{"error":"child crashed","content":""}"#)),
         Ok(None) => {
             let _ = child.kill();
-            Ok(String::from(r#"{"error":"child timeout (30s)","content":""}"#))
+            Ok(String::from(r#"{"error":"child timeout (20s)","content":""}"#))
         }
         Err(e) => {
             let _ = child.kill();
