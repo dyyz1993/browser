@@ -2003,37 +2003,44 @@ XMLHttpRequest.prototype.open = function(method, url) {
 };
 XMLHttpRequest.prototype.setRequestHeader = function(key, val) {};
 XMLHttpRequest.prototype.send = function(body) {
-    var raw = (typeof __fetchSync === 'function') ? __fetchSync(this.__url) : null;
-    if (typeof __log === 'function') __log('[xhr] send ' + this.__url + ' → ' + (raw ? raw.length + ' bytes' : 'null'));
-    if (raw) {
-        this.responseText = raw;
-        this.response = raw;
-        this.status = 200;
-    } else {
-        this.status = 0;
-    }
-    this.readyState = 4;
     var self = this;
-    // 触发 onreadystatechange（docsify marked 用它）
-    if (typeof self.onreadystatechange === 'function') {
-        try { self.onreadystatechange.call(self); } catch(e) {
-            if (typeof __log === 'function') __log('[xhr] rsc threw: ' + e.message);
+    var url = this.__url;
+    var method = this.__method || 'GET';
+    // M70.13: 异步触发 load 回调——docsify 的 X 函数在 send() 之后才
+    // 注册 addEventListener('load', cb)。如果 send 里同步触发 load，
+    // 回调会错过。用 setTimeout(0) 让注册先完成。
+    setTimeout(function() {
+        var raw = (typeof __fetchSync === 'function') ? __fetchSync(url) : null;
+        if (typeof __log === 'function') __log('[xhr] send ' + url + ' → ' + (raw ? raw.length + ' bytes' : 'null'));
+        if (raw) {
+            self.responseText = raw;
+            self.response = raw;
+            self.status = 200;
+        } else {
+            self.status = 0;
         }
-    }
-    // 触发 onload
-    var ev = new Event('load');
-    ev.target = self;
-    ev.currentTarget = self;
-    if (self.__listeners && self.__listeners['load']) {
-        for (var i = 0; i < self.__listeners['load'].length; i++) {
-            try { self.__listeners['load'][i].call(self, ev); } catch(e) {
-                if (typeof __log === 'function') __log('[xhr] onload threw: ' + e.message);
+        self.readyState = 4;
+        // 触发 onreadystatechange
+        if (typeof self.onreadystatechange === 'function') {
+            try { self.onreadystatechange.call(self); } catch(e) {
+                if (typeof __log === 'function') __log('[xhr] rsc threw: ' + e.message);
             }
         }
-    }
-    if (typeof self.onload === 'function') {
-        try { self.onload.call(self, ev); } catch(e) {}
-    }
+        // 触发 load（addEventListener 注册的 + onload 属性）
+        var ev = new Event('load');
+        ev.target = self;
+        ev.currentTarget = self;
+        if (self.__listeners && self.__listeners['load']) {
+            for (var i = 0; i < self.__listeners['load'].length; i++) {
+                try { self.__listeners['load'][i].call(self, ev); } catch(e) {
+                    if (typeof __log === 'function') __log('[xhr] onload threw: ' + e.message);
+                }
+            }
+        }
+        if (typeof self.onload === 'function') {
+            try { self.onload.call(self, ev); } catch(e) {}
+        }
+    }, 0);
 };
 XMLHttpRequest.prototype.abort = function() {};
 XMLHttpRequest.prototype.getResponseHeader = function(name) { return null; };
