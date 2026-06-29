@@ -21,9 +21,8 @@ let wasmInitialized = false;
 
 // 简单内存缓存（URL+格式 → 结果，60s TTL）
 const responseCache = new Map();
-// M70.14: 缓存 TTL 分级——SSR 站内容稳定，缓存 5 分钟；SPA 站缓存 2 分钟
-const SSR_CACHE_TTL = 300_000;  // 5 min
-const SPA_CACHE_TTL = 120_000;  // 2 min
+// M70.14: 缓存 TTL——后端渲染结果缓存 5 分钟
+const CACHE_TTL = 300_000;  // 5 min
 
 async function ensureWasm() {
   if (!wasmInitialized) {
@@ -81,7 +80,7 @@ export default {
         const cacheKey = `${targetUrl}:${format}`;
         const cached = responseCache.get(cacheKey);
         if (cached) {
-          const ttl = cached.data._source === 'backend-spa' ? SPA_CACHE_TTL : SSR_CACHE_TTL;
+          const ttl = CACHE_TTL;
           if (Date.now() - cached.ts < ttl) {
             const result = { ...cached.data };
             result._timing = cached.backendTiming || { cached: true, age: Date.now() - cached.ts };
@@ -89,9 +88,31 @@ export default {
           }
         }
 
-        // M70.13: 智能路由——Worker 先用 wasm 静态提取（边缘执行，~100ms）
-        // 如果正文够长（>500 字符），说明是 SSR/SSG 站，直接返回（省掉 NAS 往返 1-3s）
-        // 如果正文太短（<100 字符），是纯 SPA 空壳，走 NAS 后端做 JS 渲染
+        const backend = env.BROWSER_BACKEND;
+
+        // M70.14: 始终走后端做完整 JS 渲染（SPA 核心价值）。
+        // CF 边缘 wasm 只做后端不可用时的兜底——curl 就能做到的没意义。
+        if (backend) {
+          const t3 = Date.now();
+          const backendUrl = `${backend.replace(/\/$/, '')}/`;
+          const backendResp = await fetch(backendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: targetUrl, format, js_engine: 'quickjs' }),
+          });
+          const t4 = Date.now();
+          if (backendResp.ok) {
+            const backendResult = await backendResp.json();
+            const backendTiming = backendResult._timing || {};
+            backendTiming.worker_ms = t4 - t3;
+            backendResult._timing = backendTiming;
+            backendResult._source = 'backend-spa';
+            responseCache.set(cacheKey, { ts: Date.now(), data: { ...backendResult }, backendTiming });
+            return json(backendResult);
+          }
+        }
+
+        // 后端不可用 → wasm 静态提取兜底（仅 fallback）
         const t0 = Date.now();
         const resp = await fetch(targetUrl, {
           headers: {
@@ -103,60 +124,16 @@ export default {
           return json({ error: `HTTP ${resp.status}`, content: "" }, 502);
         }
         const html = await resp.text();
-        const t1 = Date.now();
-
-        // wasm 提取
         await ensureWasm();
         const staticContent = extractStatic(html, targetUrl, format);
         const staticTitle = extract_title(html);
         const t2 = Date.now();
-
-        const backend = env.BROWSER_BACKEND;
-        const contentLen = staticContent.trim().length;
-
-        // 正文够长 → SSR/SSG，直接返回（不走 NAS）
-        // 阈值 300：example.com 这种最小站正文 165 字符，纯 SPA 壳通常 <50 字符，
-        // bark 这种带点静态内容的 CSR 站 ~167 字符——给点余量，>300 才信 SSR
-        if (contentLen >= 300 || !backend) {
-          const result = {
-            url: targetUrl,
-            title: staticTitle,
-            content: staticContent,
-            format,
-            _timing: { fetch_ms: t1 - t0, wasm_ms: t2 - t1, total_ms: t2 - t0 },
-            _source: contentLen >= 500 ? 'wasm-ssr' : 'wasm-only',
-          };
-          responseCache.set(cacheKey, { ts: Date.now(), data: { ...result }, backendTiming: result._timing });
-          return json(result);
-        }
-
-        // 正文太短 → SPA 空壳，走 NAS 后端 JS 渲染
-        const t3 = Date.now();
-        const backendUrl = `${backend.replace(/\/$/, '')}/`;
-        const backendResp = await fetch(backendUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: targetUrl, format, js_engine: 'quickjs' }),
-        });
-        const t4 = Date.now();
-        if (!backendResp.ok) {
-          // NAS 不可用 → 返回 Worker 的静态提取兜底
-          const result = {
-            url: targetUrl,
-            title: staticTitle,
-            content: staticContent,
-            format,
-            _timing: { fetch_ms: t1 - t0, wasm_ms: t2 - t1, backend_error: t4 - t3 },
-            _source: 'wasm-fallback',
-          };
-          return json(result);
-        }
-        const backendResult = await backendResp.json();
-        const backendTiming = backendResult._timing || {};
-        backendTiming.worker_ms = t4 - t3;
-        backendResult._timing = backendTiming;
-        backendResult._source = 'backend-spa';
-        responseCache.set(cacheKey, { ts: Date.now(), data: { ...backendResult }, backendTiming });
+        const result = {
+          url: targetUrl, title: staticTitle, content: staticContent, format,
+          _timing: { fetch_ms: t2 - t0, wasm_ms: 0, total_ms: t2 - t0 },
+          _source: 'wasm-fallback',
+        };
+        return json(result);
         return json(backendResult);
       } catch (e) {
         return json({ error: e.message, content: "" }, 500);
