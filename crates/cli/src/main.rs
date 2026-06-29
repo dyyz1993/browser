@@ -1336,17 +1336,55 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
 
         eprintln!("[serve] rendering url={} format={}", req.url, req.format);
 
-        // ── 执行渲染管线（M70.14: 子进程隔离 QuickJS C 层 abort）──
-        // 整个渲染过程包在 catch 里——任何错误/panic 都不影响 serve 循环。
-        let output_json = match render_in_subprocess(&req) {
-            Ok(json) => json,
+        // ── 执行渲染管线 ──
+        // M70.14: SSR 站（HTML > 5KB）直接在主进程提取（快，不崩）。
+        // 纯 SPA（HTML < 5KB）走子进程跑 QuickJS（隔离 C 层 abort）。
+        let t0 = std::time::Instant::now();
+        let html = match fetch_with_jar(&req.url).await {
+            Ok(h) => h,
             Err(e) => {
-                eprintln!("[serve] render failed: {e}");
-                format!(r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
-                    req.url, e.to_string().replace('"', "'"))
+                send_response(&mut stream, 502,
+                    &format!(r#"{{"url":"{}","error":"fetch failed: {}","content":""}}"#,
+                        req.url, e.to_string().replace('"', "'")));
+                continue;
             }
         };
-        eprintln!("[serve] child done: {} bytes", output_json.len());
+        let raw_len = html.trim().len();
+        let output_json = if raw_len > 5000 {
+            // SSR/SSG：直接提取，不走子进程
+            let tree = parse_html(&html);
+            let out_format = match browser_extractor::OutputFormat::parse(&req.format) {
+                Ok(f) => f,
+                Err(_) => browser_extractor::OutputFormat::Markdown,
+            };
+            let opts = browser_extractor::FetchOptions {
+                format: out_format,
+                selector: None,
+                only_main_content: false,
+            };
+            let result = match browser_extractor::run_extract(&tree, Some(&req.url), &opts) {
+                Ok(r) => r,
+                Err(_) => browser_extractor::ExtractResult { content: String::new(), title: None },
+            };
+            let escaped_c = serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
+            let escaped_t = serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
+            let total_ms = t0.elapsed().as_millis();
+            format!(
+                r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":0,"extract_ms":0,"total_ms":{}}},"_scripts":0}}"#,
+                req.url, escaped_t, escaped_c, req.format, total_ms, total_ms,
+            )
+        } else {
+            // 纯 SPA：子进程隔离 QuickJS
+            match render_in_subprocess(&req) {
+                Ok(json) => json,
+                Err(e) => {
+                    eprintln!("[serve] render failed: {e}");
+                    format!(r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
+                        req.url, e.to_string().replace('"', "'"))
+                }
+            }
+        };
+        eprintln!("[serve] done: {} bytes", output_json.len());
         send_response(&mut stream, 200, &output_json);
     }
     Ok(())
