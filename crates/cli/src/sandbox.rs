@@ -155,7 +155,7 @@ pub(crate) fn run_js_render_in_sandbox(
 }
 
 // ---- 轮询式 wait + RSS 监控（std 没自带，手写一个）----
-trait ChildWaitTimeoutExt {
+pub(crate) trait ChildWaitTimeoutExt {
     /// 轮询子进程：①已退出 → 返回 Some(status)；②超过 dur → None（超时）；
     /// ③RSS 超过 mem_cap_mb → 立即 kill 并返回 Some(被信号杀的 status)。
     fn wait_timeout_mem(

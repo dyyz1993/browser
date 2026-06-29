@@ -209,15 +209,18 @@ enum Cmd {
         mem_mb: u64,
     },
 
-    /// M70.12: 启动 HTTP API 服务。把 browser 渲染引擎暴露为 HTTP 接口，
-    /// 供 Cloudflare Worker 前端或其他客户端调用。支持 SPA 渲染。
+    /// M70.12: 启动 HTTP API 服务。
     Serve {
-        /// 监听端口。
         #[arg(long, default_value_t = 8080)]
         port: u16,
-        /// 监听地址。
         #[arg(long, default_value = "0.0.0.0")]
         bind: String,
+    },
+    /// M70.14: serve 子进程——RLIMIT_AS 隔离 QuickJS C 层 abort。
+    #[command(hide = true)]
+    ServeChild {
+        #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
+        mem_mb: u64,
     },
 }
 
@@ -730,9 +733,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             sandbox_child_render()
         }
         Cmd::Serve { port, bind } => {
-            // M70.12: 启动 HTTP API 服务。
             serve(&bind, port).await?;
             Ok(())
+        }
+        Cmd::ServeChild { mem_mb } => {
+            sandbox::apply_memory_limit(mem_mb).ok();
+            serve_child().await
         }
     }
 }
@@ -1237,6 +1243,22 @@ mod tests {
     }
 }
 
+/// M70.14: serve 请求结构（跨 serve/serve-child 共享）。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ServeRequest {
+    url: String,
+    #[serde(default = "default_format")]
+    format: String,
+    #[serde(default = "default_engine")]
+    js_engine: String,
+}
+fn default_format() -> String {
+    "markdown".to_string()
+}
+fn default_engine() -> String {
+    "quickjs".to_string()
+}
+
 // ── M70.12: HTTP API 服务 ─────────────────────────────────
 
 /// 启动 HTTP API 服务。每个请求跑一次 fetch + JS + extract 管线。
@@ -1304,21 +1326,6 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
         }
 
         // 解析 JSON
-        #[derive(serde::Deserialize)]
-        struct ServeRequest {
-            url: String,
-            #[serde(default = "default_format")]
-            format: String,
-            #[serde(default = "default_engine")]
-            js_engine: String,
-        }
-        fn default_format() -> String {
-            "markdown".to_string()
-        }
-        fn default_engine() -> String {
-            "quickjs".to_string()
-        }
-
         let req: ServeRequest = match serde_json::from_str(&body) {
             Ok(r) => r,
             Err(e) => {
@@ -1329,37 +1336,103 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
 
         eprintln!("[serve] rendering url={} format={}", req.url, req.format);
 
-        // ── 执行渲染管线 ──
-        let result = render_and_extract(&req.url, &req.format, &req.js_engine).await;
-        match result {
-            Ok(r) => {
-                let escaped_content = serde_json::to_string(&r.content)
-                    .unwrap_or_else(|_| "\"\"".to_string());
-                let escaped_title = serde_json::to_string(&r.title)
-                    .unwrap_or_else(|_| "null".to_string());
-                let json = format!(
-                    r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":{},"extract_ms":{},"total_ms":{}}},"_scripts":{}}}"#,
-                    req.url, escaped_title, escaped_content, req.format,
-                    r.timing_fetch_ms, r.timing_js_ms, r.timing_extract_ms,
-                    r.timing_fetch_ms + r.timing_js_ms + r.timing_extract_ms,
-                    r.scripts_executed,
-                );
-                send_response(&mut stream, 200, &json);
-                eprintln!("[serve] ✓ {} bytes ({} scripts, {}ms total)",
-                    r.content.len(), r.scripts_executed,
-                    r.timing_fetch_ms + r.timing_js_ms + r.timing_extract_ms);
-            }
-            Err(e) => {
-                let err_json = format!(
-                    r#"{{"url":"{}","error":"internal error: {}","content":""}}"#,
-                    req.url,
-                    e.to_string().replace('"', "'")
-                );
-                send_response(&mut stream, 500, &err_json);
-                eprintln!("[serve] ✗ {e}");
-            }
+        // ── 执行渲染管线（M70.14: 子进程隔离 QuickJS C 层 abort）──
+        let exe = std::env::current_exe()
+            .map_err(|e| anyhow!("cannot resolve current_exe: {e}"))?;
+        let req_json = serde_json::to_string(&req)
+            .map_err(|e| anyhow!("serialize request failed: {e}"))?;
+
+        let mut child = std::process::Command::new(&exe)
+            .arg("serve-child")
+            .arg("--mem-mb")
+            .arg("400")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .map_err(|e| anyhow!("spawn serve-child failed: {e}"))?;
+
+        // 写 stdin
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(req_json.as_bytes());
         }
+
+        // 先 take stdout（避免管道死锁）
+        let mut child_stdout = child.stdout.take();
+
+        // 带超时等待 + RSS 监控
+        let child_pid = child.id();
+        let output_json = match sandbox::ChildWaitTimeoutExt::wait_timeout_mem(
+            &mut child,
+            std::time::Duration::from_secs(30),
+            child_pid,
+            400,
+        ) {
+            Ok(Some(status)) if status.success() => {
+                let mut buf = String::new();
+                if let Some(ref mut s) = child_stdout {
+                    use std::io::Read;
+                    let _ = s.read_to_string(&mut buf);
+                }
+                buf
+            }
+            Ok(Some(_)) => {
+                String::from(r#"{"error":"child crashed","content":""}"#)
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                String::from(r#"{"error":"child timeout (30s)","content":""}"#)
+            }
+            Err(_) => {
+                let _ = child.kill();
+                String::from(r#"{"error":"child internal error","content":""}"#)
+            }
+        };
+        eprintln!("[serve] child done: {} bytes", output_json.len());
+        send_response(&mut stream, 200, &output_json);
     }
+    Ok(())
+}
+
+/// M70.14: serve 子进程入口——读 stdin JSON，跑渲染管线，写 stdout JSON。
+/// 在 RLIMIT_AS 受限的子进程里执行。QuickJS C 层 abort 只杀子进程。
+async fn serve_child() -> Result<()> {
+    use std::io::{Read, Write};
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| anyhow!("serve_child: read stdin failed: {e}"))?;
+
+    let req: ServeRequest = serde_json::from_str(&input)
+        .map_err(|e| anyhow!("serve_child: bad request: {e}"))?;
+
+    let result = render_and_extract(&req.url, &req.format, &req.js_engine).await;
+    let json = match result {
+        Ok(r) => {
+            let escaped_content = serde_json::to_string(&r.content).unwrap_or_else(|_| "\"\"".to_string());
+            let escaped_title = serde_json::to_string(&r.title).unwrap_or_else(|_| "null".to_string());
+            format!(
+                r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":{},"extract_ms":{},"total_ms":{}}},"_scripts":{}}}"#,
+                req.url, escaped_title, escaped_content, req.format,
+                r.timing_fetch_ms, r.timing_js_ms, r.timing_extract_ms,
+                r.timing_fetch_ms + r.timing_js_ms + r.timing_extract_ms,
+                r.scripts_executed,
+            )
+        }
+        Err(e) => {
+            format!(
+                r#"{{"url":"{}","error":"{}","content":""}}"#,
+                req.url, e.to_string().replace('"', "'")
+            )
+        }
+    };
+
+    let mut stdout = std::io::stdout();
+    stdout.write_all(json.as_bytes())
+        .map_err(|e| anyhow!("serve_child: write stdout failed: {e}"))?;
+    stdout.flush()
+        .map_err(|e| anyhow!("serve_child: flush failed: {e}"))?;
     Ok(())
 }
 
