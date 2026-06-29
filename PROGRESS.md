@@ -11,14 +11,16 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | M69（动态 script 执行：createElement + appendChild 触发 fetch+eval） |
-| 总 commits | ~239 |
-| 测试 | 814 pass + 18 e2e, 0 clippy warnings |
+| HEAD | **M70.13**（性能优化：DOM 稳定即退出，react.dev 17s→4s） |
+| 总 commits | ~259 |
+| 测试 | 861 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
-| CLI 子命令 | 8 + `--js-engine boa\|quickjs`（含 `cdp --js-engine`） |
+| CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **双引擎**：QuickJS（默认，CLI + CDP）+ boa（`--js-engine boa`） |
 | CDP navigate | ✅ M68 执行页面 `<script>`（spawn_blocking + catch_unwind） |
 | 动态 script | ✅ M69 appendChild(script) 触发 fetch+eval+onload（webpack/vite 兼容） |
+| HTTP API | ✅ M70.12 `browser serve` 命令 + Cloudflare Worker 前端 |
+| 性能 | ✅ M70.13 DOM 稳定检测 + 连接复用 + idle 优化（react.dev 17s→4s） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
 | 截图 G2 | ✅ |
 | 跨平台 G3 | ✅ |
@@ -27,27 +29,142 @@
 
 ## 最近变更（倒序）
 
-### M69 — 动态 Script 执行（createElement + appendChild 触发 fetch+eval）✅
+### M70.13 — 性能优化：DOM 稳定即退出 🚀（2026-06-29）✅
 
-**解决「webpack/vite 动态加载的 chunk 不执行」缺口。** 前端工程化站点把业务代码
-打包成独立 chunk，运行时用 `document.createElement("script") + head.appendChild(s)`
-动态加载（code-splitting / 路由懒加载）。修复前 appendChild 只做 DOM 树移动，
-不触发 fetch+eval，导致所有动态加载 chunk 的 SPA 渲染失败。
+**核心思路：爬虫 ≠ 浏览器。Chrome 等"全部加载完"（8s 虚拟时间预算 + 15 个 JS 脚本 +
+analytics 都跑完），我们等"内容出现了"就停。**
 
-#### 触发场景
-用户要求爬取 `open.bigmodel.cn/pricing`，渲染出 SPA fallback 空壳。**第一反应
-误判为「阿里风控反爬」**（因页面引用 alicdn 的 antidom.js），用户质疑后验证：
-antidom.js 是 404 死链接，无任何反爬逻辑。**真实根因是动态 script 不执行**。
+#### 效果
+| 站点 | 优化前 | 优化后 | Chrome 对标 |
+|------|--------|--------|------------|
+| example.com | 0.8s | **0.8s** | ~3s |
+| react.dev | **17s** | **4.2s** 🚀 | ~8s |
+| nuxt.com | 8s | **2.5s** 🚀 | ~6s |
 
-> 注：open.bigmodel.cn 主 chunk 是静态加载的，卡在更早的 zod/Vue 递归上限
-> （QuickJS 引擎限制，非 M69 scope）。M69 修复的是动态加载场景。
+所有站点内容完整性不变（react.dev 15803 chars 全量）。
 
-#### 实现（JS shim 拦截 + Rust 桥 eval）
-- **JS shim**（appendChild）：检测 script 标签 → 读 src（`__fetchSync`）或
-  textContent → `__enqueueDynamicScript(code)` 入队 + `setTimeout(onload, 0)`
-- **Rust 桥**（`bridge.rs` 顶层 `PENDING_DYNAMIC_SCRIPTS`）：enqueue/drain 函数
-- **event loop pump**：每轮先 drain 动态 script → `eval_safe` → 再 drain timer
-  （顺序关键：script 必须在 onload 前执行，否则 onload 读不到 script 设的状态）
+#### 7 项优化
+
+1. **DOM 稳定检测**（最大收益）：每个 script eval 后检查 `body.children.length > 0`，
+   有内容就停止执行后续脚本。react.dev 从 15→1 个脚本，省 ~10s。
+   文件：`scripts.rs:934`
+2. **长延迟定时器不阻塞退出**：`__hasPendingTimers()` 只关注 fireAt≤2s 的定时器，
+   忽略 analytics/telemetry 的 60s setTimeout。省 ~6s 空等。
+   文件：`scripts.rs:1072`
+3. **事件循环 idle 检测（QuickJS）**：500ms 宽限期 + 连续 idle 5 轮→提前退出，
+   硬超时从 8s→3s。之前 QuickJS 路径无 idle 检测，一直等满 8s。
+   文件：`scripts.rs:960-980`
+4. **HttpClient 全局复用**：`OnceLock<browser_net::HttpClient>` 跨脚本共享 TLS
+   连接池，避免 15 个脚本每个新建 TLS 连接。省 ~1s。
+   文件：`scripts.rs:678-697`
+5. **HttpClient 预初始化**：事件循环开始前预创建，避免首脚本冷启动。省 ~0.3s。
+   文件：`scripts.rs:684-686`
+6. **analytics 跳过列表增强**：+sentry/doubleclick/facebook/hotjar/fullstory。
+   文件：`scripts.rs:717-727`
+7. **sleep 粒度 20ms→5ms**：事件循环的每轮固定 sleep 从 20ms 降到 5ms。省 ~0.5s。
+   文件：`scripts.rs:949`
+
+#### 架构变化
+- 事件循环添加 `idle_start`/`idle_rounds` 状态跟踪
+- `__hasPendingTimers` 加入时间窗口过滤（≤2s）
+- `fetch_external_script` 使用全局 `OnceLock<HttpClient>`（不 Send 问题已验证）
+
+---
+
+### M70.12 — browser serve HTTP API + Cloudflare Worker 后端代理（2026-06-29）✅
+
+**把 Rust binary 变成 HTTP API 服务，部署到 NAS（shanbox），对外提供 SPA 渲染能力。**
+
+#### 架构
+```
+用户 → https://fetch.xbrowser.dev/ (Worker UI)
+         POST /api/scrape
+           ↓
+    BROWSER_BACKEND（Cloudflare Secret）
+    https://spa-render.shanbox.19930810.xyz:8443
+           ↓
+    NAS(shanbox) → nginx:8443 → browser serve:3021 → QuickJS 引擎
+```
+
+#### CLI 新增
+- `browser serve --port 3021 --bind 0.0.0.0`：HTTP API 服务
+  - 零新依赖：`std::net::TcpListener` + 手动 HTTP 解析
+  - 完整 SPA 渲染管线：fetch → QuickJS → extract → JSON
+  - 支持 7 种格式（markdown/html/text/links/images/highlights/branding）
+- 交叉编译：macOS ARM64 → Linux x86_64（cargo-zigbuild）
+
+#### Worker 新增
+- `BROWSER_BACKEND` 环境变量控制后端代理
+- 内存缓存（60s TTL，Map 实现）
+- 后端不可用直接报错（不走静默回退）
+- 默认 URL 改为 react.dev（SPA 标杆）
+- 示例站点：React / Nuxt / Svelte / Vue.js
+
+#### 部署
+- 二进制部署到 shanbox（192.168.0.29:2200，Debian 12 容器）
+- 持久化：crontab @reboot + 守护脚本
+- nginx 路由（port 8443 HTTPS）
+
+---
+
+### M70.11 — Markdown 渲染预览 + 一键复制（2026-06-29）✅
+
+#### UI 改进
+- **Markdown → HTML 渲染器**：纯 JS 实现，无外部依赖。支持 h1-h6/粗斜体/
+  链接/代码/列表/引用/图片
+- **Raw / Preview 切换**：markdown 格式自动进入预览模式
+- **一键复制**：Clipboard API + execCommand fallback
+- **输出工具栏**：页面标题 + 格式切换 + Copy 按钮
+- **Toast 通知**：复制成功/失败反馈
+
+#### 架构改进
+- `ui.html` 独立文件，通过 Wrangler Text 模块导入
+- 避免模板字面量冲突（此前 `\w`/`\s` 等正则导致 wrangler 编译失败）
+
+---
+
+### M70.10 — 7 种格式 + 移动端响应式 UI（2026-06-29）✅
+
+#### 新增格式
+| 格式 | wasm 函数 | 作用 |
+|------|-----------|------|
+| Images | `extract_images()` | `alt text → URL` 每行一条 |
+| Highlights | `extract_highlights()` | `[tag] 高亮文本` |
+| Branding | `extract_branding()` | title/description/og:tags/icon |
+
+共 7 种格式：`markdown` · `html` · `text` · `links` · `images` · `highlights` · `branding`
+
+#### UI 改进
+- 响应式 CSS（≤640px 纵向堆叠，触控目标 44px）
+- Format 快速切换 chips
+- 示例 URL 快捷填充
+- 加载动画 + 键盘 Enter 提交
+- 页脚
+
+#### 后端
+- wasm 新增 3 个 `#[wasm_bindgen]` 导出函数
+- Worker API switch 增加对应分支
+
+---
+
+### M70.9 — Cloudflare Worker 部署 🚀（2026-06-29）✅
+
+**把 8 个核心 crate 编译到 wasm，部署到 Cloudflare Workers，绑定自定义域名。**
+
+#### 编译 wasm
+- `crates/worker-wasm`：cdylib crate，依赖 dom + html-parser + extractor + wasm-bindgen
+- `wasm-pack build --target web` → 833KB wasm
+- 5 个导出函数：extract_markdown/text/links/html/title
+
+#### Cloudflare Worker
+- `GET /` → 前端 UI 页面（暗色主题，类似 Firecrawl）
+- `POST /api/scrape` → `{ url, format }` → `{ title, content }`
+- Workers fetch(url) → wasm 解析+提取 → 返回
+
+#### 域名
+- 绑定 `fetch.xbrowser.dev`（CF 自定义域名）
+- `wrangler.toml` + `wrangler deploy`
+- GitHub-style 暗色 UI
 
 #### 关键决策
 - eval 走 `eval_safe`（GC 安全）而非 JS 间接 eval
