@@ -77,15 +77,16 @@ export default {
           targetUrl = 'https://' + targetUrl;
         }
 
-        // 简单内存缓存：同一个 URL+格式 60s 内复用
+        // 简单内存缓存：同一个 URL+格式内复用
         const cacheKey = `${targetUrl}:${format}`;
-          const cached = responseCache.get(cacheKey);
-          if (cached) {
-            const ttl = cached.data._source === 'backend-spa' ? SPA_CACHE_TTL : SSR_CACHE_TTL;
-            if (Date.now() - cached.ts < ttl) {
-          const result = { ...cached.data };
-          result._timing = cached.backendTiming || { cached: true, age: Date.now() - cached.ts };
-          return json(result);
+        const cached = responseCache.get(cacheKey);
+        if (cached) {
+          const ttl = cached.data._source === 'backend-spa' ? SPA_CACHE_TTL : SSR_CACHE_TTL;
+          if (Date.now() - cached.ts < ttl) {
+            const result = { ...cached.data };
+            result._timing = cached.backendTiming || { cached: true, age: Date.now() - cached.ts };
+            return json(result);
+          }
         }
 
         // M70.13: 智能路由——Worker 先用 wasm 静态提取（边缘执行，~100ms）
