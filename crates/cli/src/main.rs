@@ -1467,7 +1467,9 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
     let opts = browser_extractor::FetchOptions {
         format: out_format,
         selector: None,
-        only_main_content: true,
+        // M70.13: 关闭 only_main_content——coverpage/hero 等区域会被误过滤。
+        // 纯 SPA（如 bark.day.app 的 Docsify 封面）依赖这些区域展示内容。
+        only_main_content: false,
     };
     let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
         .map_err(|e| anyhow!("extract failed: {e}"))?;

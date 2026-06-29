@@ -967,8 +967,27 @@ fn run_scripts_quickjs(
                 if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
                     window.dispatchEvent(ev1);
                     window.dispatchEvent(ev2);
-                }
-            }
+            // M70.13: 触发 scroll + hashchange → 通知 docsify 等框架内容就绪。
+            window.dispatchEvent(new Event('scroll'));
+            window.dispatchEvent(new Event('hashchange'));
+        }
+    }
+    // M70.13: 模拟用户访问首页 → 触发 docsify 路由（封面→内容页）。
+    // 用 Promise.then 确保在 microtask 队列中执行，让框架的 setTimeout(0)
+    // 初始化先完成。
+    Promise.resolve().then(function() {
+        window.scrollTo(0, 10000);
+        window.dispatchEvent(new Event('scroll'));
+        if (location && (!location.hash || location.hash === '#/' || location.hash === '')) {
+            var prev = location.hash;
+            location.hash = '#/#';
+            setTimeout(function() {
+                location.hash = prev || '#/';
+                window.dispatchEvent(new Event('hashchange'));
+                window.dispatchEvent(new Event('popstate'));
+            }, 10);
+        }
+    });
         } catch(e) { if (typeof __log === 'function') __log('[dcl] ' + e.message); }"#,
     );
 
@@ -1104,11 +1123,15 @@ var __pendingTimers = [];
 window.setTimeout = function(cb, delay) {
     if (typeof cb !== 'function') return 0;
     __timerSeq++;
-    __pendingTimers.push({ id: __timerSeq, cb: cb, type: 'timeout',
-                           fireAt: Date.now() + (delay || 0), count: 0 }); // count 用于 interval 循环保护
-    return __timerSeq;
+    var id = __timerSeq;
+    // M70.13: 在 window 上存强引用，防止 QuickJS GC 回收跨 eval 边界的回调。
+    window['__cb_' + id] = cb;
+    __pendingTimers.push({ id: id, cb: cb, type: 'timeout',
+                           fireAt: Date.now() + (delay || 0), count: 0 });
+    return id;
 };
 window.clearTimeout = function(id) {
+    delete window['__cb_' + id];
     for (var i = 0; i < __pendingTimers.length; i++) {
         if (__pendingTimers[i].id === id) { __pendingTimers.splice(i, 1); break; }
     }
@@ -1116,9 +1139,11 @@ window.clearTimeout = function(id) {
 window.setInterval = function(cb, delay) {
     if (typeof cb !== 'function') return 0;
     __timerSeq++;
-    __pendingTimers.push({ id: __timerSeq, cb: cb, type: 'interval',
+    var id = __timerSeq;
+    window['__cb_' + id] = cb;
+    __pendingTimers.push({ id: id, cb: cb, type: 'interval',
                            fireAt: Date.now() + (delay || 0), count: 0, interval: delay || 0 });
-    return __timerSeq;
+    return id;
 };
 window.clearInterval = function(id) { window.clearTimeout(id); };
 window.requestAnimationFrame = function(cb) { return window.setTimeout(cb, 0); };
@@ -1142,7 +1167,7 @@ window.__drainDueTimers = function() {
         }
         try {
             if (typeof t.cb !== 'function') {
-                if (typeof __log === 'function') __log('[timer] cb is ' + typeof t.cb);
+                if (typeof __log === 'function') __log('[timer] cb is ' + typeof t.cb + ' for id=' + t.id);
             } else {
                 t.cb();
             }
@@ -1150,6 +1175,8 @@ window.__drainDueTimers = function() {
             var st = (e && e.stack) ? String(e.stack).split('\\n').slice(0,4).join(' | ') : '';
             if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)) + (st ? (' | ' + st) : ''));
         }
+        // M70.13: 清理 window 上的强引用（防止内存泄漏）。
+        delete window['__cb_' + t.id];
         fired++;
     }
     return fired;
@@ -1299,7 +1326,7 @@ window.performance = {
 // svelte 用 document.currentScript.parentElement
 window.parentElement = null;
 document.parentElement = null;
-document.currentScript = { parentElement: null, hasAttribute: function() { return false; } };
+document.currentScript = { parentElement: null, hasAttribute: function() { return false; }, getAttribute: function() { return null; } };
 
 // localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
 var __localStorage = {};
