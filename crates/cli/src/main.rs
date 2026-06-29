@@ -804,6 +804,25 @@ fn json_escape(s: &str) -> String {
 }
 
 async fn fetch_with_jar(url: &str) -> Result<String> {
+    // M70.14: 网络重试——最多 3 次，间隔 500ms。
+    // 底层通用方案，任何站点网络抖动都受益。
+    let mut last_err = None;
+    for attempt in 0..3u32 {
+        match fetch_with_jar_once(url).await {
+            Ok(html) => return Ok(html),
+            Err(e) => {
+                eprintln!("[net] attempt {attempt} failed: {e}");
+                last_err = Some(e);
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("fetch failed after 3 attempts")))
+}
+
+async fn fetch_with_jar_once(url: &str) -> Result<String> {
     let jar = current_cookie_jar();
     let cookie_header = jar
         .as_ref()
