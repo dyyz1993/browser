@@ -1469,9 +1469,36 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
         selector: None,
         only_main_content: true,
     };
-    let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
+    let mut result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
         .map_err(|e| anyhow!("extract failed: {e}"))?;
-    let timing_extract_ms = t_extract.elapsed().as_millis() as u64;
+    let mut timing_extract_ms = t_extract.elapsed().as_millis() as u64;
+
+    // M70.13: Chromium 兜底——QuickJS 拿不到内容时（<50 chars）自动重试 Chrome headless。
+    // 纯 SPA（如 bark.day.app）的 JS 渲染超出 QuickJS 能力时，用 Chromium 保底。
+    let content_len = result.content.trim().len();
+    if content_len < 50 && raw_len < 5000 {
+        eprintln!("[serve] QuickJS content too short ({}B), falling back to Chromium", content_len);
+        let t_chrome = std::time::Instant::now();
+        if let Ok(chrome_html) = render_with_chromium(url) {
+            let chrome_tree = parse_html(&chrome_html);
+            use std::cell::RefCell;
+            use std::rc::Rc;
+            let chrome_shared: browser_js_runtime::SharedTree =
+                Rc::new(RefCell::new(chrome_tree));
+            let chrome_result = browser_extractor::run_extract(
+                &chrome_shared.borrow(), Some(url), &opts,
+            );
+            drop(chrome_shared);
+            if let Ok(chrome_result) = chrome_result {
+                let chrome_len = chrome_result.content.trim().len();
+                if chrome_len > content_len {
+                    eprintln!("[serve] Chromium fallback: {}B > QuickJS {}B", chrome_len, content_len);
+                    result = chrome_result;
+                }
+            }
+        }
+        timing_extract_ms = t_chrome.elapsed().as_millis() as u64;
+    }
 
     Ok(RenderResult {
         content: result.content,
@@ -1481,4 +1508,31 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
         timing_extract_ms,
         scripts_executed,
     })
+}
+
+/// M70.13: Chromium headless 渲染器——当 QuickJS 拿不到内容时自动兜底。
+/// 调用系统安装的 chromium，用 `--dump-dom` 输出渲染后的完整 HTML。
+/// 返回的 HTML 经 `browser_extractor` 提取最终内容，与主管线一致。
+fn render_with_chromium(url: &str) -> Result<String> {
+    let output = std::process::Command::new("chromium")
+        .args([
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--virtual-time-budget=10000",
+            "--dump-dom",
+            url,
+        ])
+        .output()
+        .map_err(|e| anyhow!("chromium launch failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("chromium exit code {}: {}", output.status.code().unwrap_or(-1), stderr.trim());
+    }
+
+    let html = String::from_utf8(output.stdout)
+        .map_err(|_| anyhow!("chromium output is not valid UTF-8"))?;
+    Ok(html)
 }
