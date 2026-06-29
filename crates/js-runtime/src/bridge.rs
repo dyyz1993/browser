@@ -708,8 +708,8 @@ fn fetch_sync_with_method(
         });
     });
     let (status, bytes, headers) = reply_rx
-        .recv()
-        .map_err(|_| "net worker channel closed".to_string())??;
+        .recv_timeout(std::time::Duration::from_secs(8))
+        .map_err(|_| "fetch timeout (8s)".to_string())??;
     // 收集 Set-Cookie 返回给主线程写 jar。
     let set_cookies: Vec<String> = headers
         .iter()

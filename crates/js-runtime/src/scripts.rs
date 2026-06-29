@@ -708,6 +708,7 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
 
     // M65: 外部脚本用独立 spawn + 新 HttpClient（而非 net worker）。
     // M70.13: 改用全局 OnceLock+HttpClient，TLS 连接池跨脚本复用。
+    // M70.13: 给 fetch 加 8s 硬超时——CDN 偶尔慢不能让整个进程卡死。
     let url_owned = url.to_string();
     let handle = std::thread::spawn(move || {
         let client = SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
@@ -715,10 +716,18 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        let bytes = rt
-            .block_on(client.get(&url_owned))
-            .map_err(|e| format!("{e:?}"))?;
-        String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
+        // 用 tokio::time::timeout 给 fetch 加 8s 上限
+        let result = rt.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                client.get(&url_owned),
+            ).await
+        });
+        match result {
+            Ok(Ok(bytes)) => String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}")),
+            Ok(Err(e)) => Err(format!("{e:?}")),
+            Err(_) => Err(format!("fetch timeout (8s): {url_owned}")),
+        }
     });
     let code = handle
         .join()
