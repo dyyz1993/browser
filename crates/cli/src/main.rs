@@ -1475,30 +1475,9 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
         .map_err(|e| anyhow!("extract failed: {e}"))?;
     let timing_extract_ms = t_extract.elapsed().as_millis() as u64;
 
-    // M70.13: Docsify 兜底——内容为空且原始 HTML 含 $docsify 时，直接取 README.md。
-    // Docsify 的 coverpage 在 headless 环境下不自动转内容页，但 XHR 已拿到内容。
-    let content_len = result.content.trim().len();
-    let mut final_content = result.content;
-    let mut final_title = result.title;
-    if content_len < 100 && html.contains("$docsify") {
-        eprintln!("[serve] Docsify cover detected, trying README.md fallback");
-        let readme_url = format!("{}/README.md", url.trim_end_matches('/'));
-        if let Ok(readme_html) = fetch_with_jar(&readme_url).await {
-            let readme_tree = parse_html(&readme_html);
-            if let Ok(readme_result) = browser_extractor::run_extract(&readme_tree, None, &opts) {
-                let readme_text = readme_result.content.trim();
-                if readme_text.len() > content_len {
-                    eprintln!("[serve] README.md fallback: {} chars", readme_text.len());
-                    final_content = readme_result.content;
-                    final_title = readme_result.title.or(final_title);
-                }
-            }
-        }
-    }
-
     Ok(RenderResult {
-        content: final_content,
-        title: final_title,
+        content: result.content,
+        title: result.title,
         timing_fetch_ms,
         timing_js_ms,
         timing_extract_ms,
