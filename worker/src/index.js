@@ -19,6 +19,10 @@ import HTML_PAGE from "./ui.html";
 
 let wasmInitialized = false;
 
+// 简单内存缓存（URL+格式 → 结果，60s TTL）
+const responseCache = new Map();
+const CACHE_TTL = 60_000;
+
 async function ensureWasm() {
   if (!wasmInitialized) {
     // Workers 环境用模块导入的 wasm，不走 URL fetch
@@ -51,16 +55,32 @@ export default {
         // M70.12: 如果有 BROWSER_BACKEND 环境变量，转发到后端做完整 JS 渲染
         const backend = env.BROWSER_BACKEND;
         if (backend) {
+          // 简单内存缓存：同一个 URL+格式 60s 内复用
+          const cacheKey = `${targetUrl}:${format}`;
+          const cached = responseCache.get(cacheKey);
+          if (cached && Date.now() - cached.ts < CACHE_TTL) {
+            const result = { ...cached.data };
+            result._timing = { cached: true, age: Date.now() - cached.ts };
+            return json(result);
+          }
+
+          const t0 = Date.now();
           const backendUrl = `${backend.replace(/\/$/, '')}/`;
           const resp = await fetch(backendUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: targetUrl, format, js_engine: 'quickjs' }),
           });
+          const t1 = Date.now();
           if (!resp.ok) {
             return json({ error: `Backend unavailable (${resp.status})`, content: '' }, 502);
           }
           const result = await resp.json();
+          result._timing = { backend: t1 - t0 };
+
+          // 写入缓存
+          responseCache.set(cacheKey, { ts: Date.now(), data: { ...result } });
+
           return json(result);
         }
 
