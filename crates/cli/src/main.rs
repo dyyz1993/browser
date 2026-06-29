@@ -1337,56 +1337,13 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
         eprintln!("[serve] rendering url={} format={}", req.url, req.format);
 
         // ── 执行渲染管线（M70.14: 子进程隔离 QuickJS C 层 abort）──
-        let exe = std::env::current_exe()
-            .map_err(|e| anyhow!("cannot resolve current_exe: {e}"))?;
-        let req_json = serde_json::to_string(&req)
-            .map_err(|e| anyhow!("serialize request failed: {e}"))?;
-
-        let mut child = std::process::Command::new(&exe)
-            .arg("serve-child")
-            .arg("--mem-mb")
-            .arg("400")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
-            .map_err(|e| anyhow!("spawn serve-child failed: {e}"))?;
-
-        // 写 stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(req_json.as_bytes());
-        }
-
-        // 先 take stdout（避免管道死锁）
-        let mut child_stdout = child.stdout.take();
-
-        // 带超时等待 + RSS 监控
-        let child_pid = child.id();
-        let output_json = match sandbox::ChildWaitTimeoutExt::wait_timeout_mem(
-            &mut child,
-            std::time::Duration::from_secs(30),
-            child_pid,
-            400,
-        ) {
-            Ok(Some(status)) if status.success() => {
-                let mut buf = String::new();
-                if let Some(ref mut s) = child_stdout {
-                    use std::io::Read;
-                    let _ = s.read_to_string(&mut buf);
-                }
-                buf
-            }
-            Ok(Some(_)) => {
-                String::from(r#"{"error":"child crashed","content":""}"#)
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                String::from(r#"{"error":"child timeout (30s)","content":""}"#)
-            }
-            Err(_) => {
-                let _ = child.kill();
-                String::from(r#"{"error":"child internal error","content":""}"#)
+        // 整个渲染过程包在 catch 里——任何错误/panic 都不影响 serve 循环。
+        let output_json = match render_in_subprocess(&req) {
+            Ok(json) => json,
+            Err(e) => {
+                eprintln!("[serve] render failed: {e}");
+                format!(r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
+                    req.url, e.to_string().replace('"', "'"))
             }
         };
         eprintln!("[serve] child done: {} bytes", output_json.len());
@@ -1434,6 +1391,62 @@ async fn serve_child() -> Result<()> {
     stdout.flush()
         .map_err(|e| anyhow!("serve_child: flush failed: {e}"))?;
     Ok(())
+}
+
+/// M70.14: 在子进程里跑渲染管线，返回 JSON 字符串。
+/// 任何错误都返回 Err（不会 panic 或 abort serve 主进程）。
+fn render_in_subprocess(req: &ServeRequest) -> Result<String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| anyhow!("cannot resolve current_exe: {e}"))?;
+    let req_json = serde_json::to_string(req)
+        .map_err(|e| anyhow!("serialize request failed: {e}"))?;
+
+    let mut child = std::process::Command::new(&exe)
+        .arg("serve-child")
+        .arg("--mem-mb")
+        .arg("400")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| anyhow!("spawn serve-child failed: {e}"))?;
+
+    // 写 stdin 后立即 drop（关闭管道通知子进程输入结束）
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(req_json.as_bytes());
+    }
+
+    // 先 take stdout（避免管道满死锁）
+    let mut child_stdout = child.stdout.take();
+
+    let child_pid = child.id();
+    match sandbox::ChildWaitTimeoutExt::wait_timeout_mem(
+        &mut child,
+        std::time::Duration::from_secs(30),
+        child_pid,
+        400,
+    ) {
+        Ok(Some(status)) if status.success() => {
+            let mut buf = String::new();
+            if let Some(ref mut s) = child_stdout {
+                use std::io::Read;
+                let _ = s.read_to_string(&mut buf);
+            }
+            Ok(buf)
+        }
+        Ok(Some(_)) => {
+            Ok(String::from(r#"{"error":"child crashed","content":""}"#))
+        }
+        Ok(None) => {
+            let _ = child.kill();
+            Ok(String::from(r#"{"error":"child timeout (30s)","content":""}"#))
+        }
+        Err(e) => {
+            let _ = child.kill();
+            Ok(format!(r#"{{"error":"child error: {}","content":""}}"#, e))
+        }
+    }
 }
 
 fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
