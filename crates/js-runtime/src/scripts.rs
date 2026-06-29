@@ -967,28 +967,9 @@ fn run_scripts_quickjs(
                 if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
                     window.dispatchEvent(ev1);
                     window.dispatchEvent(ev2);
-            // M70.13: 触发 scroll + hashchange → 通知 docsify 等框架内容就绪。
-            window.dispatchEvent(new Event('scroll'));
-            window.dispatchEvent(new Event('hashchange'));
-        }
-    }
-    // M70.13: 模拟用户访问首页 → 触发 docsify 路由（封面→内容页）。
-    // 用 Promise.then 确保在 microtask 队列中执行，让框架的 setTimeout(0)
-    // 初始化先完成。
-    Promise.resolve().then(function() {
-        window.scrollTo(0, 10000);
-        window.dispatchEvent(new Event('scroll'));
-        if (location && (!location.hash || location.hash === '#/' || location.hash === '')) {
-            var prev = location.hash;
-            location.hash = '#/#';
-            setTimeout(function() {
-                location.hash = prev || '#/';
-                window.dispatchEvent(new Event('hashchange'));
-                window.dispatchEvent(new Event('popstate'));
-            }, 10);
-        }
-    });
-        } catch(e) { if (typeof __log === 'function') __log('[dcl] ' + e.message); }"#,
+                }
+            }
+        } catch(e) {}"#,
     );
 
     // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
@@ -1509,6 +1490,12 @@ Element.prototype.append = function() {
     }
 };
 Element.prototype.remove = function() {};
+// M70.13: Element.style — 框架用 style.display 显隐元素（如 docsify cover）。
+Object.defineProperty(Element.prototype, 'style', {
+    get: function() { return this.__style || (this.__style = { display: '', visibility: '', opacity: '' }); },
+    set: function(v) { this.__style = v; },
+    enumerable: true, configurable: true
+});
 Element.prototype.addEventListener = function(type, cb) {
     if (cb === null || cb === undefined) return;
     if (!this.__listeners) this.__listeners = {};
