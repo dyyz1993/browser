@@ -676,22 +676,39 @@ fn resolve_script_url(src: &str, base_url: Option<&str>) -> Option<String> {
 }
 
 use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// M70.13: 脚本 fetch 用全局复用 HttpClient（避免每脚本新建 TLS 连接）。
 static SCRIPT_FETCH_CLIENT: OnceLock<browser_net::HttpClient> = OnceLock::new();
 
+/// M70.13: 外链脚本源码缓存（URL → JS 源码）。
+/// 同一个 URL（如 cdn.jsdelivr.net/npm/docsify@4）只需 fetch 一次，
+/// 后续请求直接从内存读。避免重复网络请求 + TLS 握手。
+static SCRIPT_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn script_cache() -> &'static Mutex<HashMap<String, String>> {
+    SCRIPT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// 预先初始化全局 HttpClient。在事件循环开始前调用，避免首脚本延迟。
 pub(crate) fn ensure_script_client() {
     SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
+    script_cache();
 }
 
 /// M4: 收集所有 <script> 并逐一 eval（同步，按文档顺序）。
 fn fetch_external_script(url: &str) -> Result<String, String> {
+    // M70.13: 先查内存缓存——同一个 CDN URL 只 fetch 一次。
+    if let Ok(cache) = script_cache().lock() {
+        if let Some(code) = cache.get(url) {
+            return Ok(code.clone());
+        }
+    }
+
     // M65: 外部脚本用独立 spawn + 新 HttpClient（而非 net worker）。
-    // 原因：大 bundle（如 nuxt 1.3MB）经 brotli 压缩，持久化 client 的
-    // 连接复用偶尔出解码问题。spawn + 新 client 更可靠。
-    // M70.13: 改用全局 OnceLock+HtppClient，TLS 连接池跨脚本复用。
-    let url = url.to_string();
+    // M70.13: 改用全局 OnceLock+HttpClient，TLS 连接池跨脚本复用。
+    let url_owned = url.to_string();
     let handle = std::thread::spawn(move || {
         let client = SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -699,13 +716,19 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
         let bytes = rt
-            .block_on(client.get(&url))
+            .block_on(client.get(&url_owned))
             .map_err(|e| format!("{e:?}"))?;
         String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
     });
-    handle
+    let code = handle
         .join()
-        .map_err(|_| "external script fetch thread panicked".to_string())?
+        .map_err(|_| "external script fetch thread panicked".to_string())??;
+
+    // M70.13: 写入缓存，后续相同 URL 直接命中。
+    if let Ok(mut cache) = script_cache().lock() {
+        cache.insert(url.to_string(), code.clone());
+    }
+    Ok(code)
 }
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
