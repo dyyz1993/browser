@@ -1,0 +1,16 @@
+[package]
+name = "worker-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+browser-dom = { path = "../dom" }
+browser-html-parser = { path = "../html-parser" }
+browser-extractor = { path = "../extractor" }
+wasm-bindgen = "0.2"

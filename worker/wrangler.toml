@@ -1,0 +1,15 @@
+name = "browser-fetch"
+main = "src/index.js"
+compatibility_date = "2024-09-25"
+compatibility_flags = ["nodejs_compat"]
+
+# 自定义域名（国内可访问）
+routes = [
+  { pattern = "fetch.xbrowser.dev/*", zone_id = "c8bcaac5f6645a9b0b3f1b2323203b52" }
+]
+
+# wasm 由 wasm-pack 生成到 ../crates/worker-wasm/pkg/
+# index.js 从那里 import
+rules = [
+  { type = "CompiledWasm", globs = ["**/*.wasm"], fallthrough = false }
+]
