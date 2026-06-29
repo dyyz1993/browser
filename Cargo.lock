@@ -497,6 +497,8 @@ dependencies = [
  "png 0.17.16",
  "predicates",
  "rlimit",
+ "serde",
+ "serde_json",
  "tokio",
  "url",
  "wiremock",

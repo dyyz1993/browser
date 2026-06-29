@@ -37,6 +37,9 @@ libc = "0.2"
 # setrlimit(RLIMIT_AS) 设硬上限，超限内核直接 SIGKILL 子进程，父进程
 # 把它当"JS 失败"优雅降级（走 CSR 兜底）。杜绝单页 SPA 把宿主吃满 40GB。
 rlimit = "0.11"
+# M70.12: HTTP API 服务的 JSON 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2"

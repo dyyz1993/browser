@@ -48,7 +48,24 @@ export default {
       try {
         const { url: targetUrl, format } = await request.json();
 
-        // 1. Workers fetch 拿 HTML
+        // M70.12: 如果有 BROWSER_BACKEND 环境变量，转发到后端做完整 JS 渲染
+        const backend = env.BROWSER_BACKEND;
+        if (backend) {
+          const backendUrl = `${backend.replace(/\/$/, '')}/`;
+          const resp = await fetch(backendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: targetUrl, format, js_engine: 'quickjs' }),
+          });
+          if (!resp.ok) {
+            const errText = await resp.text();
+            return json({ error: `backend error: ${resp.status}`, content: '' }, 502);
+          }
+          const result = await resp.json();
+          return json(result);
+        }
+
+        // 1. Workers fetch 拿 HTML（无 JS 渲染的静态提取）
         const resp = await fetch(targetUrl, {
           headers: {
             "User-Agent":

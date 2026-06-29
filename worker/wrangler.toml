@@ -13,3 +13,8 @@ rules = [
   { type = "Text", globs = ["**/ui.html"] },
   { type = "CompiledWasm", globs = ["**/*.wasm"], fallthrough = false }
 ]
+
+# M70.12: BROWSER_BACKEND — 可选的后端服务地址
+# 如果设置，Worker 会转发 scrape 请求到这个后端做完整 JS 渲染。
+# 后端运行 `browser serve` 命令（Rust 二进制 + QuickJS 引擎）。
+# 格式示例：http://your-server.com

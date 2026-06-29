@@ -12,6 +12,8 @@ mod img_ascii;
 mod sandbox;
 mod screenshot;
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -205,6 +207,17 @@ enum Cmd {
         /// 子进程 RLIMIT_AS 上限（MB）。
         #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
         mem_mb: u64,
+    },
+
+    /// M70.12: 启动 HTTP API 服务。把 browser 渲染引擎暴露为 HTTP 接口，
+    /// 供 Cloudflare Worker 前端或其他客户端调用。支持 SPA 渲染。
+    Serve {
+        /// 监听端口。
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// 监听地址。
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
     },
 }
 
@@ -716,6 +729,11 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             sandbox::apply_memory_limit(mem_mb).ok();
             sandbox_child_render()
         }
+        Cmd::Serve { port, bind } => {
+            // M70.12: 启动 HTTP API 服务。
+            serve(&bind, port).await?;
+            Ok(())
+        }
     }
 }
 
@@ -1217,4 +1235,205 @@ mod tests {
         let out = browser_render::render_ascii(&layout, 80);
         assert!(out.contains("dynamic from js"), "got:\n{out}");
     }
+}
+
+// ── M70.12: HTTP API 服务 ─────────────────────────────────
+
+/// 启动 HTTP API 服务。每个请求跑一次 fetch + JS + extract 管线。
+async fn serve(bind: &str, port: u16) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+
+    let addr = format!("{bind}:{port}");
+    let listener = TcpListener::bind(&addr)
+        .with_context(|| format!("failed to bind {addr}"))?;
+    // 非阻塞模式，方便循环
+    listener.set_nonblocking(false)?;
+    eprintln!("[serve] listening on http://{addr}");
+
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[serve] accept error: {e}");
+                continue;
+            }
+        };
+        let peer = stream.peer_addr().ok();
+        eprintln!("[serve] ← {peer:?}");
+
+        // 解析 HTTP 请求
+        let mut reader = BufReader::new(&stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() {
+            eprintln!("[serve] failed to read request line");
+            continue;
+        }
+        // 只处理 POST
+        if !request_line.starts_with("POST") {
+            send_response(&mut stream, 405, "Method Not Allowed");
+            continue;
+        }
+
+        // 读请求头 → 找 Content-Length
+        let mut content_length: usize = 0;
+        let mut body = String::new();
+        loop {
+            let mut header_line = String::new();
+            if reader.read_line(&mut header_line).is_err() {
+                break;
+            }
+            let trimmed = header_line.trim();
+            if trimmed.is_empty() {
+                // 空行 = header 结束
+                break;
+            }
+            if let Some(len_str) = trimmed
+                .strip_prefix("Content-Length:")
+                .or_else(|| trimmed.strip_prefix("content-length:"))
+            {
+                content_length = len_str.trim().parse().unwrap_or(0);
+            }
+        }
+
+        // 读请求体
+        if content_length > 0 {
+            let mut buf = vec![0u8; content_length];
+            if reader.read_exact(&mut buf).is_ok() {
+                body = String::from_utf8_lossy(&buf).to_string();
+            }
+        }
+
+        // 解析 JSON
+        #[derive(serde::Deserialize)]
+        struct ServeRequest {
+            url: String,
+            #[serde(default = "default_format")]
+            format: String,
+            #[serde(default = "default_engine")]
+            js_engine: String,
+        }
+        fn default_format() -> String {
+            "markdown".to_string()
+        }
+        fn default_engine() -> String {
+            "quickjs".to_string()
+        }
+
+        let req: ServeRequest = match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                send_response(&mut stream, 400, &format!(r#"{{"error":"bad request: {e}"}}"#));
+                continue;
+            }
+        };
+
+        eprintln!("[serve] rendering url={} format={}", req.url, req.format);
+
+        // ── 执行渲染管线 ──
+        let result = render_and_extract(&req.url, &req.format, &req.js_engine).await;
+        match result {
+            Ok((content, title)) => {
+                let escaped_content = serde_json::to_string(&content)
+                    .unwrap_or_else(|_| "\"\"".to_string());
+                let escaped_title = serde_json::to_string(&title)
+                    .unwrap_or_else(|_| "\"\"".to_string());
+                let json = format!(
+                    r#"{{"url":"{}","title":{},"content":{},"format":"{}"}}"#,
+                    req.url, escaped_title, escaped_content, req.format
+                );
+                send_response(&mut stream, 200, &json);
+                eprintln!("[serve] ✓ {} bytes", content.len());
+            }
+            Err(e) => {
+                let err_json = format!(
+                    r#"{{"url":"{}","error":"internal error: {}","content":""}}"#,
+                    req.url,
+                    e.to_string().replace('"', "'")
+                );
+                send_response(&mut stream, 500, &err_json);
+                eprintln!("[serve] ✗ {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        405 => "Method Not Allowed",
+        500 => "Internal Server Error",
+        _ => "Unknown",
+    };
+    let headers = format!(
+        "HTTP/1.1 {status} {status_text}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         \r\n{}",
+        body.len(),
+        body
+    );
+    let _ = stream.write_all(headers.as_bytes());
+    let _ = stream.flush();
+}
+
+/// 核心渲染管线：fetch → JS 执行 → 提取 → (content, title)
+async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<(String, Option<String>)> {
+    ensure_cookie_jar();
+    let html = fetch_with_jar(url).await?;
+    let base = Some(url.to_string());
+    let tree = parse_html(&html);
+
+    let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
+    let shared: browser_js_runtime::SharedTree = {
+        use std::panic::AssertUnwindSafe;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let base_for_panic = base.clone();
+        #[cfg(feature = "quickjs")]
+        let (shared, executed) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            browser_js_runtime::run_scripts_with_base_engine(tree, base_for_panic, &engine_kind)
+        }))
+        .unwrap_or_else(|payload| {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            eprintln!("[serve] JS engine panicked: {msg}");
+            let static_tree = parse_html(&html);
+            (Rc::new(RefCell::new(static_tree)), 0)
+        });
+        #[cfg(not(feature = "quickjs"))]
+        let (shared, executed) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = &engine_kind;
+            browser_js_runtime::run_scripts_with_base(tree, base_for_panic)
+        }))
+        .unwrap_or_else(|payload| {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            eprintln!("[serve] JS engine panicked: {msg}");
+            let static_tree = parse_html(&html);
+            (Rc::new(RefCell::new(static_tree)), 0)
+        });
+        eprintln!("[serve] {executed} script(s) executed");
+        shared
+    };
+
+    let out_format = browser_extractor::OutputFormat::parse(format)
+        .map_err(|e| anyhow!("invalid format: {e}"))?;
+    let opts = browser_extractor::FetchOptions {
+        format: out_format,
+        selector: None,
+        only_main_content: true,
+    };
+    let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
+        .map_err(|e| anyhow!("extract failed: {e}"))?;
+
+    Ok((result.content, result.title))
 }
