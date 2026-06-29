@@ -1368,8 +1368,11 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
                 continue;
             }
         };
-        let raw_len = html.trim().len();
-        let output_json = if raw_len > 5000 {
+        // M70.14: 检查 body 是否有关键正文（排除 meta/CSS/script 的干扰）。
+        // docsify.js.org 的 HTML 7354B（meta 标签+CSS 链接）但正文只有"Loading ..."。
+        // 用 DOM 解析提取 body 纯文本长度 > 200 才认为是 SSR。
+        let has_content = has_visible_body_content(&html);
+        let output_json = if has_content {
             // SSR/SSG：直接提取，不走子进程
             let tree = parse_html(&html);
             let out_format = match browser_extractor::OutputFormat::parse(&req.format) {
@@ -1626,6 +1629,53 @@ fn extract_script_srcs(html: &str, base_url: &str) -> Vec<String> {
     srcs
 }
 
+/// M70.14: 判断 HTML 是否有可见正文（DOM 解析，排除 script/style/meta/CSS）。
+fn has_visible_body_content(html: &str) -> bool {
+    let tree = parse_html(html);
+    // 遍历找 body 节点
+    let mut body_id = None;
+    let mut stack = vec![tree.root()];
+    while let Some(id) = stack.pop() {
+        if let browser_dom::NodeData::Element { tag, .. } = tree.data(id) {
+            if tag == "body" {
+                body_id = Some(id);
+                break;
+            }
+        }
+        for &child in tree.children_of(id) {
+            stack.push(child);
+        }
+    }
+    let body_id = match body_id {
+        Some(id) => id,
+        None => return true,
+    };
+    // 统计 body 下可见文本长度（排除 script/style/svg/noscript）
+    let mut text_len = 0usize;
+    let mut stack = vec![body_id];
+    while let Some(id) = stack.pop() {
+        match tree.data(id) {
+            browser_dom::NodeData::Text(s) => {
+                text_len += s.trim().len();
+            }
+            browser_dom::NodeData::Element { tag, .. } => {
+                if tag == "script" || tag == "style" || tag == "svg"
+                    || tag == "noscript" || tag == "template" {
+                    continue;
+                }
+                for &child in tree.children_of(id) {
+                    stack.push(child);
+                }
+            }
+            _ => {}
+        }
+        if text_len > 500 {
+            return true;
+        }
+    }
+    text_len > 200
+}
+
 fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
     let status_text = match status {
         200 => "OK",
@@ -1665,18 +1715,18 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
     let html = fetch_with_jar(url).await?;
     let timing_fetch_ms = t_fetch.elapsed().as_millis() as u64;
 
-    // M70.13: 原始 HTML > 5000 字节说明是 SSR/SSG 站，已有内容。跳过 JS 执行，
-    // 避免 QuickJS 编译超大框架包（如 nuxt.com 的 Vue bundle 需 24s）。
+    // M70.14: 检查 body 是否有关键正文（排除 meta/CSS/script）。
+    // docsify.js.org HTML 7354B 但正文只有"Loading ..."。
+    let has_content = has_visible_body_content(&html);
+    let should_skip_js = has_content;
     let base = Some(url.to_string());
-    let raw_len = html.trim().len();
-    let should_skip_js = raw_len > 5000;
 
     let t_js_start = std::time::Instant::now();
     let (shared, scripts_executed): (browser_js_runtime::SharedTree, usize) = if should_skip_js {
         use std::cell::RefCell;
         use std::rc::Rc;
         let tree = parse_html(&html);
-        eprintln!("[serve] raw HTML ({raw_len}B) > 5KB, skipping JS (SSR/SSG)");
+	        eprintln!("[serve] body has content, skipping JS (SSR)");
         (Rc::new(RefCell::new(tree)), 0)
     } else {
         let tree = parse_html(&html);
