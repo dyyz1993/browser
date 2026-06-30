@@ -1841,6 +1841,20 @@ Element.prototype.getAttribute = function(key) {
 Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); };
 Element.prototype.appendChild = function(child) {
     if (child && typeof child.__nodeId === 'number') {
+        // GAP-K: DocumentFragment 插入时展开子节点（Web 标准行为）。
+        // fragment 的子节点逐个移动到 this，fragment 本身变空（不插入）。
+        // __children 返回逗号分隔 NodeId 字符串，需 split 成数组。
+        // 先拷贝 children 数组再遍历——__appendChild 是 move 语义，边遍历边移会错位。
+        if (child.__isFragment) {
+            var fragChildrenStr = __children(child.__nodeId);
+            if (fragChildrenStr) {
+                var fragIds = fragChildrenStr.split(',').filter(function(s) { return s; });
+                for (var _ci = 0; _ci < fragIds.length; _ci++) {
+                    __appendChild(this.__nodeId, parseInt(fragIds[_ci], 10));
+                }
+            }
+            return child;
+        }
         __appendChild(this.__nodeId, child.__nodeId);
         // M69: 动态 script 执行。webpack/vite 等前端工程化站点把业务代码打包成
         // 独立 chunk，在运行时用 createElement("script") + head.appendChild(s)

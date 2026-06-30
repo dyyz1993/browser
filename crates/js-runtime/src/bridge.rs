@@ -3239,29 +3239,44 @@ mod gap_i_descendant_selector_tests {
     fn build_tree() -> Tree {
         let mut t = Tree::new();
         // root(0) > html(1) > body(2)
-        let html = t.insert(None, NodeData::Element {
-            tag: "html".into(),
-            attrs: vec![],
-        });
-        let body = t.insert(Some(html), NodeData::Element {
-            tag: "body".into(),
-            attrs: vec![],
-        });
+        let html = t.insert(
+            None,
+            NodeData::Element {
+                tag: "html".into(),
+                attrs: vec![],
+            },
+        );
+        let body = t.insert(
+            Some(html),
+            NodeData::Element {
+                tag: "body".into(),
+                attrs: vec![],
+            },
+        );
         // body > div#container
-        let container = t.insert(Some(body), NodeData::Element {
-            tag: "div".into(),
-            attrs: vec![("id".into(), "container".into())],
-        });
+        let container = t.insert(
+            Some(body),
+            NodeData::Element {
+                tag: "div".into(),
+                attrs: vec![("id".into(), "container".into())],
+            },
+        );
         // div#container > p.child
-        t.insert(Some(container), NodeData::Element {
-            tag: "p".into(),
-            attrs: vec![("class".into(), "child".into())],
-        });
+        t.insert(
+            Some(container),
+            NodeData::Element {
+                tag: "p".into(),
+                attrs: vec![("class".into(), "child".into())],
+            },
+        );
         // body > p.lonely （不在 #container 内，用于验证后代约束差异）
-        t.insert(Some(body), NodeData::Element {
-            tag: "p".into(),
-            attrs: vec![("class".into(), "lonely".into())],
-        });
+        t.insert(
+            Some(body),
+            NodeData::Element {
+                tag: "p".into(),
+                attrs: vec![("class".into(), "lonely".into())],
+            },
+        );
         t
     }
 
@@ -3296,7 +3311,10 @@ mod gap_i_descendant_selector_tests {
     fn descendant_selector_qs_starting_with_hash_finds_child() {
         let t = build_tree();
         let found = find_by_selector(&t, "#container .child");
-        assert!(found.is_some(), "querySelector(#container .child) 应找到节点");
+        assert!(
+            found.is_some(),
+            "querySelector(#container .child) 应找到节点"
+        );
     }
 
     /// 静态场景也覆盖：`div .child` 这种 tag 开头的后代选择器应正常工作。
