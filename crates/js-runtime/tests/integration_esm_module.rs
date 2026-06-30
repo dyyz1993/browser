@@ -3,6 +3,9 @@
 //! 这个测试用一个 3 文件的本地 ESM 模块图验证 boa 的 Module::parse +
 //! load_link_evaluate + SimpleModuleLoader 链路。成功 = 路线 B 可行。
 
+// M71.1: ESM Module 测试依赖 boa，无 boa feature 时跳过。
+#![cfg(feature = "boa")]
+
 use std::path::PathBuf;
 use std::rc::Rc;
 

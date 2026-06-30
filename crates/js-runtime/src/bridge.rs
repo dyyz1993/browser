@@ -23,6 +23,7 @@ use std::rc::Rc;
 use boa_engine::{object::JsObject, Context, JsArgs, JsResult, JsValue, NativeFunction};
 use browser_cookie::CookieHandle;
 use browser_dom::{Node, NodeData, NodeId, Tree};
+#[allow(unused_imports)]
 use browser_eventloop::{TimerId, TimerWheel};
 use browser_navigation::NavigationHandle;
 use browser_storage::StorageHandle;
@@ -1516,6 +1517,7 @@ fn find_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult
 }
 
 /// 在指定节点的后代中按 id 查找（get_el_by_id 的全树版的子树限定变体）。
+#[allow(dead_code)]
 fn find_by_id_in_subtree(tree: &Tree, root: NodeId, target: &str) -> Option<NodeId> {
     let mut found = None;
     tree.traverse(root, |id, node| {
@@ -1989,6 +1991,7 @@ fn dec_pending_requests() {
 // ===== M23.5: WebSocket 后端 =====
 
 /// Ensure a WsManager exists on the current thread. Idempotent.
+#[allow(dead_code)]
 fn ensure_ws_manager() {
     WS_MANAGER.with(|slot| {
         if slot.borrow().is_none() {
@@ -2105,6 +2108,7 @@ pub fn ws_connection_count() -> usize {
 /// 单个 XHR 实例的状态。open() 记录请求参数，send() 执行同步 fetch
 /// 并把响应存到 response_text，JS shim 用 setTimeout(0) 触发 onload。
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 struct XhrState {
     method: String,
     url: String,
@@ -2114,6 +2118,7 @@ struct XhrState {
 }
 
 /// Ensure the XHR instance map exists. Idempotent. (M17.1)
+#[allow(dead_code)]
 fn ensure_xhr() {
     XHR_INSTANCES.with(|slot| {
         if slot.borrow().is_none() {
@@ -2350,7 +2355,7 @@ fn location_parts_bridge(
     ctx.eval(boa_engine::Source::from_bytes(&code))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod tests {
     use super::*;
     use boa_engine::Source;
@@ -2442,7 +2447,7 @@ mod tests {
 // M7.3 当初的 defer 理由——boa 0.20 的 NativeFunction::call /
 // JsFunction::call 其实都是 pub）。event loop 接入在 M16.3 完成。
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod fetch_tests {
     use super::*;
     use boa_engine::Source;
@@ -2877,7 +2882,7 @@ pub mod qjs_bridge {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod m7_dom_api_tests {
     use super::*;
     use boa_engine::Source;
@@ -3122,7 +3127,7 @@ mod m7_dom_api_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod m69_dynamic_script_tests {
     use super::{drain_dynamic_scripts, enqueue_dynamic_script};
 

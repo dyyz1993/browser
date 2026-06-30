@@ -22,8 +22,11 @@ use crate::bridge::install;
 /// 既足够跑常见 SPA 的内联脚本（秒级几百次迭代的渲染逻辑），又能在 runaway
 /// 循环早期抛 `loop iteration limit reached`，配合子进程内存护栏（M-cls.1）
 /// 双保险。stack/recursion 也从 boa 默认(10240/512)收紧到 4096/256。
+#[cfg(feature = "boa")]
 const JS_LOOP_ITERATION_LIMIT: u64 = 40_000;
+#[cfg(feature = "boa")]
 const JS_STACK_SIZE_LIMIT: usize = 4096;
+#[cfg(feature = "boa")]
 const JS_RECURSION_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +241,7 @@ fn regex_static_export(code: &str) -> bool {
 /// M65: 从 Vite bundle 源码提取 __vite__mapDeps 的 chunk 列表，并行预取到缓存。
 /// Vite 用 __vite__mapDeps 注册所有动态 import() 的 chunk 路径，eval 时 JS fetch()
 /// 会串行请求它们。预取后 __fetchSync 命中缓存（0ms），避免 24 × 1s = 24s 串行。
+#[allow(dead_code)]
 fn prefetch_vite_chunks(code: &str, entry_url: &str) {
     // 找 __vite__mapDeps=(...m.f||(m.f=["./xxx.js","./yyy.js",...])
     let marker = ".f=[";
@@ -299,6 +303,7 @@ fn prefetch_vite_chunks(code: &str, entry_url: &str) {
 }
 
 /// M64: 包装脚本为 IIFE + try/catch（复用现有 wrap 逻辑）。
+#[cfg(feature = "boa")]
 fn wrap_script(code: &str, label: &str) -> String {
     let mut wrapped = String::new();
     wrapped.push_str("(function(){\ntry{\n");
@@ -2233,6 +2238,7 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
 
 /// M23.5: 转义 WS 消息载荷为安全的 JS 字符串字面量（单引号包裹）。
 /// 处理反斜杠/单引号/换行/回车/制表符，避免 eval 注入或语法错误。
+#[allow(dead_code)]
 fn escape_js_ws_data(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -2304,6 +2310,7 @@ pub fn run_scripts_with_base_engine(
     } else {
         None
     };
+    #[allow(unused_mut)]
     let mut engine = engine_kind.create(esm_origin);
     let engine_name = engine.name();
 
