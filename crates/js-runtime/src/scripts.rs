@@ -1712,8 +1712,8 @@ window.Event = function(type, opts) {
     this.timeStamp = Date.now();
 };
 window.Event.prototype.preventDefault = function() { this.defaultPrevented = true; };
-window.Event.prototype.stopPropagation = function() {};
-window.Event.prototype.stopImmediatePropagation = function() {};
+window.Event.prototype.stopPropagation = function() { this.__stopPropagation = true; };
+window.Event.prototype.stopImmediatePropagation = function() { this.__stopPropagation = true; };
 window.CustomEvent = function(type, opts) { Event.call(this, type, opts); this.detail = (opts && opts.detail) || null; };
 window.CustomEvent.prototype = Object.create(window.Event.prototype);
 
@@ -2227,12 +2227,32 @@ document.importNode = function(node, deep) {
 };
 Element.prototype.removeEventListener = function(type, cb) {};
 Element.prototype.dispatchEvent = function(ev) {
-    if (this.__listeners && ev && this.__listeners[ev.type]) {
-        var cbs = this.__listeners[ev.type];
-        for (var i = 0; i < cbs.length; i++) {
-            try { cbs[i].call(this, ev); } catch(e) {}
+    // GAP-M: 事件冒泡。dispatchEvent 应沿 parent 链向上触发祖先监听器
+    // （事件委托场景：ul 监听 click，点击 li 应冒泡到 ul）。
+    if (!ev) return true;
+    var cur = this;
+    ev.target = this;
+    while (cur) {
+        ev.currentTarget = cur;
+        if (cur.__listeners && cur.__listeners[ev.type]) {
+            var cbs = cur.__listeners[ev.type];
+            for (var i = 0; i < cbs.length; i++) {
+                try { cbs[i].call(cur, ev); } catch(e) {}
+            }
         }
+        // bubbles=false 或已 stopPropagation 则停止冒泡
+        if (!ev.bubbles || ev.__stopPropagation) break;
+        // 沿 parent 链向上（用 __getParent bridge）
+        try {
+            var pid = __getParent(cur.__nodeId);
+            if (pid >= 0) {
+                cur = __makeElement(pid);
+            } else {
+                break;
+            }
+        } catch(pe) { break; }
     }
+    return true;
 };
 // getComputedStyle：返回一个只读 style 对象（爬虫场景，不需像素精确）。
 window.getComputedStyle = function(el) {
