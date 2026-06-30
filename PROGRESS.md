@@ -11,8 +11,8 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M70.16**（serve vs Chrome 全维度对标，7/8 站 A 级） |
-| 总 commits | ~262 |
+| HEAD | **M70.17**（serve 并发支持，3 并发峰值 66MB） |
+| 总 commits | ~263 |
 | 测试 | 868 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
@@ -28,6 +28,29 @@
 ---
 
 ## 最近变更（倒序）
+
+### M70.17 — serve 并发支持（每请求一线程 + Semaphore 限流）（2026-06-30）✅
+
+给 `serve` HTTP 服务加并发能力——之前是串行处理（`for stream in listener.incoming()` 阻塞循环），一个请求处理完才接下一个，并发能力 = 1。
+
+**方案：per-thread std::thread + 嵌套 current_thread tokio runtime**
+- 为什么是这个方案：`CookieHandle = Rc<RefCell<>>` 是 `!Send`，multi_thread runtime + `tokio::task::spawn` 连编译都过不了。每请求一个独立 `std::thread` 彻底隔离 thread_local（cookie jar / DOM slot），代码库已有先例（`prefetch_to_cache` bridge.rs:557、`fetch_external_script` scripts.rs:718）。
+- 改动：提取 `handle_request(stream)` async 函数；`serve()` 改为每连接 `std::thread::spawn` + 嵌套 runtime + `tokio::sync::Semaphore` 限并发。
+- CLAP 加 `--max-concurrency N`（默认 3，clamp 1-16）。
+
+**性能验证（本地 release，concurrency=3）**：
+
+| 指标 | 串行（改前） | 并发=3（改后） |
+|------|------------|---------------|
+| 8 请求总耗时 | 39.2s | **21.8s**（快 1.8 倍）|
+| 并发子进程峰值 | 1 | 2-3（信号量限流生效）|
+| 总 RSS 峰值 | 41MB | **66MB**（主 23 + 子 43）|
+| 成功率 | 8/8 | 8/8 |
+| 单请求尾延迟 | 最慢 39s | 最慢 17s |
+
+**内存护栏**：3 并发峰值 66MB = Chrome 270MB 的 1/4。信号量保证最多 3 个 serve-child 同时运行（每个 ~22MB），防 N×22MB 内存爆。子进程仍 fork→用完即销毁。
+
+**约束**：每线程独立 cookie jar（thread_local 惰性初始化），并发请求间 cookie 不共享——对爬虫公开页无影响（用户场景）。
 
 ### M70.16 — serve vs Chrome 全维度对标基准（8 站，7 站 A 级）（2026-06-30）✅
 

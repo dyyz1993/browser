@@ -215,6 +215,10 @@ enum Cmd {
         port: u16,
         #[arg(long, default_value = "0.0.0.0")]
         bind: String,
+        /// M70.17: 最大并发请求数。每并发 = 1 个 serve-child 子进程（~22MB）。
+        /// 默认 3（峰值 ~86MB = 主 20MB + 3×22MB）。
+        #[arg(long, default_value_t = 3)]
+        max_concurrency: usize,
     },
     /// M70.14: serve 子进程——RLIMIT_AS 隔离 QuickJS C 层 abort。
     #[command(hide = true)]
@@ -746,8 +750,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             sandbox::apply_memory_limit(mem_mb).ok();
             sandbox_child_render()
         }
-        Cmd::Serve { port, bind } => {
-            serve(&bind, port).await?;
+        Cmd::Serve {
+            port,
+            bind,
+            max_concurrency,
+        } => {
+            serve(&bind, port, max_concurrency).await?;
             Ok(())
         }
         Cmd::ServeChild { mem_mb } => {
@@ -1399,17 +1407,25 @@ fn default_engine() -> String {
 // ── M70.12: HTTP API 服务 ─────────────────────────────────
 
 /// 启动 HTTP API 服务。每个请求跑一次 fetch + JS + extract 管线。
-async fn serve(bind: &str, port: u16) -> Result<()> {
-    use std::io::{BufRead, BufReader};
-
+///
+/// M70.17: 并发支持——每个连接 spawn 一个独立 `std::thread`，内建嵌套
+/// `current_thread` tokio runtime 跑请求处理。这样彻底隔离 thread_local
+/// 状态（cookie jar 是 `Rc<RefCell<>>` 即 `!Send`，无法跨 tokio task 共享）。
+/// 用 `Semaphore` 限制最大并发数（默认 3），防止 N 个 SPA 同时 fork
+/// serve-child 子进程导致 N×22MB 内存爆。
+async fn serve(bind: &str, port: u16, max_concurrency: usize) -> Result<()> {
+    use std::sync::Arc;
     let addr = format!("{bind}:{port}");
     let listener = TcpListener::bind(&addr).with_context(|| format!("failed to bind {addr}"))?;
-    // 非阻塞模式，方便循环
     listener.set_nonblocking(false)?;
-    eprintln!("[serve] listening on http://{addr}");
+    let max_concurrency = max_concurrency.clamp(1, 16);
+    eprintln!("[serve] listening on http://{addr} (max_concurrency={max_concurrency})");
+
+    // 并发信号量：限制同时处理的请求数（每请求 = 1 个 serve-child ~22MB）。
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrency));
 
     for stream in listener.incoming() {
-        let mut stream = match stream {
+        let stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("[serve] accept error: {e}");
@@ -1419,144 +1435,181 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
         let peer = stream.peer_addr().ok();
         eprintln!("[serve] ← {peer:?}");
 
-        // 解析 HTTP 请求
-        let mut reader = BufReader::new(&stream);
-        let mut request_line = String::new();
-        if reader.read_line(&mut request_line).is_err() {
-            eprintln!("[serve] failed to read request line");
-            continue;
-        }
-        // 只处理 POST
-        if !request_line.starts_with("POST") {
-            send_response(&mut stream, 405, "Method Not Allowed");
-            continue;
-        }
-
-        // 读请求头 → 找 Content-Length
-        let mut content_length: usize = 0;
-        let mut body = String::new();
-        loop {
-            let mut header_line = String::new();
-            if reader.read_line(&mut header_line).is_err() {
-                break;
-            }
-            let trimmed = header_line.trim();
-            if trimmed.is_empty() {
-                // 空行 = header 结束
-                break;
-            }
-            if let Some(len_str) = trimmed
-                .strip_prefix("Content-Length:")
-                .or_else(|| trimmed.strip_prefix("content-length:"))
+        let sem = semaphore.clone();
+        // 每个连接一个独立 OS 线程 + 嵌套 runtime，彻底隔离 thread_local。
+        // handle_request 内的所有 async 调用（fetch_with_jar 等）在这个线程的
+        // 独立 runtime 上跑，cookie jar / DOM slot 惰性初始化，互不干扰。
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
             {
-                content_length = len_str.trim().parse().unwrap_or(0);
-            }
-        }
-
-        // 读请求体
-        if content_length > 0 {
-            let mut buf = vec![0u8; content_length];
-            if reader.read_exact(&mut buf).is_ok() {
-                body = String::from_utf8_lossy(&buf).to_string();
-            }
-        }
-
-        // 解析 JSON
-        let req: ServeRequest = match serde_json::from_str(&body) {
-            Ok(r) => r,
-            Err(e) => {
-                send_response(
-                    &mut stream,
-                    400,
-                    &format!(r#"{{"error":"bad request: {e}"}}"#),
-                );
-                continue;
-            }
-        };
-
-        eprintln!("[serve] rendering url={} format={}", req.url, req.format);
-
-        // M70.14: 去掉 hash fragment——#/?id=xxx 是客户端路由，服务端不需要。
-        let clean_url = url::Url::parse(&req.url)
-            .map(|mut u| {
-                u.set_fragment(None);
-                u.to_string()
-            })
-            .unwrap_or_else(|_| req.url.clone());
-
-        // ── 执行渲染管线 ──
-        let t0 = std::time::Instant::now();
-        let html = match fetch_with_jar(&clean_url).await {
-            Ok(h) => h,
-            Err(e) => {
-                send_response(
-                    &mut stream,
-                    502,
-                    &format!(
-                        r#"{{"url":"{}","error":"fetch failed: {}","content":""}}"#,
-                        clean_url,
-                        e.to_string().replace('"', "'")
-                    ),
-                );
-                continue;
-            }
-        };
-        // M70.14: 检查 body 是否有关键正文（排除 meta/CSS/script 的干扰）。
-        // docsify.js.org 的 HTML 7354B（meta 标签+CSS 链接）但正文只有"Loading ..."。
-        // 用 DOM 解析提取 body 纯文本长度 > 200 才认为是 SSR。
-        let has_content = has_visible_body_content(&html);
-        let output_json = if has_content {
-            // SSR/SSG：直接提取，不走子进程
-            let tree = parse_html(&html);
-            let out_format = match browser_extractor::OutputFormat::parse(&req.format) {
-                Ok(f) => f,
-                Err(_) => browser_extractor::OutputFormat::Markdown,
-            };
-            let opts = browser_extractor::FetchOptions {
-                format: out_format,
-                selector: None,
-                only_main_content: false,
-            };
-            let result = match browser_extractor::run_extract(&tree, Some(&clean_url), &opts) {
-                Ok(r) => r,
-                Err(_) => browser_extractor::ExtractResult {
-                    content: String::new(),
-                    title: None,
-                },
-            };
-            let escaped_c =
-                serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
-            let escaped_t =
-                serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
-            let total_ms = t0.elapsed().as_millis();
-            format!(
-                r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":0,"extract_ms":0,"total_ms":{}}},"_scripts":0}}"#,
-                clean_url, escaped_t, escaped_c, req.format, total_ms, total_ms,
-            )
-        } else {
-            // 纯 SPA：预取外链 JS 脚本（写入全局缓存，子进程 fork 后继承）
-            prefetch_external_scripts(&html, &clean_url).await;
-            // 子进程隔离 QuickJS（传入已 fetch 的 HTML，外链 JS 已在缓存中）
-            let clean_req = ServeRequest {
-                url: clean_url.clone(),
-                format: req.format.clone(),
-                js_engine: req.js_engine.clone(),
-            };
-            match render_in_subprocess(&clean_req, &html) {
-                Ok(json) => json,
+                Ok(rt) => rt,
                 Err(e) => {
-                    eprintln!("[serve] render failed: {e}");
-                    format!(
-                        r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
-                        clean_url,
-                        e.to_string().replace('"', "'")
-                    )
+                    eprintln!("[serve] nested runtime build failed: {e}");
+                    return;
                 }
-            }
-        };
-        eprintln!("[serve] done: {} bytes", output_json.len());
-        send_response(&mut stream, 200, &output_json);
+            };
+            rt.block_on(async move {
+                // 获取并发许可（阻塞等待，超过 max_concurrency 的请求在此排队）。
+                // _permit drop 时自动释放并发槽。
+                let _permit = match sem.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("[serve] semaphore closed: {e}");
+                        return;
+                    }
+                };
+                if let Err(e) = handle_request(stream).await {
+                    eprintln!("[serve] request error: {e}");
+                }
+            });
+        });
     }
+    Ok(())
+}
+
+/// 处理单个 HTTP 请求：读请求 → 渲染管线 → 响应。
+/// 在调用线程的 thread_local 上运行（cookie jar 等惰性初始化，线程间隔离）。
+async fn handle_request(mut stream: std::net::TcpStream) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+
+    // 解析 HTTP 请求
+    let mut reader = BufReader::new(&stream);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        eprintln!("[serve] failed to read request line");
+        return Ok(());
+    }
+    // 只处理 POST
+    if !request_line.starts_with("POST") {
+        send_response(&mut stream, 405, "Method Not Allowed");
+        return Ok(());
+    }
+
+    // 读请求头 → 找 Content-Length
+    let mut content_length: usize = 0;
+    let mut body = String::new();
+    loop {
+        let mut header_line = String::new();
+        if reader.read_line(&mut header_line).is_err() {
+            break;
+        }
+        let trimmed = header_line.trim();
+        if trimmed.is_empty() {
+            // 空行 = header 结束
+            break;
+        }
+        if let Some(len_str) = trimmed
+            .strip_prefix("Content-Length:")
+            .or_else(|| trimmed.strip_prefix("content-length:"))
+        {
+            content_length = len_str.trim().parse().unwrap_or(0);
+        }
+    }
+
+    // 读请求体
+    if content_length > 0 {
+        let mut buf = vec![0u8; content_length];
+        if reader.read_exact(&mut buf).is_ok() {
+            body = String::from_utf8_lossy(&buf).to_string();
+        }
+    }
+
+    // 解析 JSON
+    let req: ServeRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            send_response(
+                &mut stream,
+                400,
+                &format!(r#"{{"error":"bad request: {e}"}}"#),
+            );
+            return Ok(());
+        }
+    };
+
+    eprintln!("[serve] rendering url={} format={}", req.url, req.format);
+
+    // M70.14: 去掉 hash fragment——#/?id=xxx 是客户端路由，服务端不需要。
+    let clean_url = url::Url::parse(&req.url)
+        .map(|mut u| {
+            u.set_fragment(None);
+            u.to_string()
+        })
+        .unwrap_or_else(|_| req.url.clone());
+
+    // ── 执行渲染管线 ──
+    let t0 = std::time::Instant::now();
+    let html = match fetch_with_jar(&clean_url).await {
+        Ok(h) => h,
+        Err(e) => {
+            send_response(
+                &mut stream,
+                502,
+                &format!(
+                    r#"{{"url":"{}","error":"fetch failed: {}","content":""}}"#,
+                    clean_url,
+                    e.to_string().replace('"', "'")
+                ),
+            );
+            return Ok(());
+        }
+    };
+    // M70.14: 检查 body 是否有关键正文（排除 meta/CSS/script 的干扰）。
+    // docsify.js.org 的 HTML 7354B（meta 标签+CSS 链接）但正文只有"Loading ..."。
+    // 用 DOM 解析提取 body 纯文本长度 > 200 才认为是 SSR。
+    let has_content = has_visible_body_content(&html);
+    let output_json = if has_content {
+        // SSR/SSG：直接提取，不走子进程
+        let tree = parse_html(&html);
+        let out_format = match browser_extractor::OutputFormat::parse(&req.format) {
+            Ok(f) => f,
+            Err(_) => browser_extractor::OutputFormat::Markdown,
+        };
+        let opts = browser_extractor::FetchOptions {
+            format: out_format,
+            selector: None,
+            only_main_content: false,
+        };
+        let result = match browser_extractor::run_extract(&tree, Some(&clean_url), &opts) {
+            Ok(r) => r,
+            Err(_) => browser_extractor::ExtractResult {
+                content: String::new(),
+                title: None,
+            },
+        };
+        let escaped_c =
+            serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
+        let escaped_t = serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
+        let total_ms = t0.elapsed().as_millis();
+        format!(
+            r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":0,"extract_ms":0,"total_ms":{}}},"_scripts":0}}"#,
+            clean_url, escaped_t, escaped_c, req.format, total_ms, total_ms,
+        )
+    } else {
+        // 纯 SPA：预取外链 JS 脚本（写入全局缓存，子进程 fork 后继承）
+        prefetch_external_scripts(&html, &clean_url).await;
+        // 子进程隔离 QuickJS（传入已 fetch 的 HTML，外链 JS 已在缓存中）
+        let clean_req = ServeRequest {
+            url: clean_url.clone(),
+            format: req.format.clone(),
+            js_engine: req.js_engine.clone(),
+        };
+        match render_in_subprocess(&clean_req, &html) {
+            Ok(json) => json,
+            Err(e) => {
+                eprintln!("[serve] render failed: {e}");
+                format!(
+                    r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
+                    clean_url,
+                    e.to_string().replace('"', "'")
+                )
+            }
+        }
+    };
+    eprintln!("[serve] done: {} bytes", output_json.len());
+    send_response(&mut stream, 200, &output_json);
     Ok(())
 }
 
