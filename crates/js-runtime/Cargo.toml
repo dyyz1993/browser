@@ -14,8 +14,9 @@ browser-cookie = { path = "../cookie" }
 browser-eventloop = { path = "../eventloop" }
 browser-net = { path = "../net" }
 browser-ws = { path = "../ws" }
-# M62: 用 git main 分支（crates.io 0.21.1 的 Error.stack 未完整，main 已修）
-boa_engine = { git = "https://github.com/boa-dev/boa", branch = "main" }
+# M62/M71.1: boa 引擎——M71.1 起降为 optional feature（默认 quickjs）。
+# 用 git main 分支（crates.io 0.21.1 的 Error.stack 未完整，main 已修）。
+boa_engine = { git = "https://github.com/boa-dev/boa", branch = "main", optional = true }
 # M66: QuickJS 后端（rquickjs 绑定，bindgen 编译 QuickJS C 代码）
 rquickjs = { version = "0.12", features = ["bindgen", "loader"], optional = true }
 rquickjs-core = { version = "0.12", features = ["loader"], optional = true }
@@ -32,5 +33,7 @@ tempfile = "3"
 
 [features]
 default = []
-# M66: QuickJS JS 引擎后端（rquickjs）
+# M66: QuickJS JS 引擎后端（rquickjs，默认引擎）
 quickjs = ["dep:rquickjs", "dep:rquickjs-core"]
+# M71.1: boa 引擎后端（备选，降为 optional。默认不编译，需 --features boa）。
+boa = ["dep:boa_engine"]

@@ -5,9 +5,14 @@
 //! (with the bridge installed). The DOM mutations made by JS become
 //! visible to the subsequent layout + render passes.
 
-use boa_engine::{Context, JsValue, Module, Source};
 use browser_dom::{NodeData, NodeId, Tree};
 
+// M71.1: boa 类型仅在 --features boa 时可用。
+#[cfg(feature = "boa")]
+use boa_engine::{Context, JsValue, Module, Source};
+
+// M71.1: bridge::install 是 boa 专属（注册所有 NativeFn bridge 函数）。
+#[cfg(feature = "boa")]
 use crate::bridge::install;
 
 /// M-cls.2: 收紧 JS 运行时限制（纵深防御第二层）。
@@ -382,12 +387,14 @@ fn is_js_script_type(raw: &str) -> bool {
 /// # Errors
 /// Individual script errors are logged to stderr and don't abort the
 /// run; the count returned reflects only successful executions.
+#[cfg(feature = "boa")]
 pub fn execute_scripts(tree_shared: &crate::bridge::SharedTree, ctx: &mut Context) -> usize {
     execute_scripts_with_base(tree_shared, ctx, None)
 }
 
 /// Same as [`execute_scripts`], but also installs a base URL used to
 /// resolve relative URLs in `__fetchSetBody` / `__fetchAppendBody`.
+#[cfg(feature = "boa")]
 pub fn execute_scripts_with_base(
     tree_shared: &crate::bridge::SharedTree,
     ctx: &mut Context,
@@ -2110,6 +2117,7 @@ undefined;
 /// M16.4: 每轮 tick 先 `ctx.run_jobs()`（执行 Promise then 回调 microtask），
 /// 再 drain 到期 timer。两者交叉驱动，直到都 idle。
 /// `ctx.eval` 不返回值我们也不关心（回调的副作用在 DOM 上，不在返回值）。
+#[cfg(feature = "boa")]
 fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
     // M70.13: 硬超时从 8s 降到 3s——爬虫不需要等 analytics timer。
@@ -2255,7 +2263,15 @@ pub fn run_scripts_with_base(
     tree: Tree,
     base_url: Option<String>,
 ) -> (crate::bridge::SharedTree, usize) {
-    run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::Boa)
+    // M71.1: 无 boa feature 时回退到 QuickJS（默认引擎）。
+    #[cfg(feature = "boa")]
+    {
+        run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::Boa)
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::QuickJs)
+    }
 }
 
 /// M66: 引擎可切换版本。通过 EngineKind 选择 JS 引擎（boa / quickjs）。
@@ -2301,6 +2317,29 @@ pub fn run_scripts_with_base_engine(
         eprintln!("[js-runtime] QuickJS requested but feature not enabled, using boa");
     }
 
+    // M71.1: boa 路径仅在 --features boa 时编译。无 boa 时不可能走到这里
+    //（QuickJS 分支已 return，或 EngineKind 只有 QuickJs）。
+    #[cfg(feature = "boa")]
+    {
+        return run_scripts_with_base_boa(shared, base_url, engine, engine_name);
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        let _ = engine;
+        let _ = engine_name;
+        // 不可能到达：engine_kind 只能是 QuickJs，上面已 return。
+        (shared, 0)
+    }
+}
+
+/// M71.1: boa 路径（从 run_scripts_with_base_engine 抽出）。cfg 门控。
+#[cfg(feature = "boa")]
+fn run_scripts_with_base_boa(
+    shared: crate::bridge::SharedTree,
+    base_url: Option<String>,
+    mut engine: Box<dyn crate::engine::JsEngine>,
+    engine_name: &str,
+) -> (crate::bridge::SharedTree, usize) {
     // M66: 获取底层 boa Context（所有 bridge/shim 仍直接操作 Context）。
     let ctx = engine.ctx_mut();
     let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
@@ -2506,6 +2545,7 @@ pub fn run_scripts_with_base_engine(
 /// `bridge::install_shared_with_base` 装 tree guard 后才能 eval。
 ///
 /// `base_url` 用于 location/navigation 后端的初始 URL（None → about:blank）。
+#[cfg(feature = "boa")]
 fn build_shimmed_context(base_url: &Option<String>) -> Context {
     let mut ctx = Context::default();
     {
@@ -2548,7 +2588,15 @@ fn build_shimmed_context(base_url: &Option<String>) -> Context {
 /// # Errors
 /// 返回 `Err(msg)` 如果 JS 解析或执行失败。
 pub fn eval_in_tree(tree: Tree, base_url: Option<String>, expr: &str) -> Result<String, String> {
-    eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::Boa)
+    // M71.1: 无 boa feature 时回退到 QuickJS（默认引擎）。
+    #[cfg(feature = "boa")]
+    {
+        eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::Boa)
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::QuickJs)
+    }
 }
 
 /// M67: `eval_in_tree` 的引擎可选版本。供 CDP `Runtime.evaluate` /
@@ -2583,14 +2631,25 @@ pub fn eval_in_tree_engine(
     let _ = engine_kind;
 
     // ── boa 分支（默认 + QuickJS feature 未启用时的回退）──
-    let mut ctx = build_shimmed_context(&base_url);
-    // 安装 tree guard：让 document/window shims 的 __* 桥能访问 DOM。
-    // guard 在作用域结束时自动清理 thread-local slot。
-    let _guard = crate::bridge::install_shared_with_base(shared, base_url);
-    let result: JsValue = ctx
-        .eval(Source::from_bytes(expr))
-        .map_err(|e| format!("js eval error: {e}"))?;
-    Ok(result.display().to_string())
+    #[cfg(feature = "boa")]
+    {
+        let mut ctx = build_shimmed_context(&base_url);
+        // 安装 tree guard：让 document/window shims 的 __* 桥能访问 DOM。
+        // guard 在作用域结束时自动清理 thread-local slot。
+        let _guard = crate::bridge::install_shared_with_base(shared, base_url);
+        let result: JsValue = ctx
+            .eval(Source::from_bytes(expr))
+            .map_err(|e| format!("js eval error: {e}"))?;
+        Ok(result.display().to_string())
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        // 无 boa feature：QuickJS 分支已 return，这里不可能到达。
+        let _ = shared;
+        let _ = base_url;
+        let _ = expr;
+        Err("no JS engine available".to_string())
+    }
 }
 
 /// M67: QuickJS 版 `eval_in_tree`。复用 `run_scripts_quickjs` 的 setup 模式

@@ -76,6 +76,7 @@ impl QuickJsEngineWrapper {
 }
 
 impl crate::engine::JsEngine for QuickJsEngineWrapper {
+    #[cfg(feature = "boa")]
     fn ctx_mut(&mut self) -> &mut boa_engine::Context {
         panic!("QuickJS engine does not support ctx_mut() — use QuickJsEngine::eval() directly");
     }

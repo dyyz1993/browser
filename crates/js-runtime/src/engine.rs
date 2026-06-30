@@ -12,15 +12,17 @@
 //! - `install_and_run`：安装 bridge + shim + 执行脚本（每个引擎自己的实现）
 //! - 接收一个 `Box<dyn BridgeHost>` trait 对象，提供引擎无关的 bridge 后端调用
 
+#[cfg(feature = "boa")]
 use boa_engine::Context;
 
-/// M66: JS 引擎抽象。
+/// M66: JS 引擎抽象（引擎无关主体）。
 ///
-/// boa 后端直接暴露 Context（bridge.rs 直接操作）。
-/// QuickJS 后端（M66-B）会重构为不依赖此 trait 的独立实现路径。
+/// boa 后端额外实现 `ctx_mut()`（cfg 门控）。QuickJS 后端不实现 ctx_mut，
+/// 走独立的执行路径（scripts.rs 通过 name() == "quickjs" 检测）。
 pub trait JsEngine: std::any::Any {
     /// 获取底层 boa Context（bridge 函数注册 + eval 需要）。
     /// 仅 boa 后端实现。QuickJS 后端不实现此方法（调用时 panic）。
+    #[cfg(feature = "boa")]
     fn ctx_mut(&mut self) -> &mut Context;
 
     /// 创建一个带 module loader 的引擎（ESM 支持用）。
@@ -38,9 +40,12 @@ pub trait JsEngine: std::any::Any {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-/// M66: 默认引擎选择器。根据 CLI flag 创建对应引擎。
+/// M66/M71.1: 默认引擎选择器。根据 CLI flag 创建对应引擎。
+///
+/// M71.1: `Boa` 变体仅在 `--features boa` 时存在；默认构建只有 `QuickJs`。
 #[derive(Clone, Copy)]
 pub enum EngineKind {
+    #[cfg(feature = "boa")]
     Boa,
     #[allow(dead_code)]
     QuickJs,
@@ -51,14 +56,15 @@ impl EngineKind {
     pub fn parse_str(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "quickjs" | "qjs" => Self::QuickJs,
-            _ => Self::Boa,
+            #[cfg(feature = "boa")]
+            "boa" => Self::Boa,
+            _ => Self::QuickJs,
         }
     }
 
     /// 创建引擎实例。如果需要 ESM 支持，传入 origin URL。
     pub fn create(&self, esm_origin: Option<&str>) -> Box<dyn JsEngine> {
         match self {
-            Self::Boa => Box::new(crate::engine_boa::BoaEngine::new(esm_origin)),
             Self::QuickJs => {
                 #[cfg(feature = "quickjs")]
                 {
@@ -69,10 +75,11 @@ impl EngineKind {
                 }
                 #[cfg(not(feature = "quickjs"))]
                 {
-                    eprintln!("[js-runtime] QuickJS feature not enabled, falling back to boa");
-                    Box::new(crate::engine_boa::BoaEngine::new(esm_origin))
+                    panic!("no JS engine feature enabled (need quickjs or boa)");
                 }
             }
+            #[cfg(feature = "boa")]
+            Self::Boa => Box::new(crate::engine_boa::BoaEngine::new(esm_origin)),
         }
     }
 }

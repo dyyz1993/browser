@@ -19,6 +19,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(feature = "boa")]
 use boa_engine::{object::JsObject, Context, JsArgs, JsResult, JsValue, NativeFunction};
 use browser_cookie::CookieHandle;
 use browser_dom::{Node, NodeData, NodeId, Tree};
@@ -30,6 +31,7 @@ use browser_storage::StorageHandle;
 pub type SharedTree = Rc<RefCell<Tree>>;
 
 /// M62: setInterval entry: (callback, delay_ms, trigger_count)。
+#[cfg(feature = "boa")]
 type IntervalEntry = (JsObject, u64, u32);
 
 thread_local! {
@@ -41,13 +43,10 @@ thread_local! {
     static CURRENT_NAV: RefCell<Option<NavigationHandle>> = const { RefCell::new(None) };
     // M15.3: cookie jar backend.
     static CURRENT_COOKIE: RefCell<Option<CookieHandle>> = const { RefCell::new(None) };
+    // M71.1: 以下三个是 boa 专属 timer 后端（QuickJS 有独立 timer 实现，不碰这些）。
+    // 因 thread_local! 内不能 cfg 单个 static，放独立 thread_local! 门控。
     // M16.2: setTimeout 后端。wheel 存时间+id，callbacks 存 JsObject（boa GC 保活）。
     static TIMER_WHEEL: RefCell<Option<TimerWheel>> = const { RefCell::new(None) };
-    static TIMER_CALLBACKS: RefCell<Option<std::collections::HashMap<TimerId, JsObject>>> =
-        const { RefCell::new(None) };
-    // M62: setInterval 后端。存 (callback, delay_ms, count)，drain 时触发后重新 schedule。
-    static INTERVAL_INFO: RefCell<Option<std::collections::HashMap<TimerId, IntervalEntry>>> =
-        const { RefCell::new(None) };
     // M17.1: XMLHttpRequest 后端。id → 状态（method/url/response_text）。
     // 爬虫场景：responseText 存 String，onload 由 JS shim 用 setTimeout(0) 触发
     // （复用 M16 event loop），responseText 通过 __xhrGetResponseText 读。
@@ -61,6 +60,16 @@ thread_local! {
     // 与 XHR/fetch 同线程同步不同：WS 是长连接异步，每个 connect spawn 一个
     // OS 线程 recv，事件走 WsManager.drain_events() → pump_event_loop dispatch。
     static WS_MANAGER: RefCell<Option<browser_ws::WsManager>> = const { RefCell::new(None) };
+}
+
+// M71.1: boa 专属 timer 后端（QuickJS 有独立 timer 实现）。单独 thread_local! 门控。
+#[cfg(feature = "boa")]
+thread_local! {
+    static TIMER_CALLBACKS: RefCell<Option<std::collections::HashMap<TimerId, JsObject>>> =
+        const { RefCell::new(None) };
+    // M62: setInterval 后端。存 (callback, delay_ms, count)，drain 时触发后重新 schedule。
+    static INTERVAL_INFO: RefCell<Option<std::collections::HashMap<TimerId, IntervalEntry>>> =
+        const { RefCell::new(None) };
 }
 
 /// M70.4: A captured network event from JS fetch/XHR (Send-safe).
@@ -139,10 +148,12 @@ impl Drop for TreeGuard {
         CURRENT_COOKIE.with(|slot| {
             *slot.borrow_mut() = None;
         });
-        // M16.2: 清理 timer slots（防止上一次 run_scripts 的 timer 残留）。
+        // M16.2/M71.1: 清理 timer slots（防止上一次 run_scripts 的 timer 残留）。
+        // TIMER_CALLBACKS 是 boa 专属（QuickJS 有独立 timer），cfg 门控。
         TIMER_WHEEL.with(|slot| {
             *slot.borrow_mut() = None;
         });
+        #[cfg(feature = "boa")]
         TIMER_CALLBACKS.with(|slot| {
             *slot.borrow_mut() = None;
         });
@@ -238,12 +249,14 @@ where
     })
 }
 
+#[cfg(feature = "boa")]
 fn arg_string(args: &[JsValue], idx: usize) -> Option<String> {
     args.get(idx)
         .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
 }
 
 /// Register all bridge globals on the given boa context.
+#[cfg(feature = "boa")]
 pub fn install(ctx: &mut Context) {
     register_fn(ctx, "__setBody", set_body as NativeFn);
     register_fn(ctx, "__appendBody", append_body as NativeFn);
@@ -344,8 +357,10 @@ pub fn install(ctx: &mut Context) {
     );
 }
 
+#[cfg(feature = "boa")]
 type NativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
 
+#[cfg(feature = "boa")]
 fn register_fn(ctx: &mut Context, name: &str, f: NativeFn) {
     let native = NativeFunction::from_fn_ptr(f);
     let _ = ctx.register_global_callable(name.into(), 1, native);
@@ -354,32 +369,38 @@ fn register_fn(ctx: &mut Context, name: &str, f: NativeFn) {
 /// Register with arity 0 (variadic signature is the same — this is
 /// purely a documentation marker for bridges that take no args and
 /// match boa's `register_global_callable(name, 0, ...)` arity hint).
+#[cfg(feature = "boa")]
 fn register_fn0(ctx: &mut Context, name: &str, f: NativeFn) {
     let native = NativeFunction::from_fn_ptr(f);
     let _ = ctx.register_global_callable(name.into(), 0, native);
 }
 
+#[cfg(feature = "boa")]
 fn register_fn1(ctx: &mut Context, name: &str, f: NativeFn) {
     let native = NativeFunction::from_fn_ptr(f);
     let _ = ctx.register_global_callable(name.into(), 1, native);
 }
 
+#[cfg(feature = "boa")]
 fn register_fn2(ctx: &mut Context, name: &str, f: NativeFn) {
     let native = NativeFunction::from_fn_ptr(f);
     let _ = ctx.register_global_callable(name.into(), 2, native);
 }
 
+#[cfg(feature = "boa")]
 fn register_fn3(ctx: &mut Context, name: &str, f: NativeFn) {
     let native = NativeFunction::from_fn_ptr(f);
     let _ = ctx.register_global_callable(name.into(), 3, native);
 }
 
+#[cfg(feature = "boa")]
 fn arg_usize(args: &[JsValue], idx: usize) -> Option<usize> {
     args.get(idx)
         .and_then(|v| v.as_number())
         .map(|n| n as usize)
 }
 
+#[cfg(feature = "boa")]
 fn arg_usize_or_none(args: &[JsValue], idx: usize) -> Option<usize> {
     match args.get(idx) {
         Some(v) if v.is_undefined() || v.is_null() => None,
@@ -388,30 +409,35 @@ fn arg_usize_or_none(args: &[JsValue], idx: usize) -> Option<usize> {
     }
 }
 
+#[cfg(feature = "boa")]
 fn set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let html = arg_string(args, 0).unwrap_or_default();
     with_tree(|t| set_body_inner_html(t, &html));
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let text = arg_string(args, 0).unwrap_or_default();
     with_tree(|t| append_body_text(t, &text));
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn set_title(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let title = arg_string(args, 0).unwrap_or_default();
     with_tree(|t| set_title_text(t, &title));
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn log_fn(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let msg = args.get_or_undefined(0).display().to_string();
     eprintln!("[js] {msg}");
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn fetch_set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let raw = arg_string(args, 0).unwrap_or_default();
     if raw.is_empty() {
@@ -425,6 +451,7 @@ fn fetch_set_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsRe
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let raw = arg_string(args, 0).unwrap_or_default();
     if raw.is_empty() {
@@ -442,6 +469,7 @@ fn fetch_append_body(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
 /// 返回编码 `"status\nbody"`（成功）或 `""`（失败，错误打到 stderr）。
 /// JS fetch shim 用此桥拿原始响应，再用 Promise 包装成异步语义。
 /// (M19.1)
+#[cfg(feature = "boa")]
 fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let raw = args
         .first()
@@ -468,6 +496,7 @@ fn fetch_sync_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
 /// `__fetchSyncMethod(url, method, body?, contentType?) -> string`：
 /// 通用 fetch 后端（任意 method）。M20.3：POST/PUT/DELETE 表单/API 调用。
 /// 返回编码 `"status\nbody"`（成功）或 `""`（失败）。
+#[cfg(feature = "boa")]
 fn fetch_sync_method_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -774,6 +803,7 @@ fn set_body_inner_html(tree: &mut Tree, html: &str) {
 
 /// M62: `__parseHtml(nodeId, html)` — 解析 HTML 字符串为真实 DOM 节点，替换目标元素子节点。
 /// 用于 innerHTML setter 实现。使用 html5ever 解析 HTML，递归创建 DOM 元素。
+#[cfg(feature = "boa")]
 fn parse_html(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let node_id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -809,6 +839,7 @@ fn parse_html(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult
 /// 由 appendChild 的 JS shim 在检测到 script 标签时调用。
 /// event loop pump（boa 的 pump_event_loop / QuickJS 的 run_scripts_quickjs）
 /// 每轮用 `qjs_bridge::drain_dynamic_scripts()` 取出，调 eval 执行。
+#[cfg(feature = "boa")]
 fn enqueue_dynamic_script_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -883,6 +914,7 @@ fn set_title_text(tree: &mut Tree, text: &str) {
 // M7.2.1: real DOM API bridges (NodeIds returned as f64 to JS).
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "boa")]
 fn create_el(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let tag = arg_string(args, 0).unwrap_or_else(|| "div".into());
     let new_id = with_tree(|t| {
@@ -898,6 +930,7 @@ fn create_el(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<
     Ok(JsValue::new(new_id as f64))
 }
 
+#[cfg(feature = "boa")]
 fn append_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let parent_id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -911,6 +944,7 @@ fn append_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResu
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn insert_before(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let parent_id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -968,6 +1002,7 @@ fn insert_before_inner(
     tree.get_mut(child_id).parent = Some(parent_id);
 }
 
+#[cfg(feature = "boa")]
 fn get_parent(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -979,6 +1014,7 @@ fn get_parent(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult
         None => JsValue::undefined(),
     })
 }
+#[cfg(feature = "boa")]
 fn get_children(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let parent_id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -994,6 +1030,7 @@ fn get_children(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResu
     Ok(JsValue::from(boa_engine::JsString::from(child_ids)))
 }
 
+#[cfg(feature = "boa")]
 fn remove_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let parent_id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1017,6 +1054,7 @@ fn remove_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResu
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn set_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1042,6 +1080,7 @@ fn set_attr_inner(tree: &mut Tree, id: NodeId, key: &str, value: &str) {
     }
 }
 
+#[cfg(feature = "boa")]
 fn remove_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1062,6 +1101,7 @@ fn remove_attr_inner(tree: &mut Tree, id: NodeId, key: &str) {
     }
 }
 
+#[cfg(feature = "boa")]
 fn get_el_by_id(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id_str = arg_string(args, 0).unwrap_or_default();
     let found = with_tree(|t| find_by_id(t, &id_str));
@@ -1088,6 +1128,7 @@ fn find_by_id(tree: &Tree, target: &str) -> Option<NodeId> {
     found
 }
 
+#[cfg(feature = "boa")]
 fn qs(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     // M7.2.1 minimal querySelector: tag selectors (`div`) and id (`#foo`).
     let sel = arg_string(args, 0).unwrap_or_default();
@@ -1099,6 +1140,7 @@ fn qs(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue
 }
 
 /// `__qsAll(selector) -> number[]`：返回所有匹配的 NodeId（M62）。
+#[cfg(feature = "boa")]
 fn qs_all(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let sel = arg_string(args, 0).unwrap_or_default();
     let ids = with_tree(|t| find_all_by_selector(t, &sel));
@@ -1359,6 +1401,7 @@ fn matches_selector(node: &Node, tokens: &[SelectorToken]) -> bool {
     }
 }
 
+#[cfg(feature = "boa")]
 fn set_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1376,6 +1419,7 @@ fn set_text_inner(tree: &mut Tree, id: NodeId, text: &str) {
 
 /// M37: `__getText(id) -> string` — 读元素文本内容（拼接所有子文本节点）。
 /// Element 对象的 textContent getter 需要此桥。
+#[cfg(feature = "boa")]
 fn get_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1402,6 +1446,7 @@ fn collect_text_inner(tree: &Tree, id: NodeId, out: &mut String) {
     }
 }
 
+#[cfg(feature = "boa")]
 fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     if let Some(id) = arg_usize(args, 0) {
         let tag = with_tree(|t| match t.data(id) {
@@ -1428,6 +1473,7 @@ fn get_tag(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<Js
 }
 
 /// M37: `__getAttr(id, key) -> string` — 读元素属性（Element 对象的 getter 用）。
+#[cfg(feature = "boa")]
 fn get_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1452,6 +1498,7 @@ fn get_attr(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<J
 
 /// M37: `__findChild(parentId, id) -> number | undefined` —
 /// 在 parent 后代中查找指定 id 的元素（Element.getElementById 用）。
+#[cfg(feature = "boa")]
 fn find_child(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let parent_id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1486,6 +1533,7 @@ fn find_by_id_in_subtree(tree: &Tree, root: NodeId, target: &str) -> Option<Node
     found
 }
 
+#[cfg(feature = "boa")]
 fn get_body(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = with_tree(|t| find_first_element(t, "body"));
     Ok(JsValue::new(match id {
@@ -1495,6 +1543,7 @@ fn get_body(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<
 }
 
 // M8.1: form value bridges.
+#[cfg(feature = "boa")]
 fn get_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1512,6 +1561,7 @@ fn get_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn set_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1523,6 +1573,7 @@ fn set_value(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<
 }
 
 // M8.3: button click bridge.
+#[cfg(feature = "boa")]
 fn click(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1535,6 +1586,7 @@ fn click(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsVa
 }
 
 // M8.4: form submit bridge.
+#[cfg(feature = "boa")]
 fn submit(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match arg_usize(args, 0) {
         Some(id) => id,
@@ -1575,6 +1627,7 @@ pub fn install_storage(handle: StorageHandle) {
     });
 }
 
+#[cfg(feature = "boa")]
 fn storage_get_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let key = match arg_string(args, 0) {
         Some(k) => k,
@@ -1587,6 +1640,7 @@ fn storage_get_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> 
     }
 }
 
+#[cfg(feature = "boa")]
 fn storage_set_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let key = match arg_string(args, 0) {
         Some(k) => k,
@@ -1598,6 +1652,7 @@ fn storage_set_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> 
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn storage_remove_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -1611,6 +1666,7 @@ fn storage_remove_bridge(
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn storage_clear_bridge(
     _this: &JsValue,
     _args: &[JsValue],
@@ -1620,11 +1676,13 @@ fn storage_clear_bridge(
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn storage_len_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let len = with_storage(browser_storage::storage_len);
     Ok(JsValue::new(len as f64))
 }
 
+#[cfg(feature = "boa")]
 fn storage_key_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let idx = match arg_usize(args, 0) {
         Some(i) => i,
@@ -1691,6 +1749,7 @@ pub fn current_cookie_jar() -> Option<CookieHandle> {
 
 /// `__setInterval(callback: Function, delay: number) -> number`
 /// 注册一个重复 timer。每次触发后自动重新 schedule（除非 clearInterval）。
+#[cfg(feature = "boa")]
 fn set_interval_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let callback = match args.first().and_then(|v| v.as_object()) {
         Some(obj) if obj.is_callable() => obj.clone(),
@@ -1734,6 +1793,7 @@ fn set_interval_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) ->
 /// Ensure a timer wheel + callback map exist on the current thread.
 /// Idempotent: reuses if already installed (e.g. across run_scripts calls).
 /// (M16.2)
+#[cfg(feature = "boa")]
 fn ensure_eventloop() {
     TIMER_WHEEL.with(|slot| {
         if slot.borrow().is_none() {
@@ -1749,6 +1809,7 @@ fn ensure_eventloop() {
 
 /// `__setTimeout(callback: Function, delay: number) -> number`
 /// 注册一个 timer，返回 id 给 JS。callback 在到期时由 event loop 调用。
+#[cfg(feature = "boa")]
 fn set_timeout_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     // 1. 提取 callback（必须是 callable object）。clone 成 owned（JsObject 是 GC 引用计数）。
     let callback = match args.first().and_then(|v| v.as_object()) {
@@ -1777,6 +1838,7 @@ fn set_timeout_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> 
 
 /// `__clearTimeout(id: number) -> undefined`
 /// 取消一个 timer。不存在的 id 安全调用（幂等）。
+#[cfg(feature = "boa")]
 fn clear_timeout_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -1811,6 +1873,7 @@ fn clear_timeout_bridge(
 /// 的 JsObject 列表，逐个 `.call(&JsValue::undefined(), ctx)` 执行。
 ///
 /// Returns `Vec<JsObject>`（空的 vec 表示没有到期 timer）。
+#[cfg(feature = "boa")]
 pub fn drain_due_timer_callbacks() -> Vec<JsObject> {
     let due_ids = TIMER_WHEEL.with(|slot| {
         slot.borrow_mut()
@@ -1936,6 +1999,7 @@ fn ensure_ws_manager() {
 
 /// `__wsCreate(url: string) -> number`：发起 ws:// 连接，返回 id。
 /// 实际握手在后台线程异步进行；Open/Error 事件经 drain_ws_events 分派。
+#[cfg(feature = "boa")]
 fn ws_create_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let url = args
         .first()
@@ -1954,6 +2018,7 @@ fn ws_create_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> Js
 }
 
 /// `__wsSend(id: number, data: string) -> undefined`：队列文本消息到后台线程。
+#[cfg(feature = "boa")]
 fn ws_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u32) {
         Some(n) => n,
@@ -1973,6 +2038,7 @@ fn ws_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsRe
 }
 
 /// `__wsClose(id: number) -> undefined`：队列关闭帧。
+#[cfg(feature = "boa")]
 fn ws_close_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u32) {
         Some(n) => n,
@@ -2057,6 +2123,7 @@ fn ensure_xhr() {
 }
 
 /// `__xhrCreate() -> number`：新建一个 XHR 实例，返回 id 给 JS。
+#[cfg(feature = "boa")]
 fn xhr_create_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     ensure_xhr();
     let id = XHR_NEXT_ID.with(|slot| {
@@ -2073,6 +2140,7 @@ fn xhr_create_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> 
 }
 
 /// `__xhrOpen(id, method, url) -> undefined`：记录请求参数（不立即 fetch）。
+#[cfg(feature = "boa")]
 fn xhr_open_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u64) {
         Some(n) => n,
@@ -2103,6 +2171,7 @@ fn xhr_open_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsR
 
 /// `__xhrSend(id) -> undefined`：执行同步 fetch（复用 fetch_sync），
 /// 把响应存到 response_text。JS shim 随后用 setTimeout(0) 触发 onload。
+#[cfg(feature = "boa")]
 fn xhr_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let id = match args.first().and_then(|v| v.as_number()).map(|n| n as u64) {
         Some(n) => n,
@@ -2135,6 +2204,7 @@ fn xhr_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsR
 
 /// `__xhrGetResponseText(id) -> string | null`：读取响应体。
 /// JS shim 在 onload 回调里调用此函数拿到 responseText。
+#[cfg(feature = "boa")]
 fn xhr_get_response_text_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -2155,6 +2225,7 @@ fn xhr_get_response_text_bridge(
     }
 }
 
+#[cfg(feature = "boa")]
 fn history_push_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let state = arg_string(args, 0);
     let url = arg_string(args, 2).unwrap_or_default();
@@ -2162,6 +2233,7 @@ fn history_push_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) ->
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn history_replace_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -2173,6 +2245,7 @@ fn history_replace_bridge(
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn history_back_bridge(
     _this: &JsValue,
     _args: &[JsValue],
@@ -2182,6 +2255,7 @@ fn history_back_bridge(
     Ok(JsValue::new(ok))
 }
 
+#[cfg(feature = "boa")]
 fn history_forward_bridge(
     _this: &JsValue,
     _args: &[JsValue],
@@ -2191,6 +2265,7 @@ fn history_forward_bridge(
     Ok(JsValue::new(ok))
 }
 
+#[cfg(feature = "boa")]
 fn history_go_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let n = match args.first().and_then(|v| v.as_number()) {
         Some(n) => n as i64,
@@ -2200,11 +2275,13 @@ fn history_go_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> J
     Ok(JsValue::new(ok))
 }
 
+#[cfg(feature = "boa")]
 fn history_len_bridge(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let len = with_navigation(browser_navigation::history_len);
     Ok(JsValue::new(len as f64))
 }
 
+#[cfg(feature = "boa")]
 fn history_state_bridge(
     _this: &JsValue,
     _args: &[JsValue],
@@ -2217,6 +2294,7 @@ fn history_state_bridge(
     }
 }
 
+#[cfg(feature = "boa")]
 fn location_href_bridge(
     _this: &JsValue,
     _args: &[JsValue],
@@ -2226,6 +2304,7 @@ fn location_href_bridge(
     Ok(JsValue::from(boa_engine::string::JsString::from(url)))
 }
 
+#[cfg(feature = "boa")]
 fn location_replace_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -2236,6 +2315,7 @@ fn location_replace_bridge(
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn location_assign_bridge(
     _this: &JsValue,
     args: &[JsValue],
@@ -2246,6 +2326,7 @@ fn location_assign_bridge(
     Ok(JsValue::undefined())
 }
 
+#[cfg(feature = "boa")]
 fn location_parts_bridge(
     _this: &JsValue,
     _args: &[JsValue],

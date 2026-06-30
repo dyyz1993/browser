@@ -58,6 +58,7 @@ impl CdpServer {
             "[cdp] listening on http://127.0.0.1:{port} (engine: {})",
             match engine_kind {
                 EngineKind::QuickJs => "quickjs",
+                #[cfg(feature = "boa")]
                 EngineKind::Boa => "boa",
             }
         );
@@ -675,7 +676,7 @@ impl CdpSession {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod tests {
     use super::*;
 

@@ -28,3 +28,5 @@ tokio = { workspace = true }
 default = ["quickjs"]
 # M67: QuickJS JS 引擎后端（转发到 js-runtime）。CDP Runtime domain 默认走 QuickJS。
 quickjs = ["browser-js-runtime/quickjs"]
+# M71.1: boa 引擎后端（转发到 js-runtime，让 cdp 内部 cfg(feature="boa") 生效）。
+boa = ["browser-js-runtime/boa"]
