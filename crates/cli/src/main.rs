@@ -823,23 +823,27 @@ async fn fetch_with_jar(url: &str) -> Result<String> {
 }
 
 async fn fetch_with_jar_once(url: &str) -> Result<String> {
+    // M70.14: 去掉 hash fragment——#/?id=xxx 是客户端路由，服务端 fetch 不需要。
+    let clean_url = url::Url::parse(url)
+        .map(|mut u| { u.set_fragment(None); u.to_string() })
+        .unwrap_or_else(|_| url.to_string());
     let jar = current_cookie_jar();
     let cookie_header = jar
         .as_ref()
         .and_then(|h| {
-            url::Url::parse(url)
+            url::Url::parse(&clean_url)
                 .ok()
                 .map(|u| h.borrow().to_cookie_header(&u))
         })
         .filter(|h: &String| !h.is_empty());
     let client = HttpClient::new();
     let (bytes, headers) = client
-        .get_with_headers(url, cookie_header.as_deref())
+        .get_with_headers(&clean_url, cookie_header.as_deref())
         .await
         .with_context(|| format!("failed to fetch {url}"))?;
     // 把 Set-Cookie 存入 jar（如果有 jar）。
     if let Some(jar) = &jar {
-        if let Ok(req_url) = url::Url::parse(url) {
+        if let Ok(req_url) = url::Url::parse(&clean_url) {
             for value in headers.get_all("set-cookie").iter() {
                 if let Ok(sc) = value.to_str() {
                     jar.borrow_mut().store_set_cookie(sc, &req_url);
@@ -1355,16 +1359,19 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
 
         eprintln!("[serve] rendering url={} format={}", req.url, req.format);
 
+        // M70.14: 去掉 hash fragment——#/?id=xxx 是客户端路由，服务端不需要。
+        let clean_url = url::Url::parse(&req.url)
+            .map(|mut u| { u.set_fragment(None); u.to_string() })
+            .unwrap_or_else(|_| req.url.clone());
+
         // ── 执行渲染管线 ──
-        // M70.14: SSR 站（HTML > 5KB）直接在主进程提取（快，不崩）。
-        // 纯 SPA（HTML < 5KB）走子进程跑 QuickJS（隔离 C 层 abort）。
         let t0 = std::time::Instant::now();
-        let html = match fetch_with_jar(&req.url).await {
+        let html = match fetch_with_jar(&clean_url).await {
             Ok(h) => h,
             Err(e) => {
                 send_response(&mut stream, 502,
                     &format!(r#"{{"url":"{}","error":"fetch failed: {}","content":""}}"#,
-                        req.url, e.to_string().replace('"', "'")));
+                        clean_url, e.to_string().replace('"', "'")));
                 continue;
             }
         };
@@ -1384,7 +1391,7 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
                 selector: None,
                 only_main_content: false,
             };
-            let result = match browser_extractor::run_extract(&tree, Some(&req.url), &opts) {
+            let result = match browser_extractor::run_extract(&tree, Some(&clean_url), &opts) {
                 Ok(r) => r,
                 Err(_) => browser_extractor::ExtractResult { content: String::new(), title: None },
             };
@@ -1393,18 +1400,23 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
             let total_ms = t0.elapsed().as_millis();
             format!(
                 r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":0,"extract_ms":0,"total_ms":{}}},"_scripts":0}}"#,
-                req.url, escaped_t, escaped_c, req.format, total_ms, total_ms,
+                clean_url, escaped_t, escaped_c, req.format, total_ms, total_ms,
             )
         } else {
             // 纯 SPA：预取外链 JS 脚本（写入全局缓存，子进程 fork 后继承）
-            prefetch_external_scripts(&html, &req.url).await;
+            prefetch_external_scripts(&html, &clean_url).await;
             // 子进程隔离 QuickJS（传入已 fetch 的 HTML，外链 JS 已在缓存中）
-            match render_in_subprocess(&req, &html) {
+            let clean_req = ServeRequest {
+                url: clean_url.clone(),
+                format: req.format.clone(),
+                js_engine: req.js_engine.clone(),
+            };
+            match render_in_subprocess(&clean_req, &html) {
                 Ok(json) => json,
                 Err(e) => {
                     eprintln!("[serve] render failed: {e}");
                     format!(r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
-                        req.url, e.to_string().replace('"', "'"))
+                        clean_url, e.to_string().replace('"', "'"))
                 }
             }
         };
@@ -1719,7 +1731,9 @@ async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<
     // docsify.js.org HTML 7354B 但正文只有"Loading ..."。
     let has_content = has_visible_body_content(&html);
     let should_skip_js = has_content;
-    let base = Some(url.to_string());
+    let base = Some(url::Url::parse(url)
+        .map(|mut u| { u.set_fragment(None); u.to_string() })
+        .unwrap_or_else(|_| url.to_string()));
 
     let t_js_start = std::time::Instant::now();
     let (shared, scripts_executed): (browser_js_runtime::SharedTree, usize) = if should_skip_js {
