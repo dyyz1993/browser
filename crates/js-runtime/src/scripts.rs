@@ -1939,10 +1939,24 @@ Element.prototype.cloneNode = function(deep) {
     var newId = __createEl(tag);
     if (newId < 0) return null;
     var copy = __makeElement(newId);
-    // 复制文本内容（文本子节点）
+    // 复制文本内容（仅叶子元素）。
+    // GAP-J: 不能对父元素无条件 __setText——__getText(父) 返回子节点文本拼接，
+    // __setText 会给克隆的父元素加一个不该有的文本子节点（导致 cloneNode 多复制）。
+    // 只在没有元素子节点（纯文本叶子，如 <li>text</li>）时才复制文本。
     try {
-        var txt = __getText(this.__nodeId);
-        if (txt) __setText(newId, String(txt));
+        var hasElementChild = false;
+        var rawChildren = __children(this.__nodeId);
+        if (rawChildren) {
+            var childIds = rawChildren.split(',').filter(function(s) { return s; });
+            for (var ci = 0; ci < childIds.length; ci++) {
+                var ctag = __getTag(parseInt(childIds[ci], 10));
+                if (ctag && ctag !== '__text__') { hasElementChild = true; break; }
+            }
+        }
+        if (!hasElementChild) {
+            var txt = __getText(this.__nodeId);
+            if (txt) __setText(newId, String(txt));
+        }
     } catch(e) {}
     // 深拷贝：递归克隆子元素（重建子树）
     if (deep !== false) {
