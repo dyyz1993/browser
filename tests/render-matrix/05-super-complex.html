@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html><head><style>.card{margin:8px}.meta{color:#888}</style></head>
+<body>
+<header><nav>
+<a href="/">Home</a><a href="/about">About</a><a href="/blog">Blog</a>
+</nav></header>
+<main>
+<h1>Articles</h1>
+<table><thead><tr><th>ID</th><th>Title</th><th>Author</th><th>Date</th></tr></thead>
+<tbody id="rows"></tbody></table>
+<form id="search"><input type="text" id="q" placeholder="search">
+<select id="sort"><option value="date">Date</option><option value="title">Title</option></select>
+<button type="submit">Search</button></form>
+<div id="feed"></div>
+</main>
+<footer><p>© 2026 Complex Site</p></footer>
+<script>
+// 大数据表格（30行）
+var rows = document.getElementById('rows');
+var feed = document.getElementById('feed');
+var data = [];
+for (var i = 1; i <= 30; i++) {
+  data.push({id: i, title: 'Article ' + i + ': Deep dive into topic ' + i, author: 'Author ' + (i % 5), date: '2026-0' + (i % 9 + 1) + '-15'});
+  var tr = document.createElement('tr');
+  tr.innerHTML = '<td>' + i + '</td><td>' + data[i-1].title + '</td><td>' + data[i-1].author + '</td><td>' + data[i-1].date + '</td>';
+  rows.appendChild(tr);
+}
+// 卡片网格（深度嵌套）
+for (var j = 0; j < 12; j++) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = '<div class="card-head"><h3>Card ' + j + '</h3><span class="meta">meta ' + j + '</span></div>' +
+    '<p>Body content ' + j + ' with <strong>bold</strong> and <em>italic</em> and <a href="/c/' + j + '">link</a>.</p>' +
+    '<ul><li>tag a</li><li>tag b</li></ul>';
+  feed.appendChild(card);
+}
+document.getElementById('q').value = 'initial query';
+</script>
+</body></html>

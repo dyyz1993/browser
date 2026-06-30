@@ -1,0 +1,13 @@
+<!DOCTYPE html><html><body>
+<div id="t"></div>
+<script>
+var t = document.getElementById('t');
+t.innerHTML = '<table><tr><td>A1</td><td>A2</td><td>A3</td></tr></table>';
+</script>
+</body></html>
+echo "=== 最小复现：innerHTML 设置含多个 td 的表格 ==="
+cd /Users/xuyingzhou/Project/study-rust/browser-work-m71.1
+./target/release/browser render-script /tmp/innerhtml-bug.html --width 200 2>/dev/null
+echo "---"
+echo "=== 对比 Chrome ==="
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --dump-dom "file:///tmp/innerhtml-bug.html" 2>/dev/null | grep -oE '<td[^>]*>[^<]*</td>'

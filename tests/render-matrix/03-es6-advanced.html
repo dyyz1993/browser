@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html><body><div id="out"></div>
+<script>
+const out = document.getElementById('out');
+const results = [];
+// ES6: 模板字符串 + 箭头函数 + 解构 + Promise + async
+const fn = async () => {
+  const {a, b} = {a: 1, b: 2};
+  results.push(`destructure: ${a + b}`);
+  // Map/Set
+  const m = new Map([['k', 'v']]);
+  results.push('map: ' + m.get('k'));
+  // Web API
+  const te = new TextEncoder();
+  results.push('textenc: ' + te.encode('hi').length);
+  results.push('structuredClone: ' + structuredClone({x:1}).x);
+  // async/await
+  const p = await Promise.resolve(42);
+  results.push('await: ' + p);
+  out.textContent = results.join(' | ');
+};
+fn();
+</script>
+</body></html>

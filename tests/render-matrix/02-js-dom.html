@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><body>
+<div id="app">loading</div>
+<script>
+var app = document.getElementById('app');
+var data = ['Alice', 'Bob', 'Charlie'];
+app.innerHTML = '<h1>Users</h1><ul>' +
+  data.map(function(n) { return '<li>' + n + '</li>'; }).join('') +
+  '</ul>';
+app.innerHTML += '<p>Total: ' + data.length + '</p>';
+</script>
+</body></html>
