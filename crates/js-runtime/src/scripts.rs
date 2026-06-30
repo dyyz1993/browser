@@ -1256,31 +1256,66 @@ window.crypto = {
 
 // location 对象
 var __locHref = (typeof __locationHref === 'function') ? __locationHref() : 'about:blank';
-window.location = {
-    href: __locHref,
-    protocol: (__locHref.split('://')[0] || 'about') + ':',
-    host: ((__locHref.split('://')[1] || '').split('/')[0]) || '',
-    hostname: ((__locHref.split('://')[1] || '').split(':')[0].split('/')[0]) || '',
-    pathname: '/' + ((__locHref.split('://')[1] || '').split('/').slice(1).join('/')),
-    search: '', hash: '',
-    origin: (__locHref.split('://')[0] + '://' + (__locHref.split('://')[1] || '').split('/')[0]),
-    reload: function() {},
-    replace: function(u) { this.href = u; },
-    assign: function(u) { this.href = u; },
-    toString: function() { return this.href; }
-};
+function __parseLoc(href) {
+    // 区分 scheme://host (http://) 和 opaque (about:blank)
+    var colonIdx = href.indexOf(':');
+    var proto = colonIdx >= 0 ? href.slice(0, colonIdx + 1) : '';
+    var afterProto = colonIdx >= 0 ? href.slice(colonIdx + 1) : href;
+    // 去除可能的 //
+    if (afterProto.indexOf('//') === 0) afterProto = afterProto.slice(2);
+    var host = afterProto.split('/')[0] || '';
+    var hostNoPort = host.split(':')[0];
+    var pathname;
+    if (proto === 'about:') {
+        pathname = afterProto; // 'blank'
+    } else if (host) {
+        pathname = '/' + afterProto.split('/').slice(1).join('/');
+    } else {
+        pathname = '/' + afterProto;
+    }
+    return {
+        href: href,
+        protocol: proto,
+        host: host,
+        hostname: hostNoPort,
+        pathname: pathname,
+        search: '', hash: '',
+        origin: proto + (host ? '//' + host : ''),
+        reload: function() {},
+        replace: function(u) { __setLocHref(u); },
+        assign: function(u) { __setLocHref(u); },
+        toString: function() { return __locHref; }
+    };
+}
+function __setLocHref(u) {
+    __locHref = u;
+    window.location = __parseLoc(u);
+}
+window.location = __parseLoc(__locHref);
 
 // history API（docsify 路由需要 pushState/replaceState）
-window.history = {
-    length: 1,
-    state: null,
-    pushState: function(state, title, url) { this.state = state; if (url) window.location.href = url; },
-    replaceState: function(state, title, url) { this.state = state; },
-    back: function() {},
-    forward: function() {},
-    go: function(n) {},
-    scrollRestoration: 'auto'
-};
+// length 是函数（对齐 boa navigation_shim：history.length() 返回栈深度）
+window.history = (function() {
+    var stack = [__locHref];
+    var state = null;
+    return {
+        length: function() { return stack.length; },
+        get state() { return state; },
+        pushState: function(s, title, url) {
+            state = s;
+            if (url) { stack.push(url); __setLocHref(url); }
+            else { stack.push(stack[stack.length-1]); }
+        },
+        replaceState: function(s, title, url) {
+            state = s;
+            if (url) { stack[stack.length-1] = url; __setLocHref(url); }
+        },
+        back: function() { if (stack.length > 1) { stack.pop(); __setLocHref(stack[stack.length-1]); } },
+        forward: function() {},
+        go: function(n) {},
+        scrollRestoration: 'auto'
+    };
+})();
 
 // document 占位（完整 document 在 document shim 里填充）
 window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
@@ -1464,16 +1499,132 @@ window.matchMedia = function(query) {
     return { matches: false, media: query, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){} };
 };
 
-// Event 构造器（提前定义，XHR shim 依赖它）
-if (typeof Event !== 'function') {
-    window.Event = function(type, opts) { this.type = type; this.target = null; this.currentTarget = null; };
-    window.Event.prototype.preventDefault = function() {};
-    window.Event.prototype.stopPropagation = function() {};
+// Event 构造器（强制覆盖——QuickJS 原生 Event 不设 bubbles/cancelable，框架依赖）
+// 不用 if(typeof) 判断，直接覆盖确保 opts.bubbles 生效。
+window.Event = function(type, opts) {
+    this.type = type;
+    this.bubbles = !!(opts && opts.bubbles);
+    this.cancelable = !!(opts && opts.cancelable);
+    this.target = null;
+    this.currentTarget = null;
+    this.defaultPrevented = false;
+    this.timeStamp = Date.now();
+};
+window.Event.prototype.preventDefault = function() { this.defaultPrevented = true; };
+window.Event.prototype.stopPropagation = function() {};
+window.Event.prototype.stopImmediatePropagation = function() {};
+window.CustomEvent = function(type, opts) { Event.call(this, type, opts); this.detail = (opts && opts.detail) || null; };
+window.CustomEvent.prototype = Object.create(window.Event.prototype);
+
+// === M71.1: 补齐 QuickJS 缺失的 Web API（纯 JS polyfill，爬虫场景够用）===
+
+// structuredClone：深拷贝（JSON 实现，够用于普通对象/数组）
+if (typeof structuredClone !== 'function') {
+    window.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
 }
-if (typeof CustomEvent !== 'function') {
-    window.CustomEvent = function(type, opts) { Event.call(this, type); this.detail = (opts && opts.detail) || null; };
-    window.CustomEvent.prototype = Object.create(window.Event.prototype);
+
+// TextEncoder/TextDecoder（UTF-8，简化实现——爬虫场景不真正编码字节，
+// 但 length/content 与原文一致，满足框架初始化检查）
+if (typeof TextEncoder !== 'function') {
+    window.TextEncoder = function() { this.encoding = 'utf-8'; };
+    window.TextEncoder.prototype.encode = function(str) {
+        str = str == null ? '' : String(str);
+        // 返回伪 Uint8Array（length 正确，内容为 charCode）
+        var arr = [];
+        for (var i = 0; i < str.length; i++) { arr.push(str.charCodeAt(i) & 0xff); }
+        arr.encoding = 'utf-8';
+        return arr;
+    };
+    window.TextEncoder.prototype.encodeInto = function(str, dst) {
+        var e = this.encode(str);
+        for (var i = 0; i < e.length && i < dst.length; i++) { dst[i] = e[i]; }
+        return { read: e.length, written: Math.min(e.length, dst.length) };
+    };
 }
+if (typeof TextDecoder !== 'function') {
+    window.TextDecoder = function(label) { this.encoding = (label || 'utf-8').toLowerCase(); };
+    window.TextDecoder.prototype.decode = function(bytes) {
+        if (!bytes) return '';
+        if (typeof bytes === 'string') return bytes;
+        // 伪解码：把 charCode 转回字符
+        var s = '';
+        var len = bytes.length || 0;
+        for (var i = 0; i < len; i++) { s += String.fromCharCode(bytes[i]); }
+        return s;
+    };
+}
+// TextEncoderStream / TextDecoderStream（流式编码，框架特性检测用）
+if (typeof TextEncoderStream !== 'function') {
+    window.TextEncoderStream = function() { this.encoding = 'utf-8'; this.readable = { locked: false }; };
+}
+if (typeof TextDecoderStream !== 'function') {
+    window.TextDecoderStream = function(label) { this.encoding = (label || 'utf-8').toLowerCase(); this.readable = { locked: false }; };
+}
+
+// Blob（构造器：存 size/type，爬虫不真正读内容）
+if (typeof Blob !== 'function') {
+    window.Blob = function(parts, opts) {
+        var size = 0;
+        if (parts) { for (var i = 0; i < parts.length; i++) { size += (parts[i] && parts[i].length) ? parts[i].length : String(parts[i]).length; } }
+        this.size = size;
+        this.type = (opts && opts.type) || '';
+    };
+    window.Blob.prototype.text = function() { return Promise.resolve(''); };
+    window.Blob.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+}
+
+// Headers（大小写不敏感的 get/set/append）
+if (typeof Headers !== 'function') {
+    window.Headers = function(init) {
+        var store = {};
+        function norm(k) { return String(k).toLowerCase(); }
+        this.has = function(k) { return norm(k) in store; };
+        this.get = function(k) { var v = store[norm(k)]; return v !== undefined ? v : null; };
+        this.set = function(k, v) { store[norm(k)] = String(v); };
+        this.append = function(k, v) {
+            var n = norm(k);
+            if (n in store) { store[n] = store[n] + ', ' + v; } else { store[n] = String(v); }
+        };
+        this.delete = function(k) { delete store[norm(k)]; };
+        this.forEach = function(cb) { for (var k in store) { cb(store[k], k, this); } };
+        if (init) {
+            if (typeof init.forEach === 'function') { init.forEach(function(v, k) { this.append(k, v); }.bind(this)); }
+            else { for (var k in init) { this.append(k, init[k]); } }
+        }
+    };
+}
+// FormData（key-value 表单数据）
+if (typeof FormData !== 'function') {
+    window.FormData = function() {
+        var store = {};
+        this.append = function(k, v) {
+            if (!(k in store)) { store[k] = []; }
+            store[k].push(String(v));
+        };
+        this.get = function(k) { return (k in store && store[k].length) ? store[k][0] : null; };
+        this.getAll = function(k) { return store[k] || []; };
+        this.has = function(k) { return k in store; };
+        this.set = function(k, v) { store[k] = [String(v)]; };
+        this.delete = function(k) { delete store[k]; };
+        this.forEach = function(cb) { for (var k in store) { for (var i = 0; i < store[k].length; i++) { cb(store[k][i], k, this); } } };
+    };
+}
+
+// document.createElementNS：存 namespaceURI + 创建元素（tagName 大写）
+document.createElementNS = function(ns, tag) {
+    var el = document.createElement(tag);
+    if (el && typeof ns === 'string') { el.namespaceURI = ns; }
+    return el;
+};
+
+// Node 常量（框架常用 nodeType 判断）
+window.Node = window.Node || {};
+window.Node.ELEMENT_NODE = 1;
+window.Node.TEXT_NODE = 3;
+window.Node.COMMENT_NODE = 8;
+window.Node.DOCUMENT_NODE = 9;
+window.Node.DOCUMENT_FRAGMENT_NODE = 11;
+window.Node.DOCUMENT_POSITION_CONTAINED_BY = 16;
 
 undefined;
 "#;
@@ -1574,7 +1725,7 @@ Element.prototype.cloneNode = function(deep) {
     return copy;
 };
 Object.defineProperty(Element.prototype, 'tagName', {
-    get: function() { return __getTag(this.__nodeId); },
+    get: function() { return String(__getTag(this.__nodeId)).toUpperCase(); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'textContent', {
@@ -1614,6 +1765,12 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
 Object.defineProperty(Element.prototype, 'id', {
     get: function() { return __getAttr(this.__nodeId, 'id') || ''; },
     set: function(v) { __setAttr(this.__nodeId, 'id', String(v)); },
+    enumerable: true, configurable: true
+});
+// href 属性反射（a/area/link 标签用，爬虫 docsify sidebar sort 依赖）
+Object.defineProperty(Element.prototype, 'href', {
+    get: function() { return __getAttr(this.__nodeId, 'href') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'href', String(v)); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'children', {
@@ -1791,13 +1948,36 @@ Element.prototype.getBoundingClientRect = function() {
 Element.prototype.focus = function() {};
 Element.prototype.blur = function() {};
 Element.prototype.scrollIntoView = function() {};
-// dataset（框架常用 data-* 属性）—— 简化版，不用 Proxy
+// dataset（框架常用 data-* 属性）——Proxy 动态反射到 data-* attribute。
+// dataset.fooBar → __getAttr(nodeId, 'data-foo-bar')，写同步 __setAttr。
+// 不依赖枚举所有属性（QuickJS bridge 无列属性 API），惰性按 key 反射。
 Object.defineProperty(Element.prototype, 'dataset', {
     get: function() {
-        if (!this.__dataset) {
-            this.__dataset = {};
+        var self = this;
+        var cache = {};
+        // 驼峰 ↔ kebab：fooBar ↔ data-foo-bar
+        function toKebab(k) { return 'data-' + String(k).replace(/([A-Z])/g, function(_, c) { return '-' + c.toLowerCase(); }); }
+        function toCamel(k) { return k.slice(5).replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); }); }
+        try {
+            return new Proxy(cache, {
+                get: function(t, k) {
+                    if (k in t) return t[k];
+                    if (typeof k !== 'string') return undefined;
+                    var v = __getAttr(self.__nodeId, toKebab(k));
+                    return (v === null || v === undefined) ? undefined : v;
+                },
+                set: function(t, k, v) {
+                    if (typeof k === 'string') {
+                        __setAttr(self.__nodeId, toKebab(k), String(v));
+                        t[k] = String(v);
+                    }
+                    return true;
+                }
+            });
+        } catch(e) {
+            // 无 Proxy——返回空对象（爬虫读场景少）
+            return cache;
         }
-        return this.__dataset;
     },
     enumerable: true, configurable: true
 });
@@ -2733,7 +2913,7 @@ var self = globalThis;
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod tests {
     use super::*;
     use crate::bridge::body_text_content;
@@ -2894,7 +3074,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod m69_proto_rel_diag {
     use super::resolve_script_url;
 

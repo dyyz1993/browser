@@ -47,14 +47,14 @@ pub mod ws_shim;
 pub mod xhr_shim;
 
 pub use bridge::{
-    current_base_url, current_cookie_jar, drain_captured_network_events,
-    ensure_cookie_jar, install_current, install_navigation,
-    install_shared, install_shared_with_base, install_storage, is_network_idle, pending_requests,
-    pending_timers, resolve_url, CapturedNetworkEvent, SharedTree, TreeGuard,
+    current_base_url, current_cookie_jar, drain_captured_network_events, ensure_cookie_jar,
+    install_current, install_navigation, install_shared, install_shared_with_base, install_storage,
+    is_network_idle, pending_requests, pending_timers, resolve_url, CapturedNetworkEvent,
+    SharedTree, TreeGuard,
 };
 // M71.1: bridge::install 是 boa 专属（注册所有 NativeFn bridge 函数）。
 #[cfg(feature = "boa")]
-pub use bridge::{install as install_bridge, drain_due_timer_callbacks};
+pub use bridge::{drain_due_timer_callbacks, install as install_bridge};
 #[cfg(feature = "boa")]
 pub use image_shim::install_image;
 #[cfg(feature = "boa")]
