@@ -1153,8 +1153,13 @@ fn qs_all(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 
 fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     let sel = sel.trim();
-    if let Some(tag) = sel.strip_prefix('#') {
-        return find_by_id(tree, tag);
+    // id 选择器短路：仅当选择器是纯 id（#xxx，不含空格/组合器）时才走快路径。
+    // 否则 "#dyn1 .p" 这种后代选择器会被误判：strip_prefix('#')="dyn1 .p"
+    // 再当 id 去找，必然落空。M71.3 GAP-I。
+    if !sel.contains(' ') {
+        if let Some(tag) = sel.strip_prefix('#') {
+            return find_by_id(tree, tag);
+        }
     }
     let segments: Vec<&str> = sel
         .split_whitespace()
@@ -1183,12 +1188,16 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
 /// M62: find_all_by_selector —— 返回所有匹配节点（querySelectorAll 后端）。
 fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
     let sel = sel.trim();
-    if let Some(tag) = sel.strip_prefix('#') {
-        // id 选择器最多一个
-        if let Some(id) = find_by_id(tree, tag) {
-            return vec![id];
+    // id 选择器短路：仅当选择器是纯 id（不含空格）时走快路径。
+    // 含空格的复合选择器（如 "#dyn1 .p"）不能走 id 快路径，否则误判。M71.3 GAP-I。
+    if !sel.contains(' ') {
+        if let Some(tag) = sel.strip_prefix('#') {
+            // id 选择器最多一个
+            if let Some(id) = find_by_id(tree, tag) {
+                return vec![id];
+            }
+            return vec![];
         }
-        return vec![];
     }
     let segments: Vec<&str> = sel
         .split_whitespace()
@@ -3214,5 +3223,87 @@ mod m69_dynamic_script_tests {
         enqueue_dynamic_script("second".to_string());
         let drained = drain_dynamic_scripts();
         assert_eq!(drained, vec!["second"]);
+    }
+}
+
+/// M71.3 GAP-I 回归测试：querySelector/querySelectorAll 对后代选择器（含空格）
+/// 的处理。纯函数测试，不依赖任何 JS 引擎 feature。
+/// 之前 bug：以 `#` 开头的复合选择器（如 `#dyn1 .p`）被 strip_prefix('#')
+/// 误判为纯 id 选择器，导致 `find_by_id("dyn1 .p")` 落空。
+#[cfg(test)]
+mod gap_i_descendant_selector_tests {
+    use super::*;
+    use browser_dom::{NodeData, Tree};
+
+    /// 构造一棵树：body > div#container > p.child，用于测后代选择器。
+    fn build_tree() -> Tree {
+        let mut t = Tree::new();
+        // root(0) > html(1) > body(2)
+        let html = t.insert(None, NodeData::Element {
+            tag: "html".into(),
+            attrs: vec![],
+        });
+        let body = t.insert(Some(html), NodeData::Element {
+            tag: "body".into(),
+            attrs: vec![],
+        });
+        // body > div#container
+        let container = t.insert(Some(body), NodeData::Element {
+            tag: "div".into(),
+            attrs: vec![("id".into(), "container".into())],
+        });
+        // div#container > p.child
+        t.insert(Some(container), NodeData::Element {
+            tag: "p".into(),
+            attrs: vec![("class".into(), "child".into())],
+        });
+        // body > p.lonely （不在 #container 内，用于验证后代约束差异）
+        t.insert(Some(body), NodeData::Element {
+            tag: "p".into(),
+            attrs: vec![("class".into(), "lonely".into())],
+        });
+        t
+    }
+
+    #[test]
+    fn pure_id_selector_finds_node() {
+        let t = build_tree();
+        let found = find_by_selector(&t, "#container");
+        assert!(found.is_some(), "纯 id 选择器 #container 应找到节点");
+    }
+
+    #[test]
+    fn class_selector_finds_all_matching() {
+        let t = build_tree();
+        let found = find_all_by_selector(&t, ".child");
+        assert_eq!(found.len(), 1, ".class 应匹配 1 个");
+    }
+
+    /// 核心回归：`#id .class`（以 # 开头的后代选择器）之前返回空，现在应匹配。
+    #[test]
+    fn descendant_selector_starting_with_hash_finds_child() {
+        let t = build_tree();
+        // GAP-I bug: 这个曾因 strip_prefix('#') 误判为纯 id 而返回空。
+        let found = find_all_by_selector(&t, "#container .child");
+        assert!(
+            !found.is_empty(),
+            "后代选择器 #container .child 应找到 .child 节点（GAP-I 修复前返回空）"
+        );
+    }
+
+    /// querySelector（单个）版本的回归。
+    #[test]
+    fn descendant_selector_qs_starting_with_hash_finds_child() {
+        let t = build_tree();
+        let found = find_by_selector(&t, "#container .child");
+        assert!(found.is_some(), "querySelector(#container .child) 应找到节点");
+    }
+
+    /// 静态场景也覆盖：`div .child` 这种 tag 开头的后代选择器应正常工作。
+    #[test]
+    fn descendant_selector_tag_prefix_finds_child() {
+        let t = build_tree();
+        let found = find_all_by_selector(&t, "div .child");
+        assert!(!found.is_empty(), "div .child 后代选择器应找到节点");
     }
 }
