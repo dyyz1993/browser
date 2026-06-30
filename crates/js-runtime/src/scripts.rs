@@ -1836,8 +1836,34 @@ Element.prototype.addEventListener = function(type, cb) {
     this.__listeners[type].push(cb);
 };
 Element.prototype.cloneNode = function(deep) {
-    var copy = __makeElement(__createEl(String(__getTag(this.__nodeId) || 'div')));
-    if (!copy) return null;
+    var tag = String(__getTag(this.__nodeId) || 'div');
+    var newId = __createEl(tag);
+    if (newId < 0) return null;
+    var copy = __makeElement(newId);
+    // 复制文本内容（文本子节点）
+    try {
+        var txt = __getText(this.__nodeId);
+        if (txt) __setText(newId, String(txt));
+    } catch(e) {}
+    // 深拷贝：递归克隆子元素（重建子树）
+    if (deep !== false) {
+        try {
+            var cs = __children(this.__nodeId);
+            if (cs) {
+                var ids = cs.split(',').filter(function(s) { return s; });
+                for (var i = 0; i < ids.length; i++) {
+                    var cid = parseInt(ids[i], 10);
+                    var ctag = __getTag(cid);
+                    if (ctag && ctag !== '__text__') {
+                        var childCopy = __makeElement(cid) ? __makeElement(cid).cloneNode(true) : null;
+                        if (childCopy) {
+                            try { __appendChild(newId, childCopy.__nodeId); } catch(e2) {}
+                        }
+                    }
+                }
+            }
+        } catch(e3) {}
+    }
     return copy;
 };
 Object.defineProperty(Element.prototype, 'tagName', {
