@@ -205,6 +205,18 @@
       <option value="5" selected>5 pages</option>
       <option value="10">10 pages</option>
     </select>
+    <!-- Map/Crawl: depth control -->
+    <select id="map-depth" style="display:none">
+      <option value="0">depth 0 (root only)</option>
+      <option value="1" selected>depth 1 (+ children)</option>
+      <option value="2">depth 2 (+ grandchildren)</option>
+      <option value="3">depth 3</option>
+    </select>
+    <select id="crawl-depth" style="display:none">
+      <option value="0">depth 0 (root only)</option>
+      <option value="1" selected>depth 1 (+ children)</option>
+      <option value="2">depth 2</option>
+    </select>
     <button id="btn" onclick="onAction()">🚀 Scrape</button>
   </div>
 
@@ -284,26 +296,25 @@ function switchTab(tab) {
   var fmtSel = document.getElementById('format');
   var fmtChips = document.getElementById('fmt-chips');
   var crawlMax = document.getElementById('crawl-max');
+  var mapDepth = document.getElementById('map-depth');
+  var crawlDepth = document.getElementById('crawl-depth');
   var btn = document.getElementById('btn');
   var out = document.getElementById('output');
+  // hide all optional controls first
+  fmtSel.style.display = 'none'; fmtChips.style.display = 'none';
+  crawlMax.style.display = 'none'; mapDepth.style.display = 'none'; crawlDepth.style.display = 'none';
   if (tab === 'scrape') {
-    fmtSel.style.display = '';
-    fmtChips.style.display = '';
-    crawlMax.style.display = 'none';
+    fmtSel.style.display = ''; fmtChips.style.display = '';
     btn.textContent = '🚀 Scrape';
     out.textContent = 'Enter a URL and click "Scrape"';
     out.className = 'placeholder';
   } else if (tab === 'map') {
-    fmtSel.style.display = 'none';
-    fmtChips.style.display = 'none';
-    crawlMax.style.display = 'none';
+    mapDepth.style.display = '';
     btn.textContent = '🗺️ Map';
-    out.textContent = 'Enter a site URL and click "Map" to list all same-domain links';
+    out.textContent = 'Enter a site URL and click "Map" to recursively discover all same-domain pages';
     out.className = 'placeholder';
   } else if (tab === 'crawl') {
-    fmtSel.style.display = 'none';
-    fmtChips.style.display = 'none';
-    crawlMax.style.display = '';
+    crawlMax.style.display = ''; crawlDepth.style.display = '';
     btn.textContent = '🕷️ Crawl';
     out.textContent = 'Enter a site URL and click "Crawl" to recursively fetch same-domain pages';
     out.className = 'placeholder';
@@ -533,10 +544,11 @@ function fillUrl(url) {
   document.getElementById('url').focus();
 }
 
-// ── Map：列出站点同域所有可发现链接 ──
+// ── Map：递归发现站点同域所有可达 URL ──
 async function map() {
   var urlVal = document.getElementById('url').value.trim();
   if (!urlVal) { document.getElementById('url').focus(); return; }
+  var depth = parseInt(document.getElementById('map-depth').value, 10);
   var btn = document.getElementById('btn');
   var out = document.getElementById('output');
   var toolbar = document.getElementById('out-toolbar');
@@ -545,7 +557,7 @@ async function map() {
   var timeEl = document.getElementById('meta-timing');
 
   btn.disabled = true; btn.className = 'loading'; btn.textContent = 'Mapping...';
-  status.textContent = 'Mapping links...';
+  status.textContent = 'Recursively discovering links...';
   out.style.display = ''; out.className = ''; out.textContent = '';
   toolbar.style.display = 'none';
   document.getElementById('output-rendered').style.display = 'none';
@@ -556,13 +568,12 @@ async function map() {
     var resp = await fetch('/api/map', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: urlVal }),
+      body: JSON.stringify({ url: urlVal, depth: depth }),
     });
     var data = await resp.json();
     var links = data.links || [];
     _lastContent = links.map(function(l) { return l.url; }).join('\n');
 
-    // 渲染为可点击链接列表
     if (data.error) {
       out.textContent = 'Error: ' + data.error;
       status.textContent = 'Error';
@@ -581,12 +592,11 @@ async function map() {
       html += '</ul>';
       out.innerHTML = html;
       status.textContent = 'Done';
-      sizeEl.textContent = links.length + ' links';
+      sizeEl.textContent = links.length + ' links at depth ' + depth;
     }
     var timing = data._timing || {};
     var parts = [];
     if (timing.total_ms) parts.push('total ' + timing.total_ms + 'ms');
-    if (timing.js_ms && timing.js_ms > 10) parts.push('js ' + timing.js_ms + 'ms');
     timeEl.textContent = parts.join(' · ') || (Date.now() - t0) + 'ms';
     var badge = document.getElementById('meta-source');
     if (badge) badge.textContent = data._source === 'backend-spa' ? 'SPA ✓' : '';
@@ -598,11 +608,12 @@ async function map() {
   }
 }
 
-// ── Crawl：递归爬取同域多页 ──
+// ── Crawl：递归 Map → 并发 scrape 所有页面 ──
 async function crawl() {
   var urlVal = document.getElementById('url').value.trim();
   if (!urlVal) { document.getElementById('url').focus(); return; }
   var maxPages = parseInt(document.getElementById('crawl-max').value, 10) || 5;
+  var depth = parseInt(document.getElementById('crawl-depth').value, 10);
   var btn = document.getElementById('btn');
   var out = document.getElementById('output');
   var toolbar = document.getElementById('out-toolbar');
@@ -619,11 +630,11 @@ async function crawl() {
   var t0 = Date.now();
 
   try {
-    var resp = await fetch('/api/crawl', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: urlVal, max: maxPages }),
-    });
+	    var resp = await fetch('/api/crawl', {
+	      method: 'POST',
+	      headers: { 'Content-Type': 'application/json' },
+	      body: JSON.stringify({ url: urlVal, max: maxPages, depth: depth }),
+	    });
     var data = await resp.json();
     var pages = data.pages || [];
     // 拼接所有页 markdown 作为可复制内容

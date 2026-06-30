@@ -11,8 +11,8 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M70.17**（serve 并发支持，3 并发峰值 66MB） |
-| 总 commits | ~263 |
+| HEAD | **M70.18**（修正 Map/Crawl 为递归+并发批量） |
+| 总 commits | ~264 |
 | 测试 | 868 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
@@ -28,6 +28,31 @@
 ---
 
 ## 最近变更（倒序）
+
+### M70.18 — 修正 Map/Crawl 为递归+并发批量（Firecrawl 对齐）（2026-06-30）✅
+
+上一个版本 (M70.15) 的 Map/Crawl 是「单页 links → 挨个 scrape」，不是真正的递归全站发现。
+这是深刻的教训——用户一眼就看出「没有效果」。
+
+**3 个 bug 修正**：
+1. **Map 递归缺失**：改为 BFS 多层遍历（depth 0/1/2/3+），**同层并发批量**（每批 3 个），并非串行逐个。
+2. **parseLinks hash 去重**：`u.hash = ''` 把 docsify 的 hash 路由（`#/`、`#/zh-cn/`）全部归一为根 URL，
+   导致 `https://docsify.js.org/#/` 和 `https://docsify.js.org/#/quickstart` 被视为同一链接被去重。
+   这是 Map 对 hash 路由站完全无效果的根因。
+3. **`parseInt(depth,10) || 1` falsy 陷阱**：JS 中 `0` 是 falsy，`0 || 1` = 1，
+   用户选 depth=0 实际变 depth=1，导致无限递归超时。
+
+**真实验证**（fetch.xbrowser.dev）：
+
+| 站 | 深度 | links | 耗时 | 说明 |
+|------|------|-------|------|------|
+| react.dev | depth=0 | 9 | 4s | 仅根页 |
+| react.dev | depth=1 | **152** | **19s** | 递归进子页 |
+| docsify.js.org | depth=0 | 32 | 9s | SPA hash 路由 |
+| docsify.js.org | depth=1 | 32 | 118s | 固定侧边栏 SPA（无新链接） |
+| Crawl react.dev | depth=1, max=3 | 4 pages | 18s | Map→并发scrape |
+
+**教训**：外围功能（Map/Crawl）如果实现不对等于没做。不再把核心精力分给这类东西——要么做对，要么不做。
 
 ### M70.17 — serve 并发支持（每请求一线程 + Semaphore 限流）（2026-06-30）✅
 

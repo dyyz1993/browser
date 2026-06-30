@@ -145,8 +145,8 @@ function parseLinks(content, baseUrl) {
     try {
       const u = new URL(urlStr);
       if (baseHost && u.hostname !== baseHost) continue;
-      // 去重 + 去 hash fragment
-      u.hash = '';
+      // 保留 hash（docsify 等 hash 路由站点依赖它区分页面）。
+      // 爬取时才去 hash（后端 serve 会在 fetch 阶段去除）。
       const key = u.toString();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -154,6 +154,65 @@ function parseLinks(content, baseUrl) {
     } catch (e) { /* 无效 URL 跳过 */ }
   }
   return links;
+}
+
+// ── 递归探索同域 URL（BFS，深度控制，并发批量）──
+// 从 targetUrl 开始，逐层提取所有同域链接。depth=1 只根页+子页。
+// 同层链接并发批量（每批 3 个），防后端过载。
+async function mapRecursive(env, targetUrl, depth, max) {
+  const rootUrl = targetUrl.replace(/\/$/, '');
+  let baseHost = '';
+  try { baseHost = new URL(rootUrl).hostname; } catch (e) {}
+
+  const visited = new Set([rootUrl]);
+  const discovered = [];
+  // 按层处理：先根页（depth=0），再子页（depth=1），再孙页（depth=2）……
+  let currentLayer = [rootUrl];
+  let currentDepth = 0;
+
+  while (currentLayer.length > 0 && currentDepth <= depth) {
+    // 并发批量处理当前层所有 URL（每批 3 个）
+    const BATCH = 3;
+    const nextLayer = [];
+
+    for (let i = 0; i < currentLayer.length; i += BATCH) {
+      const batch = currentLayer.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        batch.map(url => scrapePage(env, url, 'links'))
+      );
+
+      for (let j = 0; j < results.length; j++) {
+        const r = results[j];
+        if (r.status !== 'fulfilled') continue;
+
+        const links = parseLinks(r.value.content || '', batch[j]);
+        if (!links.length) continue;
+
+        for (const l of links) {
+          if (discovered.length >= max) break;
+          const cleanUrl = l.url.replace(/\/$/, '');
+          try {
+            const u = new URL(cleanUrl);
+            if (u.hostname !== baseHost) continue;
+          } catch (e) { continue; }
+          if (visited.has(cleanUrl)) continue;
+          visited.add(cleanUrl);
+          discovered.push(l);
+          // 只在下层深度时才加入下一轮（避免 depth 全满时无用入队）
+          if (currentDepth + 1 <= depth) {
+            nextLayer.push(l.url);
+          }
+        }
+        if (discovered.length >= max) break;
+      }
+      if (discovered.length >= max) break;
+    }
+
+    currentLayer = nextLayer;
+    currentDepth++;
+  }
+
+  return { discovered, all: discovered.map(l => l.url) };
 }
 
 export default {
@@ -178,73 +237,56 @@ export default {
       } catch (e) {
         return json({ error: e.message, content: "" }, 500);
       }
-    }
+	    }
 
-    // ── Map API（站点地图：列出同域所有可发现链接）──
-    // 纯复用 scrape + format=links，Worker 端解析+同域过滤。
+	    // ── Map API（递归发现同域所有可达 URL）──
     if (url.pathname === "/api/map" && request.method === "POST") {
       try {
-        const { url: rawUrl } = await request.json();
+        const { url: rawUrl, depth } = await request.json();
         const targetUrl = normalizeUrl(rawUrl);
         if (!targetUrl) return json({ error: 'URL is required', links: [] }, 400);
+        const d = Math.max(0, Math.min(parseInt(depth ?? 1, 10), 5));  // 0-5 级深度
         const t0 = Date.now();
-        const result = await scrapePage(env, targetUrl, 'links');
-        const links = parseLinks(result.content || '', targetUrl);
+        const { discovered } = await mapRecursive(env, targetUrl, d, 500);
         return json({
           url: targetUrl,
-          title: result.title || '',
-          links,
-          count: links.length,
-          _timing: { total_ms: Date.now() - t0, ...(result._timing || {}) },
-          _source: result._source || '',
+          links: discovered,
+          count: discovered.length,
+          _timing: { total_ms: Date.now() - t0 },
+          _source: 'backend-spa',
         });
       } catch (e) {
         return json({ error: e.message, links: [] }, 500);
       }
     }
 
-    // ── Crawl API（递归爬取：Map 根页 → 并发抓取同域子页）──
-    // Worker 层编排，后端只做单页渲染。受 Cloudflare 子请求上限保护。
+    // ── Crawl API（递归 Map → 并发 scrape 所有页面）──
     if (url.pathname === "/api/crawl" && request.method === "POST") {
       try {
-        const { url: rawUrl, max } = await request.json();
+        const { url: rawUrl, max, depth } = await request.json();
         const targetUrl = normalizeUrl(rawUrl);
         if (!targetUrl) return json({ error: 'URL is required', pages: [] }, 400);
-        // 安全上限：免费版 Worker 子请求 50/请求，留余量。
         const maxPages = Math.min(Math.max(parseInt(max, 10) || 5, 1), 10);
+        const d = Math.max(0, Math.min(parseInt(depth ?? 1, 10), 3));
         const t0 = Date.now();
 
-        // 1) Map 根页拿同域链接
-        const mapResult = await scrapePage(env, targetUrl, 'links');
-        const rootUrl = targetUrl.replace(/\/$/, '');  // 规范化去尾斜杠用于去重
-        const links = parseLinks(mapResult.content || '', targetUrl)
-          .filter(l => l.url.replace(/\/$/, '') !== rootUrl)  // 去掉根页自身（已单独抓）
-          .slice(0, maxPages);
+        // 1) 递归 Map 发现全站 URL
+        const rootUrl = targetUrl.replace(/\/$/, '');
+        const { discovered } = await mapRecursive(env, targetUrl, d, maxPages);
+        const allUrls = [rootUrl, ...discovered.map(l => l.url)];
 
-        // 2) 根页自身也算一页
+        // 2) 并发抓所有页面（每批 3 个）
         const pages = [];
-        const visited = new Set([rootUrl]);
-        const rootPage = await scrapePage(env, targetUrl, 'markdown');
-        if (rootPage.content) {
-          pages.push({ url: targetUrl, title: rootPage.title || '', content: rootPage.content });
-        }
-
-        // 3) 分批并发抓取子页（每批 3 个，防后端过载）
         const BATCH = 3;
-        for (let i = 0; i < links.length; i += BATCH) {
-          const batch = links.slice(i, i + BATCH).filter(l => {
-            const k = l.url.replace(/\/$/, '');
-            if (visited.has(k)) return false;
-            visited.add(k);
-            return true;
-          });
+        for (let i = 0; i < allUrls.length; i += BATCH) {
+          const batch = allUrls.slice(i, i + BATCH);
           const results = await Promise.allSettled(
-            batch.map(l => scrapePage(env, l.url, 'markdown'))
+            batch.map(u => scrapePage(env, u, 'markdown'))
           );
           for (let j = 0; j < results.length; j++) {
             const r = results[j];
             if (r.status === 'fulfilled' && r.value.content) {
-              pages.push({ url: batch[j].url, title: r.value.title || batch[j].text, content: r.value.content });
+              pages.push({ url: batch[j], title: r.value.title || '', content: r.value.content });
             }
           }
         }
