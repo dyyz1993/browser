@@ -1,50 +1,22 @@
 /**
  * Cloudflare Worker 入口 — browser-fetch API
  *
- * 架构：
- *   Workers fetch(url) → 拿 HTML → wasm 解析+提取 → 返回 markdown/html/text/links
+ * 架构：所有请求转发到 NAS 后端（browser serve）做完整 SPA 渲染。
+ * CF 边缘只做编排 + 缓存，不做静态提取兜底（curl 就能做到的没意义）。
  *
  * API:
  *   GET  /            → 前端 UI 页面
  *   POST /api/scrape  → { url, format } → { title, content }
+ *   POST /api/map     → { url, depth }  → { links[] }  递归发现同域 URL
+ *   POST /api/crawl   → { url, max, depth } → { pages[] }  递归 Map + 并发 scrape
  */
 
-import init, {
-  extract_markdown, extract_text, extract_links,
-  extract_html, extract_title,
-  extract_images, extract_highlights, extract_branding,
-} from "../wasm/worker_wasm.js";
-import wasmModule from "../wasm/worker_wasm_bg.wasm";
 import HTML_PAGE from "./ui.html";
-
-let wasmInitialized = false;
 
 // 简单内存缓存（URL+格式 → 结果，60s TTL）
 const responseCache = new Map();
 // M70.14: 缓存 TTL——后端渲染结果缓存 5 分钟
 const CACHE_TTL = 300_000;  // 5 min
-
-async function ensureWasm() {
-  if (!wasmInitialized) {
-    // Workers 环境用模块导入的 wasm，不走 URL fetch
-    await init(wasmModule);
-    wasmInitialized = true;
-  }
-}
-
-// 根据 format 分发到对应的 wasm 提取函数
-function extractStatic(html, baseUrl, format) {
-  switch (format) {
-    case "markdown": return extract_markdown(html, baseUrl);
-    case "text": return extract_text(html, baseUrl);
-    case "links": return extract_links(html, baseUrl);
-    case "html": return extract_html(html, baseUrl);
-    case "images": return extract_images(html, baseUrl);
-    case "highlights": return extract_highlights(html, baseUrl);
-    case "branding": return extract_branding(html, baseUrl);
-    default: return extract_markdown(html, baseUrl);
-  }
-}
 
 // ── 前端 UI 页面：从 text blob 加载 ───────────────────
 // 模板在 ui.html（wrangler.toml text_blobs 绑定为 UI_HTML）
@@ -82,32 +54,8 @@ async function callBackend(env, targetUrl, format) {
   return { ok: true, result: backendResult };
 }
 
-// wasm 静态提取兜底（后端不可用时）。返回 { ok, result }。
-async function callWasmFallback(targetUrl, format) {
-  const t0 = Date.now();
-  const resp = await fetch(targetUrl, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    },
-  });
-  if (!resp.ok) return { ok: false, result: null };
-  const html = await resp.text();
-  await ensureWasm();
-  const staticContent = extractStatic(html, targetUrl, format);
-  const staticTitle = extract_title(html);
-  const t2 = Date.now();
-  return {
-    ok: true,
-    result: {
-      url: targetUrl, title: staticTitle, content: staticContent, format,
-      _timing: { fetch_ms: t2 - t0, wasm_ms: 0, total_ms: t2 - t0 },
-      _source: 'wasm-fallback',
-    },
-  };
-}
-
-// 单页渲染（带缓存）：先查缓存，命中则返回；否则后端 → wasm 兜底。
+// 单页渲染（带缓存）：先查缓存，命中则返回；否则后端渲染。
+// 后端不可用时直接报错——不做 curl+wasm 静态兜底（curl 就能做到的没意义）。
 async function scrapePage(env, targetUrl, format) {
   const cacheKey = `${targetUrl}:${format}`;
   const cached = responseCache.get(cacheKey);
@@ -122,9 +70,10 @@ async function scrapePage(env, targetUrl, format) {
       responseCache.set(cacheKey, { ts: Date.now(), data: { ...result }, backendTiming: result._timing });
       return result;
     }
+    // 后端返回错误——明确告知，不兜底
+    return { url: targetUrl, error: 'backend render failed', content: '' };
   }
-  const { ok, result } = await callWasmFallback(targetUrl, format);
-  return ok ? result : { url: targetUrl, error: 'render failed', content: '' };
+  return { url: targetUrl, error: 'backend not configured', content: '' };
 }
 
 // 解析后端 links 格式（"text → URL" 每行一条）为结构化数组。

@@ -501,14 +501,12 @@ async function scrape() {
     if (timing.js_ms && timing.js_ms > 10) parts.push('js ' + timing.js_ms + 'ms');
     if (scripts !== undefined) parts.push(scripts + ' scripts');
     timeEl.textContent = parts.join(' · ') || (ms + 'ms');
-    // 显示来源（wasm-ssr / backend-spa / wasm-only / wasm-fallback）
+    // 显示来源（后端渲染标记）
     var badge = document.getElementById('meta-source');
     if (badge) {
       var src = data._source || '';
-      if (src === 'wasm-ssr') badge.textContent = 'SSR ✓';
-      else if (src === 'backend-spa') badge.textContent = 'SPA ✓';
-      else if (src === 'wasm-only') badge.textContent = 'Static';
-      else if (src === 'wasm-fallback') badge.textContent = 'Static ⚠';
+      if (src === 'backend-spa') badge.textContent = 'SPA ✓';
+      else if (src === 'backend-ssr') badge.textContent = 'SSR ✓';
       else badge.textContent = '';
     }
     titleEl.textContent = data.title || '';
