@@ -11,8 +11,8 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M70.14**（serve HTTP API + Worker 前端 + 测试入库） |
-| 总 commits | ~260 |
+| HEAD | **M70.15**（Worker UI Map + Crawl 标签） |
+| 总 commits | ~261 |
 | 测试 | 868 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
@@ -28,6 +28,25 @@
 ---
 
 ## 最近变更（倒序）
+
+### M70.15 — Worker UI 实现 Map + Crawl 标签（2026-06-30）✅
+
+在 `fetch.xbrowser.dev` 前端实现 Firecrawl 风格的 Map/Crawl 功能（Search 不做，依赖外部 API 违背自研优先）。
+
+**设计决策：纯 Worker 端编排，零后端改动。** 爬虫是 I/O 密集型编排，CF 边缘层是正确的编排位置；
+后端（NAS serve）继续做单页 SPA 渲染。复用现有管线（AGENTS 第九章第 8 条）。
+
+- **Map**：`POST /api/map` → 复用 scrape `format=links` → 解析 `text → URL` → 同域过滤+去重 → 返回结构化链接数组。react.dev 22 links @ 890ms。
+- **Crawl**：`POST /api/crawl` → Map 根页 → 去重+并发分批（每批3）抓取子页 markdown → 汇总多页。react.dev 4 pages @ 6.8s。
+- **UI**：tab 切换（Scrape/Map/Crawl，Search 保持 disabled）、链接列表渲染（Map）、多页卡片渲染（Crawl）、crawl-max 页数控件（3/5/10）。
+- **重构**：`scrapePage`/`callBackend`/`callWasmFallback` 抽成可复用 helper（Map/Crawl/Scrape 共用）。
+
+**修复**：links 解析分隔符偏移（` → ` 是 3 字符，`slice(idx+3)` 而非 `+4`）、crawl 根页去重（visited set + 尾斜杠规范化）。
+
+**L3 验证**（fetch.xbrowser.dev 真实站点）：
+- Scrape regression: example.com markdown/html/links 全通
+- Map: react.dev 22 same-domain links, docsify.js.org SPA 渲染后 1 link
+- Crawl: react.dev 4 unique pages, 0 duplicates
 
 ### M70.14 — serve HTTP API + Cloudflare Worker 前端 + 测试入库（2026-06-30）✅
 

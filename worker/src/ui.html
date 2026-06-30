@@ -90,6 +90,30 @@
   }
   .placeholder { color: #484f58; }
 
+  /* ── Map link list ── */
+  .link-list { list-style: none; padding: 0; margin: 0; }
+  .link-list li {
+    padding: 8px 12px; border-bottom: 1px solid #21262d;
+    display: flex; align-items: baseline; gap: 8px; font-size: 13px;
+  }
+  .link-list li:last-child { border-bottom: none; }
+  .link-list .lt { color: #c9d1d9; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link-list .lu { color: #8b949e; font-size: 11px; min-width: 0; flex-shrink: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link-list a { color: #58a6ff; text-decoration: none; }
+  .link-list a:hover { text-decoration: underline; }
+
+  /* ── Crawl page cards ── */
+  .crawl-card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .crawl-card .ch { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .crawl-card .ct { font-size: 15px; font-weight: 600; color: #e6edf3; }
+  .crawl-card .cu { font-size: 11px; color: #8b949e; word-break: break-all; }
+  .crawl-card .cb { font-size: 13px; line-height: 1.6; color: #c9d1d9; max-height: 400px; overflow: auto; }
+  .crawl-card .cb h1, .crawl-card .cb h2, .crawl-card .cb h3 { color: #e6edf3; margin: 10px 0 4px; }
+  .crawl-card .cb a { color: #58a6ff; }
+
   /* Rendered markdown preview */
   .rendered {
     background: #161b22; border: 1px solid #30363d; border-radius: 6px;
@@ -155,10 +179,10 @@
 <div class="header">
   <div class="logo">🌐 Browser Fetch</div>
   <div class="tabs">
-    <span class="tab active">Scrape</span>
+    <span class="tab active" data-tab="scrape" onclick="switchTab('scrape')">Scrape</span>
     <span class="tab disabled" title="Coming soon">Search</span>
-    <span class="tab disabled" title="Coming soon">Map</span>
-    <span class="tab disabled" title="Coming soon">Crawl</span>
+    <span class="tab" data-tab="map" onclick="switchTab('map')">Map</span>
+    <span class="tab" data-tab="crawl" onclick="switchTab('crawl')">Crawl</span>
   </div>
 </div>
 <div class="main">
@@ -175,7 +199,13 @@
       <option value="highlights">Highlights</option>
       <option value="branding">Branding</option>
     </select>
-    <button id="btn" onclick="scrape()">🚀 Scrape</button>
+    <!-- Crawl-only: max pages control -->
+    <select id="crawl-max" style="display:none">
+      <option value="3">3 pages</option>
+      <option value="5" selected>5 pages</option>
+      <option value="10">10 pages</option>
+    </select>
+    <button id="btn" onclick="onAction()">🚀 Scrape</button>
   </div>
 
   <!-- Format quick-pick chips -->
@@ -238,6 +268,59 @@
 // ── current result data ──
 var _lastContent = '';
 var _lastFormat = 'markdown';
+var _currentTab = 'scrape';
+
+// ── Tab switching ──
+// 各 tab 的动作分发 + 输入区适配（format 选择 / crawl-max 控件可见性）。
+function switchTab(tab) {
+  if (tab === _currentTab) return;
+  _currentTab = tab;
+  // toggle tab active class
+  var tabs = document.querySelectorAll('.tab[data-tab]');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].className = tabs[i].dataset.tab === tab ? 'tab active' : 'tab';
+  }
+  // adapt input row to tab
+  var fmtSel = document.getElementById('format');
+  var fmtChips = document.getElementById('fmt-chips');
+  var crawlMax = document.getElementById('crawl-max');
+  var btn = document.getElementById('btn');
+  var out = document.getElementById('output');
+  if (tab === 'scrape') {
+    fmtSel.style.display = '';
+    fmtChips.style.display = '';
+    crawlMax.style.display = 'none';
+    btn.textContent = '🚀 Scrape';
+    out.textContent = 'Enter a URL and click "Scrape"';
+    out.className = 'placeholder';
+  } else if (tab === 'map') {
+    fmtSel.style.display = 'none';
+    fmtChips.style.display = 'none';
+    crawlMax.style.display = 'none';
+    btn.textContent = '🗺️ Map';
+    out.textContent = 'Enter a site URL and click "Map" to list all same-domain links';
+    out.className = 'placeholder';
+  } else if (tab === 'crawl') {
+    fmtSel.style.display = 'none';
+    fmtChips.style.display = 'none';
+    crawlMax.style.display = '';
+    btn.textContent = '🕷️ Crawl';
+    out.textContent = 'Enter a site URL and click "Crawl" to recursively fetch same-domain pages';
+    out.className = 'placeholder';
+  }
+  // reset output area
+  document.getElementById('out-toolbar').style.display = 'none';
+  document.getElementById('output-rendered').style.display = 'none';
+  document.getElementById('output-rendered').innerHTML = '';
+  document.getElementById('output').style.display = '';
+}
+
+// 动作分发：根据当前 tab 调用对应函数。
+function onAction() {
+  if (_currentTab === 'map') return map();
+  if (_currentTab === 'crawl') return crawl();
+  return scrape();
+}
 
 // ── Markdown → HTML renderer (no external deps) ──
 function renderMarkdown(md) {
@@ -450,6 +533,139 @@ function fillUrl(url) {
   document.getElementById('url').focus();
 }
 
+// ── Map：列出站点同域所有可发现链接 ──
+async function map() {
+  var urlVal = document.getElementById('url').value.trim();
+  if (!urlVal) { document.getElementById('url').focus(); return; }
+  var btn = document.getElementById('btn');
+  var out = document.getElementById('output');
+  var toolbar = document.getElementById('out-toolbar');
+  var status = document.getElementById('meta-status');
+  var sizeEl = document.getElementById('meta-size');
+  var timeEl = document.getElementById('meta-timing');
+
+  btn.disabled = true; btn.className = 'loading'; btn.textContent = 'Mapping...';
+  status.textContent = 'Mapping links...';
+  out.style.display = ''; out.className = ''; out.textContent = '';
+  toolbar.style.display = 'none';
+  document.getElementById('output-rendered').style.display = 'none';
+  _lastContent = ''; _lastFormat = 'map';
+  var t0 = Date.now();
+
+  try {
+    var resp = await fetch('/api/map', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: urlVal }),
+    });
+    var data = await resp.json();
+    var links = data.links || [];
+    _lastContent = links.map(function(l) { return l.url; }).join('\n');
+
+    // 渲染为可点击链接列表
+    if (data.error) {
+      out.textContent = 'Error: ' + data.error;
+      status.textContent = 'Error';
+    } else if (links.length === 0) {
+      out.textContent = 'No same-domain links found.';
+      out.className = 'placeholder';
+      status.textContent = 'Done (0 links)';
+    } else {
+      var html = '<ul class="link-list">';
+      for (var i = 0; i < links.length; i++) {
+        var l = links[i];
+        var escText = String(l.text).replace(/</g, '&lt;');
+        var escUrl = String(l.url).replace(/</g, '&lt;');
+        html += '<li><a class="lt" href="' + escUrl + '" target="_blank" rel="noopener">' + escText + '</a><span class="lu">' + escUrl + '</span></li>';
+      }
+      html += '</ul>';
+      out.innerHTML = html;
+      status.textContent = 'Done';
+      sizeEl.textContent = links.length + ' links';
+    }
+    var timing = data._timing || {};
+    var parts = [];
+    if (timing.total_ms) parts.push('total ' + timing.total_ms + 'ms');
+    if (timing.js_ms && timing.js_ms > 10) parts.push('js ' + timing.js_ms + 'ms');
+    timeEl.textContent = parts.join(' · ') || (Date.now() - t0) + 'ms';
+    var badge = document.getElementById('meta-source');
+    if (badge) badge.textContent = data._source === 'backend-spa' ? 'SPA ✓' : '';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    out.textContent = 'Request failed.';
+  } finally {
+    btn.disabled = false; btn.className = ''; btn.textContent = '🗺️ Map';
+  }
+}
+
+// ── Crawl：递归爬取同域多页 ──
+async function crawl() {
+  var urlVal = document.getElementById('url').value.trim();
+  if (!urlVal) { document.getElementById('url').focus(); return; }
+  var maxPages = parseInt(document.getElementById('crawl-max').value, 10) || 5;
+  var btn = document.getElementById('btn');
+  var out = document.getElementById('output');
+  var toolbar = document.getElementById('out-toolbar');
+  var status = document.getElementById('meta-status');
+  var sizeEl = document.getElementById('meta-size');
+  var timeEl = document.getElementById('meta-timing');
+
+  btn.disabled = true; btn.className = 'loading'; btn.textContent = 'Crawling...';
+  status.textContent = 'Crawling (may take 30-60s)...';
+  out.style.display = ''; out.className = ''; out.innerHTML = '<span class="placeholder">Crawling... pages will appear as they complete.</span>';
+  toolbar.style.display = 'none';
+  document.getElementById('output-rendered').style.display = 'none';
+  _lastContent = ''; _lastFormat = 'crawl';
+  var t0 = Date.now();
+
+  try {
+    var resp = await fetch('/api/crawl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: urlVal, max: maxPages }),
+    });
+    var data = await resp.json();
+    var pages = data.pages || [];
+    // 拼接所有页 markdown 作为可复制内容
+    _lastContent = pages.map(function(p) {
+      return '# ' + (p.title || p.url) + '\nSource: ' + p.url + '\n\n' + p.content;
+    }).join('\n\n---\n\n');
+
+    if (data.error) {
+      out.textContent = 'Error: ' + data.error;
+      status.textContent = 'Error';
+    } else if (pages.length === 0) {
+      out.textContent = 'No pages crawled.';
+      out.className = 'placeholder';
+      status.textContent = 'Done (0 pages)';
+    } else {
+      // 渲染为多页卡片
+      var html = '';
+      for (var i = 0; i < pages.length; i++) {
+        var p = pages[i];
+        var escTitle = String(p.title || p.url).replace(/</g, '&lt;');
+        var escUrl = String(p.url).replace(/</g, '&lt;');
+        html += '<div class="crawl-card">';
+        html += '<div class="ch"><span class="ct">' + escTitle + '</span><a class="cu" href="' + escUrl + '" target="_blank" rel="noopener">' + escUrl + '</a></div>';
+        html += '<div class="cb">' + renderMarkdown(p.content || '') + '</div>';
+        html += '</div>';
+      }
+      out.innerHTML = html;
+      status.textContent = 'Done';
+      sizeEl.textContent = pages.length + ' pages';
+    }
+    var timing = data._timing || {};
+    timeEl.textContent = (timing.total_ms || (Date.now() - t0)) + 'ms';
+    var badge = document.getElementById('meta-source');
+    if (badge) badge.textContent = data._source === 'backend-spa' ? 'SPA ✓' : '';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    out.textContent = 'Request failed. Crawl can take 30-60s — try fewer pages.';
+  } finally {
+    btn.disabled = false; btn.className = ''; btn.textContent = '🕷️ Crawl';
+  }
+}
+
 // DOM ready
 document.addEventListener('DOMContentLoaded', function() {
   var curFmt = document.getElementById('format').value;
@@ -467,9 +683,9 @@ document.getElementById('format').addEventListener('change', function(e) {
   }
 });
 
-// Enter to scrape
+// Enter to trigger current tab action
 document.getElementById('url').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') scrape();
+  if (e.key === 'Enter') onAction();
 });
 </script>
 </body>
