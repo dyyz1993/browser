@@ -2257,15 +2257,37 @@ Element.prototype.dispatchEvent = function(ev) {
 // getComputedStyle：返回一个只读 style 对象（爬虫场景，不需像素精确）。
 window.getComputedStyle = function(el) {
     if (!el) return null;
+    // GAP-L: 按 tag 返回合理默认 computed style（爬虫场景，不需像素精确）。
+    // 这样 getPropertyValue('display')/'color' 等能力探测不返回空，避免页面脚本中断。
+    var tagName = (typeof el.tagName === 'string') ? el.tagName.toUpperCase() : '';
+    var __defaults = {
+        DIV: 'block', P: 'block', H1: 'block', H2: 'block', H3: 'block', H4: 'block',
+        H5: 'block', H6: 'block', UL: 'block', OL: 'block', LI: 'list-item',
+        SECTION: 'block', ARTICLE: 'block', HEADER: 'block', FOOTER: 'block',
+        NAV: 'block', ASIDE: 'block', MAIN: 'block', FORM: 'block', FIELDSET: 'block',
+        TABLE: 'table', TR: 'table-row', TD: 'table-cell', TH: 'table-cell',
+        SPAN: 'inline', A: 'inline', B: 'inline', I: 'inline', EM: 'inline',
+        STRONG: 'inline', IMG: 'inline', LABEL: 'inline', CODE: 'inline',
+        INPUT: 'inline-block', BUTTON: 'inline-block', SELECT: 'inline-block',
+        TEXTAREA: 'inline-block', CANVAS: 'inline-block'
+    };
     var styleObj = {
         getPropertyValue: function(p) { return styleObj[p] || ''; },
         getPropertyPriority: function() { return ''; },
         setProperty: function() {},
         removeProperty: function() {},
         length: 0,
-        item: function() { return ''; }
+        item: function() { return '' },
+        // 默认值（能力探测不返回空）
+        display: __defaults[tagName] || 'block',
+        color: 'rgb(0, 0, 0)',
+        visibility: 'visible',
+        opacity: '1',
+        position: 'static',
+        zIndex: 'auto',
+        overflow: 'visible'
     };
-    // 从 el.style 反射已知属性
+    // 从 el.style 反射已知 inline style（覆盖默认值）
     try {
         var cs = el.style;
         if (cs) {
