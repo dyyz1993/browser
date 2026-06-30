@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M70.13**（性能优化：DOM 稳定即退出，react.dev 17s→4s） |
-| 总 commits | ~259 |
-| 测试 | 861 pass + 18 e2e, 0 clippy warnings |
+| HEAD | **M70.14**（serve HTTP API + Worker 前端 + 测试入库） |
+| 总 commits | ~260 |
+| 测试 | 868 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **双引擎**：QuickJS（默认，CLI + CDP）+ boa（`--js-engine boa`） |
@@ -28,6 +28,30 @@
 ---
 
 ## 最近变更（倒序）
+
+### M70.14 — serve HTTP API + Cloudflare Worker 前端 + 测试入库（2026-06-30）✅
+
+**子主题：**
+
+1. **`browser serve` HTTP API 服务**（M70.12–14）：`TcpListener` HTTP 服务器，
+   fetch→JS→extract 管线封装为 `/` POST 接口，支持 markdown/html/text/links 等 7 格式。
+   子进程隔离（`serve-child` + RLIMIT_AS 400MB）防 QuickJS C 层 abort 杀主进程。
+2. **Cloudflare Worker 前端**（`fetch.xbrowser.dev`）：Firecrawl 风格 UI（Markdown 预览、
+   复制、响应式、7 格式 tab、10 个 SPA 示例站）。**始终走 NAS 后端 JS 渲染**
+   （`_source: backend-spa`），CF 边缘 wasm 仅作后端不可用时的兜底。
+3. **SPA 渲染性能优化**（M70.13–14）：
+   - CDN 外链并行预取（bark.day.app 8.5s→2.5s）
+   - body 可见文本检测替代 HTML 大小阈值（docsify 修复）
+   - URL hash fragment 去除（docsify 路由修复）
+   - XHR 异步 send + CSS 过渡仿真 + fetch 超时保护
+4. **测试入库**（本次 commit）：
+   - `has_visible_body_content` 5 个单元测试（SSR 检测逻辑固化）
+   - `integration_spa_routing.rs` 2 个集成测试（hash fragment + XHR 路由）
+   - CLI `fetch` base_url hash 去除（与 serve 一致性修复）
+   - 清死代码（`render_and_extract`/`RenderResult`/无效 `drop`）+ clippy 0 warning
+
+**通用原则**（用户强调）：所有修复必须是标准化通用方案，禁止特定网站 hack。
+所有流量走 NAS 后端 JS 渲染（curl 能做到的没意义）。
 
 ### M70.13 — 性能优化：DOM 稳定即退出 🚀（2026-06-29）✅
 

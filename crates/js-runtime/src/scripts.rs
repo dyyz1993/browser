@@ -675,9 +675,9 @@ fn resolve_script_url(src: &str, base_url: Option<&str>) -> Option<String> {
     None
 }
 
-use std::sync::OnceLock;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 /// M70.13: 脚本 fetch 用全局复用 HttpClient（避免每脚本新建 TLS 连接）。
 static SCRIPT_FETCH_CLIENT: OnceLock<browser_net::HttpClient> = OnceLock::new();
@@ -698,7 +698,7 @@ pub fn script_cache_public() -> &'static Mutex<HashMap<String, String>> {
 
 /// 预先初始化全局 HttpClient。在事件循环开始前调用，避免首脚本延迟。
 pub(crate) fn ensure_script_client() {
-    SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
+    SCRIPT_FETCH_CLIENT.get_or_init(browser_net::HttpClient::new);
     script_cache();
 }
 
@@ -716,20 +716,19 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
     // M70.13: 给 fetch 加 8s 硬超时——CDN 偶尔慢不能让整个进程卡死。
     let url_owned = url.to_string();
     let handle = std::thread::spawn(move || {
-        let client = SCRIPT_FETCH_CLIENT.get_or_init(|| browser_net::HttpClient::new());
+        let client = SCRIPT_FETCH_CLIENT.get_or_init(browser_net::HttpClient::new);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
         // 用 tokio::time::timeout 给 fetch 加 8s 上限
         let result = rt.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(8),
-                client.get(&url_owned),
-            ).await
+            tokio::time::timeout(std::time::Duration::from_secs(8), client.get(&url_owned)).await
         });
         match result {
-            Ok(Ok(bytes)) => String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}")),
+            Ok(Ok(bytes)) => {
+                String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
+            }
             Ok(Err(e)) => Err(format!("{e:?}")),
             Err(_) => Err(format!("fetch timeout (8s): {url_owned}")),
         }
@@ -987,9 +986,11 @@ fn run_scripts_quickjs(
             }
         } catch(e) {}"#,
     );
-    eprintln!("[serve] scripts: {}ms, dcl: {}ms",
+    eprintln!(
+        "[serve] scripts: {}ms, dcl: {}ms",
         __t_scripts_start.elapsed().as_millis(),
-        __t_dcl_start.elapsed().as_millis());
+        __t_dcl_start.elapsed().as_millis()
+    );
 
     // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
     // M66-fix: 必须先 drain Promise microtask（.then 回调），再 drain timer（setTimeout）。
@@ -1029,32 +1030,34 @@ fn run_scripts_quickjs(
             engine.run_jobs();
             idle_start = None;
             idle_rounds = 0;
+        } else {
+            // 无活动 → idle 检测 + DOM 稳定检测
+            if idle_start.is_none() {
+                idle_start = Some(el_start.elapsed());
+            }
+            if idle_start.unwrap() >= EL_IDLE_GRACE {
+                idle_rounds += 1;
+                if idle_rounds >= EL_IDLE_ROUNDS {
+                    break;
+                }
             } else {
-                // 无活动 → idle 检测 + DOM 稳定检测
-                if idle_start.is_none() {
-                    idle_start = Some(el_start.elapsed());
-                }
-                if idle_start.unwrap() >= EL_IDLE_GRACE {
-                    idle_rounds += 1;
-                    if idle_rounds >= EL_IDLE_ROUNDS {
-                        break;
-                    }
-                } else {
-                    idle_rounds = 0;
-                }
-                // M70.13: DOM 稳定检测——body 有子节点则内容已就绪，提前退出。
-                if idle_start.unwrap() >= EL_IDLE_GRACE {
-                    let dom_ready = engine
-                        .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
-                        .unwrap_or(false);
-                    if dom_ready {
-                        break;
-                    }
+                idle_rounds = 0;
+            }
+            // M70.13: DOM 稳定检测——body 有子节点则内容已就绪，提前退出。
+            if idle_start.unwrap() >= EL_IDLE_GRACE {
+                let dom_ready = engine
+                    .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
+                    .unwrap_or(false);
+                if dom_ready {
+                    break;
                 }
             }
+        }
         if fired == 0 && dyn_executed == 0 && trans_fired == 0 {
             let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
-            let has_trans = engine.eval_js_bool("__hasPendingTransitions()").unwrap_or(false);
+            let has_trans = engine
+                .eval_js_bool("__hasPendingTransitions()")
+                .unwrap_or(false);
             if !has && !has_trans {
                 break;
             }

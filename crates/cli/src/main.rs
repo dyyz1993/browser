@@ -472,7 +472,21 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
             let html = fetch_with_jar(&url).await?;
-            let base = if no_js { None } else { Some(url.clone()) };
+            // M70.14: base_url 去掉 hash fragment——#/?id=xxx 是客户端路由，
+            // 传给 JS 的 location.href 不应带 hash（否则相对路径 XHR 会拼到 hash 上）。
+            // 与 serve / render_and_extract 保持一致。
+            let base = if no_js {
+                None
+            } else {
+                Some(
+                    url::Url::parse(&url)
+                        .map(|mut u| {
+                            u.set_fragment(None);
+                            u.to_string()
+                        })
+                        .unwrap_or_else(|_| url.clone()),
+                )
+            };
             let tree = parse_html(&html);
             // M70.5: `--format original-html` → 直接输出原始 HTML（JS 执行前），跳过整个渲染管线。
             if format.eq_ignore_ascii_case("original-html")
@@ -825,7 +839,10 @@ async fn fetch_with_jar(url: &str) -> Result<String> {
 async fn fetch_with_jar_once(url: &str) -> Result<String> {
     // M70.14: 去掉 hash fragment——#/?id=xxx 是客户端路由，服务端 fetch 不需要。
     let clean_url = url::Url::parse(url)
-        .map(|mut u| { u.set_fragment(None); u.to_string() })
+        .map(|mut u| {
+            u.set_fragment(None);
+            u.to_string()
+        })
         .unwrap_or_else(|_| url.to_string());
     let jar = current_cookie_jar();
     let cookie_header = jar
@@ -1264,6 +1281,103 @@ mod tests {
         let out = browser_render::render_ascii(&layout, 80);
         assert!(out.contains("dynamic from js"), "got:\n{out}");
     }
+
+    // ── M70.14: has_visible_body_content —— SSR 检测通用逻辑回归 ──
+    // 这组测试固化 docsify.js.org 修复的核心判定：
+    // HTML 字节数大不等于有正文（meta/CSS/link 可能让 HTML > 5KB 但正文只有 "Loading"）。
+    // 判定依据必须是 body 下「可见文本」长度（排除 script/style/svg/noscript/template）。
+
+    /// 真正的 SSR 站：body 下有实质正文 → 应判为 true（跳过 JS，直接提取）。
+    #[test]
+    fn has_visible_body_content_true_for_real_ssr() {
+        use crate::has_visible_body_content;
+        let html = r#"<html><head>
+            <title>Real SSR Site</title>
+            <link rel="stylesheet" href="/style.css">
+        </head><body>
+            <h1>Welcome to Example</h1>
+            <p>This is a fully server-rendered page with plenty of body text
+            that should be detected as having visible content well beyond
+            the minimum threshold we use to decide whether to run JS.</p>
+        </body></html>"#;
+        assert!(has_visible_body_content(html));
+    }
+
+    /// docsify 式 SPA 壳：HTML 体积大（meta + CSS 链接），但 body 正文
+    /// 只有 "Loading..." → 必须判为 false（走 JS 渲染）。
+    /// 这是修复 docsify.js.org 的精确回归点。
+    #[test]
+    fn has_visible_body_content_false_for_spa_shell_with_loading() {
+        use crate::has_visible_body_content;
+        // 模拟 docsify.js.org：HTML 7KB+，但正文只有占位符。
+        let html = r#"<html><head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <meta name="description" content="A magical documentation site generator.">
+            <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify/themes/vue.css">
+            <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify/lib/themes/vue.css">
+            <link rel="alternate" hreflang="en" href="https://docsify.js.org/">
+            <link rel="alternate" hreflang="zh-cn" href="https://docsify.js.org/#/zh-cn/">
+            <link rel="alternate" hreflang="de" href="https://docsify.js.org/#/de-de/">
+            <style>.placeholder { color: gray; }</style>
+        </head><body>
+            <div id="app">Loading ...</div>
+            <script src="//cdn.jsdelivr.net/npm/docsify/lib/docsify.min.js"></script>
+        </body></html>"#;
+        // 体积大（>5KB 的旧阈值），但可见正文只有 "Loading ..." → false。
+        assert!(
+            !has_visible_body_content(html),
+            "SPA shell with only 'Loading ...' must NOT be detected as SSR"
+        );
+    }
+
+    /// 边界：body 下文本刚好超阈值（>200B）→ true。
+    #[test]
+    fn has_visible_body_content_threshold_boundary() {
+        use crate::has_visible_body_content;
+        // 拼一段 ~250 字节的可见正文。
+        let para = "This is a paragraph of server-rendered body text. ";
+        let mut body = String::new();
+        while body.len() < 250 {
+            body.push_str(para);
+        }
+        let html = format!("<html><body><div>{body}</div></body></html>");
+        assert!(has_visible_body_content(&html));
+    }
+
+    /// 噪声子树（script/style/svg/template/noscript）不计入可见正文。
+    /// 即使 script/style 里有大段文本，body 仍应判为 false（无可见正文）。
+    #[test]
+    fn has_visible_body_content_ignores_noise_subtrees() {
+        use crate::has_visible_body_content;
+        let big_script = "x".repeat(2000);
+        let html = format!(
+            r#"<html><body>
+            <script>var big = "{big_script}";</script>
+            <style>.x {{ content: "{big_script}"; }}</style>
+            <svg><text>{big_script}</text></svg>
+            <noscript>enable js</noscript>
+            <div>Loading</div>
+        </body></html>"#
+        );
+        assert!(
+            !has_visible_body_content(&html),
+            "noise in script/style/svg must not count as visible content"
+        );
+    }
+
+    /// 空 body（无可见文本）→ false（应走 JS 渲染）。
+    /// html5ever 会自动补全 body 节点，此时可见文本为 0 < 200 → false。
+    #[test]
+    fn has_visible_body_content_false_for_empty_body() {
+        use crate::has_visible_body_content;
+        // 只有 head 内容、body 为空 —— 应走 JS 渲染。
+        assert!(!has_visible_body_content(
+            "<html><head><title>x</title></head></html>"
+        ));
+        // 完全空文档也应判为 false（无正文可提取）。
+        assert!(!has_visible_body_content(""));
+    }
 }
 
 /// M70.14: serve 请求结构（跨 serve/serve-child 共享）。
@@ -1289,8 +1403,7 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
     use std::io::{BufRead, BufReader};
 
     let addr = format!("{bind}:{port}");
-    let listener = TcpListener::bind(&addr)
-        .with_context(|| format!("failed to bind {addr}"))?;
+    let listener = TcpListener::bind(&addr).with_context(|| format!("failed to bind {addr}"))?;
     // 非阻塞模式，方便循环
     listener.set_nonblocking(false)?;
     eprintln!("[serve] listening on http://{addr}");
@@ -1352,7 +1465,11 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
         let req: ServeRequest = match serde_json::from_str(&body) {
             Ok(r) => r,
             Err(e) => {
-                send_response(&mut stream, 400, &format!(r#"{{"error":"bad request: {e}"}}"#));
+                send_response(
+                    &mut stream,
+                    400,
+                    &format!(r#"{{"error":"bad request: {e}"}}"#),
+                );
                 continue;
             }
         };
@@ -1361,7 +1478,10 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
 
         // M70.14: 去掉 hash fragment——#/?id=xxx 是客户端路由，服务端不需要。
         let clean_url = url::Url::parse(&req.url)
-            .map(|mut u| { u.set_fragment(None); u.to_string() })
+            .map(|mut u| {
+                u.set_fragment(None);
+                u.to_string()
+            })
             .unwrap_or_else(|_| req.url.clone());
 
         // ── 执行渲染管线 ──
@@ -1369,9 +1489,15 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
         let html = match fetch_with_jar(&clean_url).await {
             Ok(h) => h,
             Err(e) => {
-                send_response(&mut stream, 502,
-                    &format!(r#"{{"url":"{}","error":"fetch failed: {}","content":""}}"#,
-                        clean_url, e.to_string().replace('"', "'")));
+                send_response(
+                    &mut stream,
+                    502,
+                    &format!(
+                        r#"{{"url":"{}","error":"fetch failed: {}","content":""}}"#,
+                        clean_url,
+                        e.to_string().replace('"', "'")
+                    ),
+                );
                 continue;
             }
         };
@@ -1393,10 +1519,15 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
             };
             let result = match browser_extractor::run_extract(&tree, Some(&clean_url), &opts) {
                 Ok(r) => r,
-                Err(_) => browser_extractor::ExtractResult { content: String::new(), title: None },
+                Err(_) => browser_extractor::ExtractResult {
+                    content: String::new(),
+                    title: None,
+                },
             };
-            let escaped_c = serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
-            let escaped_t = serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
+            let escaped_c =
+                serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
+            let escaped_t =
+                serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
             let total_ms = t0.elapsed().as_millis();
             format!(
                 r#"{{"url":"{}","title":{},"content":{},"format":"{}","_timing":{{"fetch_ms":{},"js_ms":0,"extract_ms":0,"total_ms":{}}},"_scripts":0}}"#,
@@ -1415,8 +1546,11 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
                 Ok(json) => json,
                 Err(e) => {
                     eprintln!("[serve] render failed: {e}");
-                    format!(r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
-                        clean_url, e.to_string().replace('"', "'"))
+                    format!(
+                        r#"{{"url":"{}","error":"render failed: {}","content":""}}"#,
+                        clean_url,
+                        e.to_string().replace('"', "'")
+                    )
                 }
             }
         };
@@ -1442,13 +1576,17 @@ async fn serve_child() -> Result<()> {
     let html = parts.next().unwrap_or("");
 
     // 子进程不重复 fetch——用主进程传入的 HTML 直接跑 JS + 提取
-    let base = if url.is_empty() { None } else { Some(url.clone()) };
+    let base = if url.is_empty() {
+        None
+    } else {
+        Some(url.clone())
+    };
     let tree = parse_html(html);
     let engine_kind = browser_js_runtime::EngineKind::parse_str("quickjs");
     let t_js = std::time::Instant::now();
     let (shared, executed) = {
-        use std::panic::AssertUnwindSafe;
         use std::cell::RefCell;
+        use std::panic::AssertUnwindSafe;
         use std::rc::Rc;
         let base_for_panic = base.clone();
         #[cfg(feature = "quickjs")]
@@ -1479,7 +1617,10 @@ async fn serve_child() -> Result<()> {
         only_main_content: false,
     };
     let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
-        .unwrap_or(browser_extractor::ExtractResult { content: String::new(), title: None });
+        .unwrap_or(browser_extractor::ExtractResult {
+            content: String::new(),
+            title: None,
+        });
 
     let escaped_c = serde_json::to_string(&result.content).unwrap_or_else(|_| "\"\"".to_string());
     let escaped_t = serde_json::to_string(&result.title).unwrap_or_else(|_| "null".to_string());
@@ -1489,7 +1630,8 @@ async fn serve_child() -> Result<()> {
     );
 
     let mut stdout = std::io::stdout();
-    stdout.write_all(json.as_bytes())
+    stdout
+        .write_all(json.as_bytes())
         .map_err(|e| anyhow!("serve_child: write stdout failed: {e}"))?;
     stdout.flush()?;
     Ok(())
@@ -1499,8 +1641,7 @@ async fn serve_child() -> Result<()> {
 /// 任何错误都返回 Err（不会 panic 或 abort serve 主进程）。
 /// M70.14: 子进程渲染。主进程已 fetch HTML，传给子进程避免重复请求。
 fn render_in_subprocess(req: &ServeRequest, html: &str) -> Result<String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| anyhow!("cannot resolve current_exe: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| anyhow!("cannot resolve current_exe: {e}"))?;
 
     // 构造 stdin payload：URL \x1f format \x1f html（用分隔符避免 JSON 转义问题）
     let mut payload = String::with_capacity(html.len() + req.url.len() + 64);
@@ -1544,7 +1685,9 @@ fn render_in_subprocess(req: &ServeRequest, html: &str) -> Result<String> {
         Ok(Some(_)) => Ok(String::from(r#"{"error":"child crashed","content":""}"#)),
         Ok(None) => {
             let _ = child.kill();
-            Ok(String::from(r#"{"error":"child timeout (20s)","content":""}"#))
+            Ok(String::from(
+                r#"{"error":"child timeout (20s)","content":""}"#,
+            ))
         }
         Err(e) => {
             let _ = child.kill();
@@ -1575,21 +1718,17 @@ async fn prefetch_external_scripts(html: &str, base_url: &str) {
                     return; // 已缓存
                 }
             }
-            drop(browser_js_runtime::script_cache_public()); // 释放锁
+            // 锁在 if let 作用域结束时已释放，无需显式 drop
             // fetch 脚本
             let client = browser_net::HttpClient::new();
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(8),
-                client.get(&url),
-            ).await {
-                Ok(Ok(bytes)) => {
-                    if let Ok(code) = String::from_utf8(bytes) {
-                        if let Ok(mut cache) = browser_js_runtime::script_cache_public().lock() {
-                            cache.insert((*url).clone(), code);
-                        }
+            if let Ok(Ok(bytes)) =
+                tokio::time::timeout(std::time::Duration::from_secs(8), client.get(&url)).await
+            {
+                if let Ok(code) = String::from_utf8(bytes) {
+                    if let Ok(mut cache) = browser_js_runtime::script_cache_public().lock() {
+                        cache.insert((*url).clone(), code);
                     }
                 }
-                _ => {}
             }
         }));
     }
@@ -1622,11 +1761,16 @@ fn extract_script_srcs(html: &str, base_url: &str) -> Vec<String> {
                         };
                         // 跳过 analytics
                         let lower = resolved.to_lowercase();
-                        if lower.contains("cloudflareinsights") || lower.contains("google-analytics")
-                            || lower.contains("googletagmanager") || lower.contains("doubleclick")
-                            || lower.contains("facebook.net") || lower.contains("sentry.io")
-                            || lower.contains("hotjar") || lower.contains("fullstory")
-                            || lower.contains("usefathom") {
+                        if lower.contains("cloudflareinsights")
+                            || lower.contains("google-analytics")
+                            || lower.contains("googletagmanager")
+                            || lower.contains("doubleclick")
+                            || lower.contains("facebook.net")
+                            || lower.contains("sentry.io")
+                            || lower.contains("hotjar")
+                            || lower.contains("fullstory")
+                            || lower.contains("usefathom")
+                        {
                             continue;
                         }
                         srcs.push(resolved);
@@ -1671,8 +1815,12 @@ fn has_visible_body_content(html: &str) -> bool {
                 text_len += s.trim().len();
             }
             browser_dom::NodeData::Element { tag, .. } => {
-                if tag == "script" || tag == "style" || tag == "svg"
-                    || tag == "noscript" || tag == "template" {
+                if tag == "script"
+                    || tag == "style"
+                    || tag == "svg"
+                    || tag == "noscript"
+                    || tag == "template"
+                {
                     continue;
                 }
                 for &child in tree.children_of(id) {
@@ -1707,107 +1855,4 @@ fn send_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
     );
     let _ = stream.write_all(headers.as_bytes());
     let _ = stream.flush();
-}
-
-/// 渲染结果 + 耗时分解（ms）
-struct RenderResult {
-    content: String,
-    title: Option<String>,
-    timing_fetch_ms: u64,
-    timing_js_ms: u64,
-    timing_extract_ms: u64,
-    scripts_executed: usize,
-}
-
-/// 核心渲染管线：fetch → JS 执行 → 提取 → RenderResult（含耗时分解）
-async fn render_and_extract(url: &str, format: &str, js_engine: &str) -> Result<RenderResult> {
-    ensure_cookie_jar();
-
-    let t_fetch = std::time::Instant::now();
-    let html = fetch_with_jar(url).await?;
-    let timing_fetch_ms = t_fetch.elapsed().as_millis() as u64;
-
-    // M70.14: 检查 body 是否有关键正文（排除 meta/CSS/script）。
-    // docsify.js.org HTML 7354B 但正文只有"Loading ..."。
-    let has_content = has_visible_body_content(&html);
-    let should_skip_js = has_content;
-    let base = Some(url::Url::parse(url)
-        .map(|mut u| { u.set_fragment(None); u.to_string() })
-        .unwrap_or_else(|_| url.to_string()));
-
-    let t_js_start = std::time::Instant::now();
-    let (shared, scripts_executed): (browser_js_runtime::SharedTree, usize) = if should_skip_js {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let tree = parse_html(&html);
-	        eprintln!("[serve] body has content, skipping JS (SSR)");
-        (Rc::new(RefCell::new(tree)), 0)
-    } else {
-        let tree = parse_html(&html);
-        let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
-        let (shared, executed) = {
-            use std::panic::AssertUnwindSafe;
-            use std::cell::RefCell;
-            use std::rc::Rc;
-            let base_for_panic = base.clone();
-            #[cfg(feature = "quickjs")]
-            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                browser_js_runtime::run_scripts_with_base_engine(
-                    tree, base_for_panic, &engine_kind,
-                )
-            }))
-            .unwrap_or_else(|payload| {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "unknown panic".to_string());
-                eprintln!("[serve] JS engine panicked: {msg}");
-                let static_tree = parse_html(&html);
-                (Rc::new(RefCell::new(static_tree)), 0)
-            });
-            #[cfg(not(feature = "quickjs"))]
-            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                let _ = &engine_kind;
-                browser_js_runtime::run_scripts_with_base(tree, base_for_panic)
-            }))
-            .unwrap_or_else(|payload| {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "unknown panic".to_string());
-                eprintln!("[serve] JS engine panicked: {msg}");
-                let static_tree = parse_html(&html);
-                (Rc::new(RefCell::new(static_tree)), 0)
-            });
-            result
-        };
-        eprintln!("[serve] {executed} script(s) executed");
-        (shared, executed)
-    };
-    let timing_js_ms = t_js_start.elapsed().as_millis() as u64;
-
-    let t_extract = std::time::Instant::now();
-    let out_format = browser_extractor::OutputFormat::parse(format)
-        .map_err(|e| anyhow!("invalid format: {e}"))?;
-    let opts = browser_extractor::FetchOptions {
-        format: out_format,
-        selector: None,
-        // M70.13: 关闭 only_main_content——coverpage/hero 等区域会被误过滤。
-        // 纯 SPA（如 bark.day.app 的 Docsify 封面）依赖这些区域展示内容。
-        only_main_content: false,
-    };
-    let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
-        .map_err(|e| anyhow!("extract failed: {e}"))?;
-    let timing_extract_ms = t_extract.elapsed().as_millis() as u64;
-
-    Ok(RenderResult {
-        content: result.content,
-        title: result.title,
-        timing_fetch_ms,
-        timing_js_ms,
-        timing_extract_ms,
-        scripts_executed,
-    })
 }
