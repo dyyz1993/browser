@@ -14,16 +14,23 @@
 **用 Rust 手写一个"基本能用"的爬虫渲染浏览器。** 通过造轮子深入理解浏览器原理，
 同时产出一个能处理 **SPA（单页应用）** 的可控、低依赖渲染引擎。
 
-### 四大基础原则（宪法级，详见 GOALS.md）
+### 四大基础原则 + 生命线（宪法级，详见 GOALS.md）
 
-> 所有架构决策、功能取舍必须服从这四条。冲突时**基础原则 > 决策原则**。
+> 所有架构决策、功能取舍必须服从这五条。冲突时**生命线 > 基础原则 > 决策原则**。
+
+🩸 **生命线：JS 必须能跑通** —— 项目存在的根。任何时候必须有**至少一个能执行 `<script>`、
+   能跑通 SPA 的 JS 引擎**。引擎可以替换/升级（QuickJS → 跟进 Bellard 2026-06 的 42% 提速；
+   甚至换实现），但**不得移除 JS 执行能力**。没有 JS 引擎 = 没有 CSR 爬取 = 项目失去存在
+   理由。引擎层现状：**QuickJS（默认，rquickjs 0.12，ES2020 完整）+ boa（备选 feature，
+   test262 90%+）**，双引擎通过 `trait JsEngine` 共存，5400 行 JS shim 引擎无关。
 
 1. **SPA/CSR 尽可能全覆盖** —— 项目存在的理由。遇到渲染不了的 SPA 走自愈循环补 API。
    **⚠️ 绝对禁止用 SSR 兜底（`--no-js`）当 CSR 问题的借口。** 这个项目的核心价值就是
    CSR——如果只需要 SSR，直接用 curl 就够了。遇到 CSR 渲染失败：定位根因 → 补 API →
    提 PR 给 boa，而不是说「走 --no-js 吧」。`--no-js` 只对"明确是静态站"的场景用。
 2. **自研优先** —— 架构尽可能手写，不用别人的库（白名单例外见 G4）
-3. **低内存、快运行** —— 核心卖点（对标 Chrome：内存 1/11、速度 6 倍）。任何改动监控基线
+3. **低内存、快运行** —— 核心卖点（对标 Chrome：内存 1/11、速度 6 倍）。任何改动监控基线。
+   **⚠️ 因此不引入 V8/rusty_v8**——V8 二进制 ~30MB+、运行时几百 MB，直接违背低内存卖点。
 4. **反爬不重点处理** —— 不做指纹伪造/验证码，但基础请求能力（brotli/cookie/UA）要做
 
 ### 我们要做的（In Scope）
@@ -32,7 +39,7 @@
 |---|------|------|
 | ✅ | **SPA 渲染** | fetch → 执行 `<script>` → JS 改 DOM → 渲染。这是项目存在的理由 |
 | ✅ | **CDP 连接** | Chrome DevTools Protocol server，让 Puppeteer/Playwright 能驱动它（M42+） |
-| ✅ | **JS 执行 + Web API 子集** | boa 引擎 + DOM/XHR/fetch/WS/Storage/Nav/Timer 桥 |
+| ✅ | **JS 执行 + Web API 子集** | **QuickJS（默认）+ boa（备选）** 双引擎 + DOM/XHR/fetch/WS/Storage/Nav/Timer 桥。详见生命线 |
 | ✅ | **爬虫友好输出** | ASCII 文本 / PNG 截图 / 序列化 HTML |
 | ✅ | **跨平台** | macOS / Linux / Windows 三平台 CI 全绿 |
 
@@ -553,6 +560,16 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
       里读 src 必须**双 fallback**（先 `__getAttr(nodeId,'src')` 再 `child.src`）
     - ✅ 同步 `__fetchSync` 阻塞是期望行为——保证 webpack chunk loader 的 Promise.resolve
       顺序正确；eval 推迟到 event loop（setTimeout 语义）不阻塞当前同步 JS 栈
+21. **JS 引擎选型底线（生命线落地）**：
+    - 🩸 **任何改动不得移除 JS 执行能力**。至少保留一个能跑通 SPA 的 JS 引擎。
+    - ✅ 当前最优解 = **QuickJS（Bellard 原版，rquickjs 0.12）**。2026-06 原版发“比上版快 42%”
+      更新，是嵌入式 JS 引擎的体积/性能最佳点。
+    - ❌ **不引入 V8/rusty_v8**——二进制 ~30MB+、运行时几百 MB，直接违背 G3 低内存卖点。
+    - ❌ **不换 quickjs-ng**——2025-09 实测比 Bellard 原版慢 ~3%，字符串场景慢最多 80x，
+      纯性能负收益（NG 的优势是 Windows/社区，不是性能）。
+    - ✅ 引擎升级走“跟进 rquickjs 版本 / Bellard 上游提速”，不走换引擎。
+    - ✅ boa 从强制依赖降为 **optional feature**（M71），不传 `--features boa` 不编译，省 ~5MB。
+    - ✅ boa 跑不动纯 CSR 站是引擎天花板，走 `--no-js` 兜底或标注，不硬刚（详见第十条）。
 
 ---
 
