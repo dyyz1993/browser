@@ -32,7 +32,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::jsonrpc::{parse_message, CdpMessage, Json};
 use std::collections::BTreeMap;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 use std::time::Duration;
 
 /// Default CDP port (Chrome standard).
@@ -72,7 +72,7 @@ impl CdpServer {
     }
 
     /// Accept and handle exactly one connection, then return. Used by tests.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "boa"))]
     pub(crate) async fn accept_one(
         listener: TcpListener,
         engine_kind: EngineKind,

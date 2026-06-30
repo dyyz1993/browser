@@ -2328,6 +2328,7 @@ pub fn run_scripts_with_base_engine(
     //（QuickJS 分支已 return，或 EngineKind 只有 QuickJs）。
     #[cfg(feature = "boa")]
     {
+        #[allow(clippy::needless_return)]
         return run_scripts_with_base_boa(shared, base_url, engine, engine_name);
     }
     #[cfg(not(feature = "boa"))]
