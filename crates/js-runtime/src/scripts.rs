@@ -1612,8 +1612,36 @@ window.MutationObserver = function(cb) {
 
 // MatchMedia（CSS 媒体查询检测）
 window.matchMedia = function(query) {
-    return { matches: false, media: query, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){} };
+    // 解析 min-width/max-width 对比渲染宽度（默认 1280，桌面环境）。
+    // 爬虫场景：框架用 matchMedia 做响应式判断，默认 match 桌面布局。
+    var vw = 1280, vh = 720;
+    var matched = true;
+    try {
+        var mw = query.match(/min-width\s*:\s*(\d+)/i);
+        var Mw = query.match(/max-width\s*:\s*(\d+)/i);
+        if (mw && vw < parseInt(mw[1], 10)) matched = false;
+        if (Mw && vw > parseInt(Mw[1], 10)) matched = false;
+        // prefers-color-scheme 等默认 false
+        if (/prefers-color-scheme/i.test(query) && /dark/i.test(query)) matched = false;
+        if (/prefers-reduced-motion/i.test(query)) matched = false;
+    } catch(e) {}
+    return { matches: matched, media: query, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function() { return true; } };
 };
+// CSS 对象 + supports()：框架能力检测常用。M71.3 GAP-D。
+if (typeof window.CSS === 'undefined') {
+    window.CSS = {
+        supports: function(prop, val) {
+            // 爬虫场景：声明支持常见 CSS 属性，避免能力检测中断。
+            if (arguments.length === 1) {
+                // 单参数：整个声明，检测已知关键词
+                return /flex|grid|transform|transition|animation|var\(|calc\(|position|display/i.test(prop);
+            }
+            return /flex|grid|transform|transition|animation/i.test(prop);
+        },
+        escape: function(s) { return String(s).replace(/([:.#])/g, '\\$1'); },
+        registerProperty: function() {},
+    };
+}
 
 // Event 构造器（强制覆盖——QuickJS 原生 Event 不设 bubbles/cancelable，框架依赖）
 // 不用 if(typeof) 判断，直接覆盖确保 opts.bubbles 生效。
