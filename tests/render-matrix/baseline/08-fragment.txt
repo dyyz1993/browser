@@ -1,0 +1,15 @@
+createDocumentFragment: object
+fragment.nodeType: 11
+fragment has appendChild: function
+fragment children count: 5
+fragment after insert: 0
+ul li count: 5
+first li text: item 0
+first li data-idx: 0
+li nodeType: 1
+cloneNode child count: 5
+clone != original: true
+template created: TEMPLATE
+template.content: exists
+template.content nodeType: 11
+document.importNode: function

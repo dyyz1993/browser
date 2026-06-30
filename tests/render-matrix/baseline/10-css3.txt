@@ -1,0 +1,18 @@
+typeof matchMedia: function
+matchMedia returns: object
+mq.matches: true
+mq.media: (min-width: 100px)
+mq.addListener: function
+mq.addEventListener: function
+typeof CSS: object
+supports flex: true
+supports grid: true
+supports transform: true
+computed display (flex): flex
+computed transform: has-value
+computed transition: has-value
+style.transform set: translateX(50px)
+attr style reflects: transform: translateX(50px);
+getPropertyValue --my-color: #f00
+typeof requestAnimationFrame: function
+raf registered: ok

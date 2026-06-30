@@ -1,0 +1,18 @@
+qs #root: true
+qs .card.active: true
+qs div &gt; p:first-child: true
+qs [data-role="nav"] a: true
+qs li:nth-child(2): true
+qsa .card count: 2
+qsa li count: 4
+qsa a[href] count: 1
+classList contains active: true
+classList length: 2
+after remove active: false
+after add flagged: true
+after toggle flagged: false
+getComputedStyle: object
+computed display: has-value
+computed color: has-value
+card.matches .card: true
+a.closest nav: true

@@ -5,9 +5,14 @@
 //! (with the bridge installed). The DOM mutations made by JS become
 //! visible to the subsequent layout + render passes.
 
-use boa_engine::{Context, JsValue, Module, Source};
 use browser_dom::{NodeData, NodeId, Tree};
 
+// M71.1: boa 类型仅在 --features boa 时可用。
+#[cfg(feature = "boa")]
+use boa_engine::{Context, JsValue, Module, Source};
+
+// M71.1: bridge::install 是 boa 专属（注册所有 NativeFn bridge 函数）。
+#[cfg(feature = "boa")]
 use crate::bridge::install;
 
 /// M-cls.2: 收紧 JS 运行时限制（纵深防御第二层）。
@@ -17,8 +22,11 @@ use crate::bridge::install;
 /// 既足够跑常见 SPA 的内联脚本（秒级几百次迭代的渲染逻辑），又能在 runaway
 /// 循环早期抛 `loop iteration limit reached`，配合子进程内存护栏（M-cls.1）
 /// 双保险。stack/recursion 也从 boa 默认(10240/512)收紧到 4096/256。
+#[cfg(feature = "boa")]
 const JS_LOOP_ITERATION_LIMIT: u64 = 40_000;
+#[cfg(feature = "boa")]
 const JS_STACK_SIZE_LIMIT: usize = 4096;
+#[cfg(feature = "boa")]
 const JS_RECURSION_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +241,7 @@ fn regex_static_export(code: &str) -> bool {
 /// M65: 从 Vite bundle 源码提取 __vite__mapDeps 的 chunk 列表，并行预取到缓存。
 /// Vite 用 __vite__mapDeps 注册所有动态 import() 的 chunk 路径，eval 时 JS fetch()
 /// 会串行请求它们。预取后 __fetchSync 命中缓存（0ms），避免 24 × 1s = 24s 串行。
+#[allow(dead_code)]
 fn prefetch_vite_chunks(code: &str, entry_url: &str) {
     // 找 __vite__mapDeps=(...m.f||(m.f=["./xxx.js","./yyy.js",...])
     let marker = ".f=[";
@@ -294,6 +303,7 @@ fn prefetch_vite_chunks(code: &str, entry_url: &str) {
 }
 
 /// M64: 包装脚本为 IIFE + try/catch（复用现有 wrap 逻辑）。
+#[cfg(feature = "boa")]
 fn wrap_script(code: &str, label: &str) -> String {
     let mut wrapped = String::new();
     wrapped.push_str("(function(){\ntry{\n");
@@ -382,12 +392,14 @@ fn is_js_script_type(raw: &str) -> bool {
 /// # Errors
 /// Individual script errors are logged to stderr and don't abort the
 /// run; the count returned reflects only successful executions.
+#[cfg(feature = "boa")]
 pub fn execute_scripts(tree_shared: &crate::bridge::SharedTree, ctx: &mut Context) -> usize {
     execute_scripts_with_base(tree_shared, ctx, None)
 }
 
 /// Same as [`execute_scripts`], but also installs a base URL used to
 /// resolve relative URLs in `__fetchSetBody` / `__fetchAppendBody`.
+#[cfg(feature = "boa")]
 pub fn execute_scripts_with_base(
     tree_shared: &crate::bridge::SharedTree,
     ctx: &mut Context,
@@ -795,7 +807,9 @@ fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEng
         if has_ts_syntax(&code) {
             continue;
         }
-        match engine.eval_safe(&code) {
+        // M71.4: 用户 script 用 sloppy mode（eval_user_script），
+        // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
+        match engine.eval_user_script(&code) {
             Ok(()) => {}
             Err(e) => eprintln!("[js] [quickjs dynamic] {e}"),
         }
@@ -963,7 +977,9 @@ fn run_scripts_quickjs(
             }
         };
         if let Some(code) = code {
-            match engine.eval_safe(&code) {
+            // M71.4: 用户 script 用 sloppy mode（eval_user_script），
+            // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
+            match engine.eval_user_script(&code) {
                 Ok(_) => executed += 1,
                 Err(e) => eprintln!("[js] [quickjs] {e}"),
             }
@@ -1244,31 +1260,66 @@ window.crypto = {
 
 // location 对象
 var __locHref = (typeof __locationHref === 'function') ? __locationHref() : 'about:blank';
-window.location = {
-    href: __locHref,
-    protocol: (__locHref.split('://')[0] || 'about') + ':',
-    host: ((__locHref.split('://')[1] || '').split('/')[0]) || '',
-    hostname: ((__locHref.split('://')[1] || '').split(':')[0].split('/')[0]) || '',
-    pathname: '/' + ((__locHref.split('://')[1] || '').split('/').slice(1).join('/')),
-    search: '', hash: '',
-    origin: (__locHref.split('://')[0] + '://' + (__locHref.split('://')[1] || '').split('/')[0]),
-    reload: function() {},
-    replace: function(u) { this.href = u; },
-    assign: function(u) { this.href = u; },
-    toString: function() { return this.href; }
-};
+function __parseLoc(href) {
+    // 区分 scheme://host (http://) 和 opaque (about:blank)
+    var colonIdx = href.indexOf(':');
+    var proto = colonIdx >= 0 ? href.slice(0, colonIdx + 1) : '';
+    var afterProto = colonIdx >= 0 ? href.slice(colonIdx + 1) : href;
+    // 去除可能的 //
+    if (afterProto.indexOf('//') === 0) afterProto = afterProto.slice(2);
+    var host = afterProto.split('/')[0] || '';
+    var hostNoPort = host.split(':')[0];
+    var pathname;
+    if (proto === 'about:') {
+        pathname = afterProto; // 'blank'
+    } else if (host) {
+        pathname = '/' + afterProto.split('/').slice(1).join('/');
+    } else {
+        pathname = '/' + afterProto;
+    }
+    return {
+        href: href,
+        protocol: proto,
+        host: host,
+        hostname: hostNoPort,
+        pathname: pathname,
+        search: '', hash: '',
+        origin: proto + (host ? '//' + host : ''),
+        reload: function() {},
+        replace: function(u) { __setLocHref(u); },
+        assign: function(u) { __setLocHref(u); },
+        toString: function() { return __locHref; }
+    };
+}
+function __setLocHref(u) {
+    __locHref = u;
+    window.location = __parseLoc(u);
+}
+window.location = __parseLoc(__locHref);
 
 // history API（docsify 路由需要 pushState/replaceState）
-window.history = {
-    length: 1,
-    state: null,
-    pushState: function(state, title, url) { this.state = state; if (url) window.location.href = url; },
-    replaceState: function(state, title, url) { this.state = state; },
-    back: function() {},
-    forward: function() {},
-    go: function(n) {},
-    scrollRestoration: 'auto'
-};
+// length 是函数（对齐 boa navigation_shim：history.length() 返回栈深度）
+window.history = (function() {
+    var stack = [__locHref];
+    var state = null;
+    return {
+        length: function() { return stack.length; },
+        get state() { return state; },
+        pushState: function(s, title, url) {
+            state = s;
+            if (url) { stack.push(url); __setLocHref(url); }
+            else { stack.push(stack[stack.length-1]); }
+        },
+        replaceState: function(s, title, url) {
+            state = s;
+            if (url) { stack[stack.length-1] = url; __setLocHref(url); }
+        },
+        back: function() { if (stack.length > 1) { stack.pop(); __setLocHref(stack[stack.length-1]); } },
+        forward: function() {},
+        go: function(n) {},
+        scrollRestoration: 'auto'
+    };
+})();
 
 // document 占位（完整 document 在 document shim 里填充）
 window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
@@ -1281,7 +1332,13 @@ window.__makeElement = function(nodeId) {
 
 // console（QuickJS 有原生 console，确保兼容）
 if (typeof console === 'undefined') {
-    window.console = { log: function(){}, error: function(){}, warn: function(){}, info: function(){} };
+    window.console = {
+        log: function(){}, error: function(){}, warn: function(){},
+        info: function(){}, debug: function(){}, dir: function(){},
+        table: function(){}, group: function(){}, groupEnd: function(){},
+        trace: function(){}, time: function(){}, timeEnd: function(){},
+        assert: function(){}, count: function(){}, clear: function(){}
+    };
 }
 
 // window EventTarget 方法（很多框架在 window 上注册事件）
@@ -1310,12 +1367,178 @@ if (typeof window.HTMLElement === 'undefined') { window.HTMLElement = Element; }
 if (typeof window.SVGElement === 'undefined') { window.SVGElement = Element; }
 if (typeof window.SVGSVGElement === 'undefined') { window.SVGSVGElement = Element; }
 if (typeof window.HTMLCanvasElement === 'undefined') { window.HTMLCanvasElement = Element; }
+// Canvas/WebGL stub：爬虫场景不要求像素渲染，但 getContext 必须返回不崩的 stub，
+// 否则页面能力探测脚本（指纹/兼容检测）中断。M71.3 GAP-E/F。
+Element.prototype.getContext = function(type) {
+    if (type === '2d') {
+        return window.__canvas2dStub();
+    }
+    if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
+        return window.__webglStub(type);
+    }
+    return null;
+};
+Element.prototype.toDataURL = function() { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; };
+Element.prototype.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
+Element.prototype.captureStream = function() { return {}; };
+if (typeof window.OffscreenCanvas === 'undefined') {
+    window.OffscreenCanvas = function(w, h) { return { width: w||300, height: h||150, getContext: Element.prototype.getContext }; };
+}
+// 2D context stub：所有方法是 no-op，measureText.width 返回估算值。
+window.__canvas2dStub = function() {
+    var noop = function() {};
+    return {
+        canvas: null,
+        fillStyle: '', strokeStyle: '', lineWidth: 1, font: '10px sans-serif',
+        textAlign: 'start', textBaseline: 'alphabetic', globalAlpha: 1,
+        globalCompositeOperation: 'source-over', lineCap: 'butt', lineJoin: 'miter',
+        miterLimit: 10, shadowBlur: 0, shadowColor: 'rgba(0,0,0,0)',
+        fillRect: noop, strokeRect: noop, clearRect: noop,
+        beginPath: noop, closePath: noop, moveTo: noop, lineTo: noop,
+        arc: noop, arcTo: noop, rect: noop, ellipse: noop, bezierCurveTo: noop,
+        quadraticCurveTo: noop, fill: noop, stroke: noop, clip: noop,
+        drawImage: noop, putImageData: noop,
+        fillText: noop, strokeText: noop,
+        measureText: function(t) { return { width: (String(t).length || 0) * 5, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
+        save: noop, restore: noop, scale: noop, rotate: noop, translate: noop, transform: noop, setTransform: noop, resetTransform: noop,
+        setLineDash: noop, getLineDash: function() { return []; },
+        createLinearGradient: function() { return { addColorStop: noop }; },
+        createRadialGradient: function() { return { addColorStop: noop }; },
+        createPattern: function() { return {}; },
+        getImageData: function(x,y,w,h) { return { width: w, height: h, data: new Uint8ClampedArray((w||0)*(h||0)*4) }; },
+        isPointInPath: function() { return false; }, isPointInStroke: function() { return false; }
+    };
+};
+// WebGL stub：getParameter 返回占位字符串/数字，方法返回 stub 对象。
+window.__webglStub = function(type) {
+    var noop = function() {};
+    var stubObj = function() { return {}; };
+    var ver = (type === 'webgl2') ? '2.0' : '1.0';
+    var gl = {
+        canvas: null, drawingBufferWidth: 300, drawingBufferHeight: 150,
+        // 常量（部分）
+        VERSION: 0x1F02, VENDOR: 0x1F00, RENDERER: 0x1F01, SHADING_LANGUAGE_VERSION: 0x8B8C,
+        MAX_TEXTURE_SIZE: 0x0D33, MAX_VERTEX_ATTRIBS: 0x8869, MAX_VARYING_VECTORS: 0x8DFC,
+        MAX_VERTEX_UNIFORM_VECTORS: 0x8DFB, MAX_FRAGMENT_UNIFORM_VECTORS: 0x8DFD,
+        ALIASED_LINE_WIDTH_RANGE: 0x846E, ALIASED_POINT_SIZE_RANGE: 0x846D,
+        // 方法
+        getParameter: function(p) {
+            if (p === 0x1F02) return 'WebGL ' + ver + ' (stub)';
+            if (p === 0x1F00) return 'stub-vendor';
+            if (p === 0x1F01) return 'stub-renderer';
+            if (p === 0x8B8C) return 'WebGL GLSL ES ' + ver + ' (stub)';
+            if (p === 0x0D33) return 16384;
+            return null;
+        },
+        getSupportedExtensions: function() { return []; },
+        getExtension: function() { return null; },
+        createShader: stubObj, shaderSource: noop, compileShader: noop, getShaderParameter: function() { return true; },
+        getShaderInfoLog: function() { return ''; }, deleteShader: noop,
+        createProgram: stubObj, attachShader: noop, linkProgram: noop, useProgram: noop,
+        getProgramParameter: function() { return true; }, getProgramInfoLog: function() { return ''; },
+        deleteProgram: noop, validateProgram: noop,
+        createBuffer: stubObj, bindBuffer: noop, bufferData: noop, deleteBuffer: noop,
+        createTexture: stubObj, bindTexture: noop, texImage2D: noop, texParameteri: noop, deleteTexture: noop,
+        createFramebuffer: stubObj, bindFramebuffer: noop, deleteFramebuffer: noop,
+        createRenderbuffer: stubObj, bindRenderbuffer: noop, deleteRenderbuffer: noop,
+        vertexAttribPointer: noop, enableVertexAttribArray: noop, disableVertexAttribArray: noop,
+        drawArrays: noop, drawElements: noop, finish: noop, flush: noop,
+        viewport: noop, clear: noop, clearColor: noop, enable: noop, disable: noop,
+        depthFunc: noop, blendFunc: noop, cullFace: noop, frontFace: noop,
+        getAttribLocation: function() { return 0; }, getUniformLocation: function() { return {}; },
+        uniform1f: noop, uniform2f: noop, uniform3f: noop, uniform4f: noop,
+        uniform1i: noop, uniform2i: noop, uniform3i: noop, uniform4i: noop,
+        uniformMatrix4fv: noop, uniformMatrix3fv: noop,
+        readPixels: noop
+    };
+    return gl;
+};
+if (typeof window.WebGLRenderingContext === 'undefined') {
+    window.WebGLRenderingContext = function() {};
+    window.WebGLRenderingContext.prototype = { VERSION: 0x1F02 };
+}
+if (typeof window.WebGL2RenderingContext === 'undefined') {
+    window.WebGL2RenderingContext = function() {};
+    window.WebGL2RenderingContext.prototype = { VERSION: 0x1F02 };
+}
 if (typeof window.HTMLInputElement === 'undefined') { window.HTMLInputElement = Element; }
 if (typeof window.HTMLButtonElement === 'undefined') { window.HTMLButtonElement = Element; }
 if (typeof window.HTMLDivElement === 'undefined') { window.HTMLDivElement = Element; }
 if (typeof window.HTMLSpanElement === 'undefined') { window.HTMLSpanElement = Element; }
 if (typeof window.HTMLAnchorElement === 'undefined') { window.HTMLAnchorElement = Element; }
 if (typeof window.HTMLImageElement === 'undefined') { window.HTMLImageElement = Element; }
+if (typeof window.HTMLIFrameElement === 'undefined') { window.HTMLIFrameElement = Element; }
+// iframe 子文档能力 stub（M71.3 GAP-A 续）。爬虫场景：页面往 iframe 写内容再读，
+// 需 contentDocument/contentWindow 返回可用对象。M71.3 iframe 69%→高。
+Object.defineProperty(Element.prototype, 'contentDocument', {
+    get: function() {
+        // iframe 的 contentDocument：返回一个简易 document（含 body），
+        // 这样页面可往里写内容。非 iframe 返回 null。
+        if (this.tagName !== 'IFRAME') return null;
+        if (!this.__contentDoc) {
+            this.__contentDoc = { body: null, documentElement: null };
+        }
+        return this.__contentDoc;
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'contentWindow', {
+    get: function() {
+        if (this.tagName !== 'IFRAME') return null;
+        if (!this.__contentWin) {
+            var self = this;
+            this.__contentWin = {
+                document: self.contentDocument,
+                postMessage: function(msg) {
+                    if (typeof window.onmessage === 'function') {
+                        try { window.onmessage({ data: msg, origin: '*', source: self.__contentWin }); } catch(e) {}
+                    }
+                }
+            };
+            this.__contentDoc.defaultView = this.__contentWin;
+        }
+        return this.__contentWin;
+    },
+    enumerable: true, configurable: true
+});
+// srcdoc：iframe 的内嵌文档（页面常设 iframe.srcdoc='<div>..'</div>）。
+Object.defineProperty(Element.prototype, 'srcdoc', {
+    get: function() {
+        try { return this.getAttribute('srcdoc') || ''; } catch(e) { return this.__srcdoc || ''; }
+    },
+    set: function(v) {
+        this.__srcdoc = String(v);
+        try { this.setAttribute('srcdoc', String(v)); } catch(e) {}
+    },
+    enumerable: true, configurable: true
+});
+// postMessage / onmessage：跨窗口消息（iframe 通信、SPA 路由）。M71.3 GAP-A。
+window.postMessage = function(msg, _origin, _transfer) {
+    // 同窗口 postMessage：触发 window.onmessage。异步语义简化为同步。
+    if (typeof window.onmessage === 'function') {
+        try { window.onmessage({ data: msg, origin: typeof location!=='undefined'?location.href:'*', source: window }); } catch(e) {}
+    }
+};
+if (typeof window.onmessage === 'undefined') { window.onmessage = null; }
+window.addEventListener = window.addEventListener || function(type, cb) {
+    if (typeof cb === 'function' && type) {
+        if (type === 'message') window.onmessage = cb;
+    }
+};
+if (typeof window.HTMLOptionElement === 'undefined') { window.HTMLOptionElement = Element; }
+if (typeof window.HTMLOptionsCollection === 'undefined') { window.HTMLOptionsCollection = Element; }
+if (typeof window.HTMLLabelElement === 'undefined') { window.HTMLLabelElement = Element; }
+if (typeof window.HTMLHeadingElement === 'undefined') { window.HTMLHeadingElement = Element; }
+if (typeof window.HTMLParagraphElement === 'undefined') { window.HTMLParagraphElement = Element; }
+if (typeof window.HTMLUListElement === 'undefined') { window.HTMLUListElement = Element; }
+if (typeof window.HTMLLIElement === 'undefined') { window.HTMLLIElement = Element; }
+if (typeof window.HTMLScriptElement === 'undefined') { window.HTMLScriptElement = Element; }
+if (typeof window.HTMLLinkElement === 'undefined') { window.HTMLLinkElement = Element; }
+if (typeof window.HTMLMetaElement === 'undefined') { window.HTMLMetaElement = Element; }
+if (typeof window.HTMLStyleElement === 'undefined') { window.HTMLStyleElement = Element; }
+if (typeof window.HTMLHeadElement === 'undefined') { window.HTMLHeadElement = Element; }
+if (typeof window.HTMLBodyElement === 'undefined') { window.HTMLBodyElement = Element; }
+if (typeof window.HTMLHtmlElement === 'undefined') { window.HTMLHtmlElement = Element; }
 if (typeof window.HTMLSelectElement === 'undefined') { window.HTMLSelectElement = Element; }
 if (typeof window.HTMLTextAreaElement === 'undefined') { window.HTMLTextAreaElement = Element; }
 if (typeof window.HTMLFormElement === 'undefined') { window.HTMLFormElement = Element; }
@@ -1355,6 +1578,7 @@ window.ResizeObserver = function() { this.observe = function(){}; this.unobserve
 
 window.performance = {
     timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
+    navigation: { type: 0, redirectCount: 0 },
     now: function() { return Date.now(); },
     getEntries: function() { return []; },
     getEntriesByName: function() { return []; },
@@ -1449,19 +1673,163 @@ window.MutationObserver = function(cb) {
 
 // MatchMedia（CSS 媒体查询检测）
 window.matchMedia = function(query) {
-    return { matches: false, media: query, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){} };
+    // 解析 min-width/max-width 对比渲染宽度（默认 1280，桌面环境）。
+    // 爬虫场景：框架用 matchMedia 做响应式判断，默认 match 桌面布局。
+    var vw = 1280, vh = 720;
+    var matched = true;
+    try {
+        var mw = query.match(/min-width\s*:\s*(\d+)/i);
+        var Mw = query.match(/max-width\s*:\s*(\d+)/i);
+        if (mw && vw < parseInt(mw[1], 10)) matched = false;
+        if (Mw && vw > parseInt(Mw[1], 10)) matched = false;
+        // prefers-color-scheme 等默认 false
+        if (/prefers-color-scheme/i.test(query) && /dark/i.test(query)) matched = false;
+        if (/prefers-reduced-motion/i.test(query)) matched = false;
+    } catch(e) {}
+    return { matches: matched, media: query, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function() { return true; } };
+};
+// CSS 对象 + supports()：框架能力检测常用。M71.3 GAP-D。
+if (typeof window.CSS === 'undefined') {
+    window.CSS = {
+        supports: function(prop, val) {
+            // 爬虫场景：声明支持常见 CSS 属性，避免能力检测中断。
+            if (arguments.length === 1) {
+                // 单参数：整个声明，检测已知关键词
+                return /flex|grid|transform|transition|animation|var\(|calc\(|position|display/i.test(prop);
+            }
+            return /flex|grid|transform|transition|animation/i.test(prop);
+        },
+        escape: function(s) { return String(s).replace(/([:.#])/g, '\\$1'); },
+        registerProperty: function() {},
+    };
+}
+
+// Event 构造器（强制覆盖——QuickJS 原生 Event 不设 bubbles/cancelable，框架依赖）
+// 不用 if(typeof) 判断，直接覆盖确保 opts.bubbles 生效。
+window.Event = function(type, opts) {
+    this.type = type;
+    this.bubbles = !!(opts && opts.bubbles);
+    this.cancelable = !!(opts && opts.cancelable);
+    this.target = null;
+    this.currentTarget = null;
+    this.defaultPrevented = false;
+    this.timeStamp = Date.now();
+};
+window.Event.prototype.preventDefault = function() { this.defaultPrevented = true; };
+window.Event.prototype.stopPropagation = function() { this.__stopPropagation = true; };
+window.Event.prototype.stopImmediatePropagation = function() { this.__stopPropagation = true; };
+window.CustomEvent = function(type, opts) { Event.call(this, type, opts); this.detail = (opts && opts.detail) || null; };
+window.CustomEvent.prototype = Object.create(window.Event.prototype);
+
+// === M71.1: 补齐 QuickJS 缺失的 Web API（纯 JS polyfill，爬虫场景够用）===
+
+// structuredClone：深拷贝（JSON 实现，够用于普通对象/数组）
+if (typeof structuredClone !== 'function') {
+    window.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
+}
+
+// TextEncoder/TextDecoder（UTF-8，简化实现——爬虫场景不真正编码字节，
+// 但 length/content 与原文一致，满足框架初始化检查）
+if (typeof TextEncoder !== 'function') {
+    window.TextEncoder = function() { this.encoding = 'utf-8'; };
+    window.TextEncoder.prototype.encode = function(str) {
+        str = str == null ? '' : String(str);
+        // 返回伪 Uint8Array（length 正确，内容为 charCode）
+        var arr = [];
+        for (var i = 0; i < str.length; i++) { arr.push(str.charCodeAt(i) & 0xff); }
+        arr.encoding = 'utf-8';
+        return arr;
+    };
+    window.TextEncoder.prototype.encodeInto = function(str, dst) {
+        var e = this.encode(str);
+        for (var i = 0; i < e.length && i < dst.length; i++) { dst[i] = e[i]; }
+        return { read: e.length, written: Math.min(e.length, dst.length) };
+    };
+}
+if (typeof TextDecoder !== 'function') {
+    window.TextDecoder = function(label) { this.encoding = (label || 'utf-8').toLowerCase(); };
+    window.TextDecoder.prototype.decode = function(bytes) {
+        if (!bytes) return '';
+        if (typeof bytes === 'string') return bytes;
+        // 伪解码：把 charCode 转回字符
+        var s = '';
+        var len = bytes.length || 0;
+        for (var i = 0; i < len; i++) { s += String.fromCharCode(bytes[i]); }
+        return s;
+    };
+}
+// TextEncoderStream / TextDecoderStream（流式编码，框架特性检测用）
+if (typeof TextEncoderStream !== 'function') {
+    window.TextEncoderStream = function() { this.encoding = 'utf-8'; this.readable = { locked: false }; };
+}
+if (typeof TextDecoderStream !== 'function') {
+    window.TextDecoderStream = function(label) { this.encoding = (label || 'utf-8').toLowerCase(); this.readable = { locked: false }; };
+}
+
+// Blob（构造器：存 size/type，爬虫不真正读内容）
+if (typeof Blob !== 'function') {
+    window.Blob = function(parts, opts) {
+        var size = 0;
+        if (parts) { for (var i = 0; i < parts.length; i++) { size += (parts[i] && parts[i].length) ? parts[i].length : String(parts[i]).length; } }
+        this.size = size;
+        this.type = (opts && opts.type) || '';
+    };
+    window.Blob.prototype.text = function() { return Promise.resolve(''); };
+    window.Blob.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+}
+
+// Headers（大小写不敏感的 get/set/append）
+if (typeof Headers !== 'function') {
+    window.Headers = function(init) {
+        var store = {};
+        function norm(k) { return String(k).toLowerCase(); }
+        this.has = function(k) { return norm(k) in store; };
+        this.get = function(k) { var v = store[norm(k)]; return v !== undefined ? v : null; };
+        this.set = function(k, v) { store[norm(k)] = String(v); };
+        this.append = function(k, v) {
+            var n = norm(k);
+            if (n in store) { store[n] = store[n] + ', ' + v; } else { store[n] = String(v); }
+        };
+        this.delete = function(k) { delete store[norm(k)]; };
+        this.forEach = function(cb) { for (var k in store) { cb(store[k], k, this); } };
+        if (init) {
+            if (typeof init.forEach === 'function') { init.forEach(function(v, k) { this.append(k, v); }.bind(this)); }
+            else { for (var k in init) { this.append(k, init[k]); } }
+        }
+    };
+}
+// FormData（key-value 表单数据）
+if (typeof FormData !== 'function') {
+    window.FormData = function() {
+        var store = {};
+        this.append = function(k, v) {
+            if (!(k in store)) { store[k] = []; }
+            store[k].push(String(v));
+        };
+        this.get = function(k) { return (k in store && store[k].length) ? store[k][0] : null; };
+        this.getAll = function(k) { return store[k] || []; };
+        this.has = function(k) { return k in store; };
+        this.set = function(k, v) { store[k] = [String(v)]; };
+        this.delete = function(k) { delete store[k]; };
+        this.forEach = function(cb) { for (var k in store) { for (var i = 0; i < store[k].length; i++) { cb(store[k][i], k, this); } } };
+    };
+}
+
+// document.createElementNS：存 namespaceURI + 创建元素（tagName 大写）
+document.createElementNS = function(ns, tag) {
+    var el = document.createElement(tag);
+    if (el && typeof ns === 'string') { el.namespaceURI = ns; }
+    return el;
 };
 
-// Event 构造器（提前定义，XHR shim 依赖它）
-if (typeof Event !== 'function') {
-    window.Event = function(type, opts) { this.type = type; this.target = null; this.currentTarget = null; };
-    window.Event.prototype.preventDefault = function() {};
-    window.Event.prototype.stopPropagation = function() {};
-}
-if (typeof CustomEvent !== 'function') {
-    window.CustomEvent = function(type, opts) { Event.call(this, type); this.detail = (opts && opts.detail) || null; };
-    window.CustomEvent.prototype = Object.create(window.Event.prototype);
-}
+// Node 常量（框架常用 nodeType 判断）
+window.Node = window.Node || {};
+window.Node.ELEMENT_NODE = 1;
+window.Node.TEXT_NODE = 3;
+window.Node.COMMENT_NODE = 8;
+window.Node.DOCUMENT_NODE = 9;
+window.Node.DOCUMENT_FRAGMENT_NODE = 11;
+window.Node.DOCUMENT_POSITION_CONTAINED_BY = 16;
 
 undefined;
 "#;
@@ -1477,6 +1845,20 @@ Element.prototype.getAttribute = function(key) {
 Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); };
 Element.prototype.appendChild = function(child) {
     if (child && typeof child.__nodeId === 'number') {
+        // GAP-K: DocumentFragment 插入时展开子节点（Web 标准行为）。
+        // fragment 的子节点逐个移动到 this，fragment 本身变空（不插入）。
+        // __children 返回逗号分隔 NodeId 字符串，需 split 成数组。
+        // 先拷贝 children 数组再遍历——__appendChild 是 move 语义，边遍历边移会错位。
+        if (child.__isFragment) {
+            var fragChildrenStr = __children(child.__nodeId);
+            if (fragChildrenStr) {
+                var fragIds = fragChildrenStr.split(',').filter(function(s) { return s; });
+                for (var _ci = 0; _ci < fragIds.length; _ci++) {
+                    __appendChild(this.__nodeId, parseInt(fragIds[_ci], 10));
+                }
+            }
+            return child;
+        }
         __appendChild(this.__nodeId, child.__nodeId);
         // M69: 动态 script 执行。webpack/vite 等前端工程化站点把业务代码打包成
         // 独立 chunk，在运行时用 createElement("script") + head.appendChild(s)
@@ -1557,12 +1939,52 @@ Element.prototype.addEventListener = function(type, cb) {
     this.__listeners[type].push(cb);
 };
 Element.prototype.cloneNode = function(deep) {
-    var copy = __makeElement(__createEl(String(__getTag(this.__nodeId) || 'div')));
-    if (!copy) return null;
+    var tag = String(__getTag(this.__nodeId) || 'div');
+    var newId = __createEl(tag);
+    if (newId < 0) return null;
+    var copy = __makeElement(newId);
+    // 复制文本内容（仅叶子元素）。
+    // GAP-J: 不能对父元素无条件 __setText——__getText(父) 返回子节点文本拼接，
+    // __setText 会给克隆的父元素加一个不该有的文本子节点（导致 cloneNode 多复制）。
+    // 只在没有元素子节点（纯文本叶子，如 <li>text</li>）时才复制文本。
+    try {
+        var hasElementChild = false;
+        var rawChildren = __children(this.__nodeId);
+        if (rawChildren) {
+            var childIds = rawChildren.split(',').filter(function(s) { return s; });
+            for (var ci = 0; ci < childIds.length; ci++) {
+                var ctag = __getTag(parseInt(childIds[ci], 10));
+                if (ctag && ctag !== '__text__') { hasElementChild = true; break; }
+            }
+        }
+        if (!hasElementChild) {
+            var txt = __getText(this.__nodeId);
+            if (txt) __setText(newId, String(txt));
+        }
+    } catch(e) {}
+    // 深拷贝：递归克隆子元素（重建子树）
+    if (deep !== false) {
+        try {
+            var cs = __children(this.__nodeId);
+            if (cs) {
+                var ids = cs.split(',').filter(function(s) { return s; });
+                for (var i = 0; i < ids.length; i++) {
+                    var cid = parseInt(ids[i], 10);
+                    var ctag = __getTag(cid);
+                    if (ctag && ctag !== '__text__') {
+                        var childCopy = __makeElement(cid) ? __makeElement(cid).cloneNode(true) : null;
+                        if (childCopy) {
+                            try { __appendChild(newId, childCopy.__nodeId); } catch(e2) {}
+                        }
+                    }
+                }
+            }
+        } catch(e3) {}
+    }
     return copy;
 };
 Object.defineProperty(Element.prototype, 'tagName', {
-    get: function() { return __getTag(this.__nodeId); },
+    get: function() { return String(__getTag(this.__nodeId)).toUpperCase(); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'textContent', {
@@ -1602,6 +2024,12 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
 Object.defineProperty(Element.prototype, 'id', {
     get: function() { return __getAttr(this.__nodeId, 'id') || ''; },
     set: function(v) { __setAttr(this.__nodeId, 'id', String(v)); },
+    enumerable: true, configurable: true
+});
+// href 属性反射（a/area/link 标签用，爬虫 docsify sidebar sort 依赖）
+Object.defineProperty(Element.prototype, 'href', {
+    get: function() { return __getAttr(this.__nodeId, 'href') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'href', String(v)); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'children', {
@@ -1700,7 +2128,7 @@ Object.defineProperty(Element.prototype, 'parentElement', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'nodeType', {
-    get: function() { return 1; },
+    get: function() { return this.__isFragment ? 11 : 1; },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'style', {
@@ -1758,14 +2186,122 @@ Element.prototype.querySelectorAll = function(sel) {
     return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
 };
 Element.prototype.contains = function(node) { return false; };
+// matches/closest：CSS 选择器匹配。依赖 __qsMatch/__qsClosest bridge。
+Element.prototype.matches = function(sel) {
+    if (typeof __qsMatch === 'function') {
+        try { return !!__qsMatch(this.__nodeId, String(sel)); } catch(e) { return false; }
+    }
+    return false;
+};
+Element.prototype.closest = function(sel) {
+    if (typeof __qsClosest === 'function') {
+        try {
+            var id = __qsClosest(this.__nodeId, String(sel));
+            return (id >= 0) ? __makeElement(id) : null;
+        } catch(e) { return null; }
+    }
+    return null;
+};
+// childNodes：返回子节点的伪数组（框架常读 childNodes.length）。从 __children 反射。
+Object.defineProperty(Element.prototype, 'childNodes', {
+    get: function() {
+        try {
+            var cs = __children(this.__nodeId);
+            var ids = cs ? cs.split(',').filter(function(s) { return s; }) : [];
+            var arr = ids.map(function(s) { return parseInt(s, 10); });
+            arr.item = function(i) { return (i >= 0 && i < arr.length) ? arr[i] : null; };
+            return arr;
+        } catch(e) { return []; }
+    },
+    enumerable: true, configurable: true
+});
+// <template>.content：返回一个 DocumentFragment（nodeType=11）。爬虫场景空 fragment 够用。
+Object.defineProperty(Element.prototype, 'content', {
+    get: function() {
+        if (this.tagName === 'TEMPLATE') {
+            return document.createDocumentFragment();
+        }
+        return undefined;
+    },
+    enumerable: true, configurable: true
+});
+// importNode：简化为 cloneNode（爬虫场景够用）。
+document.importNode = function(node, deep) {
+    try { return node.cloneNode(deep !== false); } catch(e) { return null; }
+};
 Element.prototype.removeEventListener = function(type, cb) {};
 Element.prototype.dispatchEvent = function(ev) {
-    if (this.__listeners && ev && this.__listeners[ev.type]) {
-        var cbs = this.__listeners[ev.type];
-        for (var i = 0; i < cbs.length; i++) {
-            try { cbs[i].call(this, ev); } catch(e) {}
+    // GAP-M: 事件冒泡。dispatchEvent 应沿 parent 链向上触发祖先监听器
+    // （事件委托场景：ul 监听 click，点击 li 应冒泡到 ul）。
+    if (!ev) return true;
+    var cur = this;
+    ev.target = this;
+    while (cur) {
+        ev.currentTarget = cur;
+        if (cur.__listeners && cur.__listeners[ev.type]) {
+            var cbs = cur.__listeners[ev.type];
+            for (var i = 0; i < cbs.length; i++) {
+                try { cbs[i].call(cur, ev); } catch(e) {}
+            }
         }
+        // bubbles=false 或已 stopPropagation 则停止冒泡
+        if (!ev.bubbles || ev.__stopPropagation) break;
+        // 沿 parent 链向上（用 __getParent bridge）
+        try {
+            var pid = __getParent(cur.__nodeId);
+            if (pid >= 0) {
+                cur = __makeElement(pid);
+            } else {
+                break;
+            }
+        } catch(pe) { break; }
     }
+    return true;
+};
+// getComputedStyle：返回一个只读 style 对象（爬虫场景，不需像素精确）。
+window.getComputedStyle = function(el) {
+    if (!el) return null;
+    // GAP-L: 按 tag 返回合理默认 computed style（爬虫场景，不需像素精确）。
+    // 这样 getPropertyValue('display')/'color' 等能力探测不返回空，避免页面脚本中断。
+    var tagName = (typeof el.tagName === 'string') ? el.tagName.toUpperCase() : '';
+    var __defaults = {
+        DIV: 'block', P: 'block', H1: 'block', H2: 'block', H3: 'block', H4: 'block',
+        H5: 'block', H6: 'block', UL: 'block', OL: 'block', LI: 'list-item',
+        SECTION: 'block', ARTICLE: 'block', HEADER: 'block', FOOTER: 'block',
+        NAV: 'block', ASIDE: 'block', MAIN: 'block', FORM: 'block', FIELDSET: 'block',
+        TABLE: 'table', TR: 'table-row', TD: 'table-cell', TH: 'table-cell',
+        SPAN: 'inline', A: 'inline', B: 'inline', I: 'inline', EM: 'inline',
+        STRONG: 'inline', IMG: 'inline', LABEL: 'inline', CODE: 'inline',
+        INPUT: 'inline-block', BUTTON: 'inline-block', SELECT: 'inline-block',
+        TEXTAREA: 'inline-block', CANVAS: 'inline-block'
+    };
+    var styleObj = {
+        getPropertyValue: function(p) { return styleObj[p] || ''; },
+        getPropertyPriority: function() { return ''; },
+        setProperty: function() {},
+        removeProperty: function() {},
+        length: 0,
+        item: function() { return '' },
+        // 默认值（能力探测不返回空）
+        display: __defaults[tagName] || 'block',
+        color: 'rgb(0, 0, 0)',
+        visibility: 'visible',
+        opacity: '1',
+        position: 'static',
+        zIndex: 'auto',
+        overflow: 'visible'
+    };
+    // 从 el.style 反射已知 inline style（覆盖默认值）
+    try {
+        var cs = el.style;
+        if (cs) {
+            for (var p in cs) {
+                if (typeof cs[p] === 'string' && cs[p]) styleObj[p] = cs[p];
+            }
+            styleObj.cssText = cs.cssText || '';
+        }
+    } catch(e) {}
+    return styleObj;
 };
 Element.prototype.insertAdjacentHTML = function(pos, html) {
     // 简化：只支持 beforeend（最常用）
@@ -1779,13 +2315,36 @@ Element.prototype.getBoundingClientRect = function() {
 Element.prototype.focus = function() {};
 Element.prototype.blur = function() {};
 Element.prototype.scrollIntoView = function() {};
-// dataset（框架常用 data-* 属性）—— 简化版，不用 Proxy
+// dataset（框架常用 data-* 属性）——Proxy 动态反射到 data-* attribute。
+// dataset.fooBar → __getAttr(nodeId, 'data-foo-bar')，写同步 __setAttr。
+// 不依赖枚举所有属性（QuickJS bridge 无列属性 API），惰性按 key 反射。
 Object.defineProperty(Element.prototype, 'dataset', {
     get: function() {
-        if (!this.__dataset) {
-            this.__dataset = {};
+        var self = this;
+        var cache = {};
+        // 驼峰 ↔ kebab：fooBar ↔ data-foo-bar
+        function toKebab(k) { return 'data-' + String(k).replace(/([A-Z])/g, function(_, c) { return '-' + c.toLowerCase(); }); }
+        function toCamel(k) { return k.slice(5).replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); }); }
+        try {
+            return new Proxy(cache, {
+                get: function(t, k) {
+                    if (k in t) return t[k];
+                    if (typeof k !== 'string') return undefined;
+                    var v = __getAttr(self.__nodeId, toKebab(k));
+                    return (v === null || v === undefined) ? undefined : v;
+                },
+                set: function(t, k, v) {
+                    if (typeof k === 'string') {
+                        __setAttr(self.__nodeId, toKebab(k), String(v));
+                        t[k] = String(v);
+                    }
+                    return true;
+                }
+            });
+        } catch(e) {
+            // 无 Proxy——返回空对象（爬虫读场景少）
+            return cache;
         }
-        return this.__dataset;
     },
     enumerable: true, configurable: true
 });
@@ -1924,7 +2483,13 @@ document.createTextNode = function(text) {
     __setText(id, String(text || ''));
     return __makeElement(id);
 };
-document.createDocumentFragment = function() { return document.createElement('div'); };
+document.createDocumentFragment = function() {
+    // 真正的 DocumentFragment：nodeType=11，appendChild 可用。
+    // 用 Element 创建后打 __isFragment 标记，nodeType getter 据此返回 11。
+    var frag = document.createElement('div');
+    frag.__isFragment = true;
+    return frag;
+};
 document.createComment = function(text) { return document.createElement('div'); };
 document.getElementById = function(id) {
     var nodeId = __getElById(String(id));
@@ -2110,6 +2675,7 @@ undefined;
 /// M16.4: 每轮 tick 先 `ctx.run_jobs()`（执行 Promise then 回调 microtask），
 /// 再 drain 到期 timer。两者交叉驱动，直到都 idle。
 /// `ctx.eval` 不返回值我们也不关心（回调的副作用在 DOM 上，不在返回值）。
+#[cfg(feature = "boa")]
 fn pump_event_loop(ctx: &mut Context) -> usize {
     const MAX_TICKS: usize = 1000;
     // M70.13: 硬超时从 8s 降到 3s——爬虫不需要等 analytics timer。
@@ -2225,6 +2791,7 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
 
 /// M23.5: 转义 WS 消息载荷为安全的 JS 字符串字面量（单引号包裹）。
 /// 处理反斜杠/单引号/换行/回车/制表符，避免 eval 注入或语法错误。
+#[allow(dead_code)]
 fn escape_js_ws_data(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -2255,7 +2822,15 @@ pub fn run_scripts_with_base(
     tree: Tree,
     base_url: Option<String>,
 ) -> (crate::bridge::SharedTree, usize) {
-    run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::Boa)
+    // M71.1: 无 boa feature 时回退到 QuickJS（默认引擎）。
+    #[cfg(feature = "boa")]
+    {
+        run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::Boa)
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        run_scripts_with_base_engine(tree, base_url, &crate::engine::EngineKind::QuickJs)
+    }
 }
 
 /// M66: 引擎可切换版本。通过 EngineKind 选择 JS 引擎（boa / quickjs）。
@@ -2288,6 +2863,7 @@ pub fn run_scripts_with_base_engine(
     } else {
         None
     };
+    #[allow(unused_mut)]
     let mut engine = engine_kind.create(esm_origin);
     let engine_name = engine.name();
 
@@ -2301,6 +2877,30 @@ pub fn run_scripts_with_base_engine(
         eprintln!("[js-runtime] QuickJS requested but feature not enabled, using boa");
     }
 
+    // M71.1: boa 路径仅在 --features boa 时编译。无 boa 时不可能走到这里
+    //（QuickJS 分支已 return，或 EngineKind 只有 QuickJs）。
+    #[cfg(feature = "boa")]
+    {
+        #[allow(clippy::needless_return)]
+        return run_scripts_with_base_boa(shared, base_url, engine, engine_name);
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        let _ = engine;
+        let _ = engine_name;
+        // 不可能到达：engine_kind 只能是 QuickJs，上面已 return。
+        (shared, 0)
+    }
+}
+
+/// M71.1: boa 路径（从 run_scripts_with_base_engine 抽出）。cfg 门控。
+#[cfg(feature = "boa")]
+fn run_scripts_with_base_boa(
+    shared: crate::bridge::SharedTree,
+    base_url: Option<String>,
+    mut engine: Box<dyn crate::engine::JsEngine>,
+    engine_name: &str,
+) -> (crate::bridge::SharedTree, usize) {
     // M66: 获取底层 boa Context（所有 bridge/shim 仍直接操作 Context）。
     let ctx = engine.ctx_mut();
     let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
@@ -2506,6 +3106,7 @@ pub fn run_scripts_with_base_engine(
 /// `bridge::install_shared_with_base` 装 tree guard 后才能 eval。
 ///
 /// `base_url` 用于 location/navigation 后端的初始 URL（None → about:blank）。
+#[cfg(feature = "boa")]
 fn build_shimmed_context(base_url: &Option<String>) -> Context {
     let mut ctx = Context::default();
     {
@@ -2548,7 +3149,15 @@ fn build_shimmed_context(base_url: &Option<String>) -> Context {
 /// # Errors
 /// 返回 `Err(msg)` 如果 JS 解析或执行失败。
 pub fn eval_in_tree(tree: Tree, base_url: Option<String>, expr: &str) -> Result<String, String> {
-    eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::Boa)
+    // M71.1: 无 boa feature 时回退到 QuickJS（默认引擎）。
+    #[cfg(feature = "boa")]
+    {
+        eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::Boa)
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        eval_in_tree_engine(tree, base_url, expr, &crate::engine::EngineKind::QuickJs)
+    }
 }
 
 /// M67: `eval_in_tree` 的引擎可选版本。供 CDP `Runtime.evaluate` /
@@ -2583,14 +3192,25 @@ pub fn eval_in_tree_engine(
     let _ = engine_kind;
 
     // ── boa 分支（默认 + QuickJS feature 未启用时的回退）──
-    let mut ctx = build_shimmed_context(&base_url);
-    // 安装 tree guard：让 document/window shims 的 __* 桥能访问 DOM。
-    // guard 在作用域结束时自动清理 thread-local slot。
-    let _guard = crate::bridge::install_shared_with_base(shared, base_url);
-    let result: JsValue = ctx
-        .eval(Source::from_bytes(expr))
-        .map_err(|e| format!("js eval error: {e}"))?;
-    Ok(result.display().to_string())
+    #[cfg(feature = "boa")]
+    {
+        let mut ctx = build_shimmed_context(&base_url);
+        // 安装 tree guard：让 document/window shims 的 __* 桥能访问 DOM。
+        // guard 在作用域结束时自动清理 thread-local slot。
+        let _guard = crate::bridge::install_shared_with_base(shared, base_url);
+        let result: JsValue = ctx
+            .eval(Source::from_bytes(expr))
+            .map_err(|e| format!("js eval error: {e}"))?;
+        Ok(result.display().to_string())
+    }
+    #[cfg(not(feature = "boa"))]
+    {
+        // 无 boa feature：QuickJS 分支已 return，这里不可能到达。
+        let _ = shared;
+        let _ = base_url;
+        let _ = expr;
+        Err("no JS engine available".to_string())
+    }
 }
 
 /// M67: QuickJS 版 `eval_in_tree`。复用 `run_scripts_quickjs` 的 setup 模式
@@ -2666,7 +3286,7 @@ var self = globalThis;
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod tests {
     use super::*;
     use crate::bridge::body_text_content;
@@ -2827,7 +3447,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod m69_proto_rel_diag {
     use super::resolve_script_url;
 

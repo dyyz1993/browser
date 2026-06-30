@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!-- 11-canvas: Canvas 2D 探测（不要求像素渲染，测 API 存在 + 不崩 + 能取 context） -->
+<html><head><meta charset="utf-8"></head>
+<body><pre id="out"></pre>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+// 1. canvas 元素创建 + 属性
+var canvas = document.createElement('canvas');
+report('createElement canvas', typeof canvas);
+report('canvas.tagName', canvas.tagName);
+canvas.width = 100;
+canvas.height = 50;
+report('canvas.width', canvas.width);
+report('canvas.height', canvas.height);
+report('canvas instanceof HTMLCanvasElement', canvas instanceof HTMLCanvasElement);
+
+// 2. getContext('2d') 探测（爬虫场景：页面常探测能力，不强求真渲染）
+report('typeof getContext', typeof canvas.getContext);
+var ctx = null;
+try {
+  ctx = canvas.getContext('2d');
+  report('getContext 2d', ctx ? 'exists' : 'null');
+} catch(e) { report('getContext 2d', 'THREW: ' + e.message); }
+
+// 3. 2D API 方法存在性（框架/指纹脚本常探测）
+if (ctx) {
+  ['fillRect', 'fillText', 'arc', 'beginPath', 'stroke', 'getImageData',
+   'toDataURL', 'measureText', 'save', 'restore', 'translate', 'rotate',
+   'drawImage'].forEach(function(fn) {
+    report('ctx.' + fn, typeof ctx[fn]);
+  });
+  // 尝试基本调用（不验证像素，只测不崩）
+  try {
+    ctx.fillRect(0, 0, 10, 10);
+    report('fillRect call', 'ok');
+  } catch(e) { report('fillRect call', 'THREW: ' + e.message); }
+  try {
+    var m = ctx.measureText('test');
+    report('measureText', typeof m);
+    report('measureText.width', typeof (m && m.width));
+  } catch(e) { report('measureText', 'THREW: ' + e.message); }
+}
+
+// 4. toDataURL（canvas 指纹常用，测不崩即可）
+try {
+  var url = canvas.toDataURL();
+  report('toDataURL', url ? url.slice(0, 30) + '...' : 'empty');
+} catch(e) { report('toDataURL', 'THREW: ' + e.message); }
+
+// 5. OffscreenCanvas 探测（现代页面可能用）
+report('typeof OffscreenCanvas', typeof window.OffscreenCanvas);
+
+// 6. WebGL context 探测（区分 webgl / webgl2）
+try {
+  var gl = canvas.getContext('webgl');
+  report('getContext webgl', gl ? 'exists' : 'null');
+} catch(e) { report('getContext webgl', 'THREW: ' + e.message); }
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>

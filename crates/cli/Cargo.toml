@@ -51,3 +51,6 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 default = ["quickjs"]
 # M66: QuickJS JS 引擎后端（默认引擎）
 quickjs = ["browser-js-runtime/quickjs"]
+# M71.1: boa 引擎后端（备选，默认不编译）。同时转发给 cdp/js-runtime，
+# 让两个 crate 内部的 cfg(feature="boa") 都生效。
+boa = ["browser-js-runtime/boa", "browser-cdp/boa"]

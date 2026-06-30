@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<!-- 13-vdom: 虚拟 DOM 深入模拟（渲染/key/条件/事件委托） -->
+<html><head><meta charset="utf-8"></head>
+<body><pre id="out"></pre>
+<div id="app"></div>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+window.addEventListener('error', function(e) {
+  report('UNCAUGHT', (e.message || '') + ':' + (e.lineno || 0));
+});
+
+var app = document.getElementById('app');
+function h(tag, props, children) {
+  return { tag: tag, props: props || {}, children: children || [] };
+}
+function createElement(vnode) {
+  var el = document.createElement(vnode.tag);
+  for (var k in vnode.props) {
+    if (k === 'className') el.className = vnode.props[k];
+    else if (k === 'onClick') el.addEventListener('click', vnode.props[k]);
+    else if (k.indexOf('data-') === 0) el.setAttribute(k, vnode.props[k]);
+  }
+  for (var i = 0; i < vnode.children.length; i++) {
+    var c = vnode.children[i];
+    if (typeof c === 'string') el.appendChild(document.createTextNode(c));
+    else el.appendChild(createElement(c));
+  }
+  return el;
+}
+
+// 1. 首次渲染
+var tree1 = h('div', {className: 'list'}, [
+  h('ul', null, [
+    h('li', {'data-key': 'a'}, ['A']),
+    h('li', {'data-key': 'b'}, ['B']),
+    h('li', {'data-key': 'c'}, ['C'])
+  ])
+]);
+var rootNode = createElement(tree1);
+app.appendChild(rootNode);
+report('first render li count', app.querySelectorAll('li').length);
+report('first li text', app.querySelector('li').textContent);
+report('li data-key reflected', app.querySelector('li').getAttribute('data-key'));
+
+// 2. 更新（重建策略）
+var tree2 = h('div', {className: 'list updated'}, [
+  h('ul', null, [
+    h('li', {'data-key': 'a'}, ['A2']),
+    h('li', {'data-key': 'b'}, ['B2']),
+    h('li', {'data-key': 'c'}, ['C2']),
+    h('li', {'data-key': 'd'}, ['D'])
+  ])
+]);
+app.innerHTML = '';
+app.appendChild(createElement(tree2));
+report('after update li count', app.querySelectorAll('li').length);
+report('after update className', app.firstChild.className);
+report('after update li0 text', app.querySelectorAll('li')[0].textContent);
+
+// 3. 条件渲染
+var show = true;
+if (show) {
+  var p1 = document.createElement('p');
+  p1.className = 'shown';
+  p1.textContent = 'VISIBLE';
+  app.appendChild(p1);
+}
+report('conditional shown', app.querySelector('.shown') !== null);
+
+// 4. 列表 key 唯一性
+var keys = [];
+var knodes = app.querySelectorAll('[data-key]');
+for (var j = 0; j < knodes.length; j++) {
+  keys.push(knodes[j].getAttribute('data-key'));
+}
+report('keys collected', keys.length);
+report('keys unique', new Set(keys).size === keys.length);
+
+// 5. 事件委托
+app.innerHTML = '';
+var ul = document.createElement('ul');
+var clickLog = '';
+ul.addEventListener('click', function(e) {
+  clickLog = e.target ? (e.target.tagName + ':' + e.target.textContent) : 'no-target';
+});
+var items = ['x', 'y', 'z'];
+for (var n = 0; n < items.length; n++) {
+  var li = document.createElement('li');
+  li.textContent = items[n];
+  ul.appendChild(li);
+}
+app.appendChild(ul);
+report('delegate li count', ul.querySelectorAll('li').length);
+// 模拟点击第二个 li
+var second = ul.querySelectorAll('li')[1];
+if (second) {
+  var ev = new Event('click', {bubbles: true});
+  second.dispatchEvent(ev);
+}
+report('click delegate result', clickLog);
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>

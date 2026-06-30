@@ -166,7 +166,7 @@ fn classify_value(s: &str) -> (String, Json) {
     ("string".to_string(), Json::String(s.to_string()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "boa"))]
 mod tests {
     use super::*;
 

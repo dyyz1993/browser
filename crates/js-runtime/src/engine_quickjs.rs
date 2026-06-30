@@ -76,6 +76,7 @@ impl QuickJsEngineWrapper {
 }
 
 impl crate::engine::JsEngine for QuickJsEngineWrapper {
+    #[cfg(feature = "boa")]
     fn ctx_mut(&mut self) -> &mut boa_engine::Context {
         panic!("QuickJS engine does not support ctx_mut() — use QuickJsEngine::eval() directly");
     }
@@ -156,6 +157,8 @@ impl QuickJsEngine {
                 let _ = g.set("__getElById", Function::new(ctx.clone(), |id: String| bridge::qjs_bridge::get_el_by_id(id)).unwrap());
                 let _ = g.set("__qs", Function::new(ctx.clone(), |s: String| bridge::qjs_bridge::qs(s)).unwrap());
                 let _ = g.set("__qsAll", Function::new(ctx.clone(), |s: String| bridge::qjs_bridge::qs_all(s)).unwrap());
+                let _ = g.set("__qsMatch", Function::new(ctx.clone(), |id: f64, s: String| bridge::qjs_bridge::qs_match(id, s)).unwrap());
+                let _ = g.set("__qsClosest", Function::new(ctx.clone(), |id: f64, s: String| bridge::qjs_bridge::qs_closest(id, s)).unwrap());
                 let _ = g.set("__getBody", Function::new(ctx.clone(), |_: f64| bridge::qjs_bridge::get_body()).unwrap());
                 let _ = g.set("__setTitle", Function::new(ctx.clone(), |t: String| bridge::qjs_bridge::set_title(t)).unwrap());
                 let _ = g.set("__getParent", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_parent(id)).unwrap());
@@ -304,6 +307,29 @@ impl QuickJsEngine {
                 Ok(()) => Ok(()),
                 Err(e) => Err(format!("{e}")),
             })
+    }
+
+    /// M71.4: 执行**用户 script**（非 shim）。
+    ///
+    /// 与 `eval_safe` 的关键区别：关闭 strict 模式（`EvalOptions{strict:false}`）。
+    /// 原因：rquickjs 的 `ctx.eval()` 默认 `strict: true`，导致用户 script 里
+    /// 的**裸赋值未声明变量**（如 SvelteKit 的 `__sveltekit_xxx = {...}`）抛
+    /// ReferenceError，整段 script 中断。真实浏览器是 sloppy mode，裸赋值会
+    /// 自动创建 globalThis 属性。
+    ///
+    /// 仅对用户 script 关闭 strict；shim 安装代码（eval_safe）保持 strict。
+    /// CaughtError 在 with 闭包内 drop（GC 安全）。
+    pub fn eval_user_script(&mut self, js: &str) -> Result<(), String> {
+        use rquickjs::context::EvalOptions;
+        use rquickjs::CatchResultExt;
+        self.ctx.with(|ctx: Ctx| {
+            let mut opts = EvalOptions::default();
+            opts.strict = false;
+            match ctx.eval_with_options::<(), _>(js, opts).catch(&ctx) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(format!("{e}")),
+            }
+        })
     }
 
     /// M66: 带整数返回值的 eval。

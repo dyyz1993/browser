@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><body><div id="root"></div>
+<script>
+// 模拟 React/Vue 的组件化渲染
+function h(tag, props, children) {
+  var el = document.createElement(tag);
+  if (props) {
+    for (var k in props) {
+      if (k === 'class') el.className = props[k];
+      else if (k === 'onClick') { el.onclick = props[k]; }
+      else if (k === 'dataId') { el.setAttribute('data-id', props[k]); }
+    }
+  }
+  (children || []).forEach(function(c) {
+    if (typeof c === 'string') el.appendChild(document.createTextNode(c));
+    else if (c) el.appendChild(c);
+  });
+  return el;
+}
+var root = document.getElementById('root');
+var state = { count: 0, items: [] };
+function render() {
+  root.innerHTML = '';
+  var app = h('div', {class: 'app'}, [
+    h('h1', null, ['Todo App (' + state.items.length + ')']),
+    h('input', {id: 'inp', dataId: 'new-input'}, []),
+    h('button', {onClick: function(){ state.count++; }}, ['clicked: ' + state.count]),
+    h('ul', null, state.items.map(function(it, i) {
+      return h('li', {class: 'item-' + i, dataId: it.id}, [it.text]);
+    }))
+  ]);
+  root.appendChild(app);
+}
+// 初始数据
+state.items = [
+  {id: 1, text: 'Learn Rust'},
+  {id: 2, text: 'Build browser'},
+  {id: 3, text: 'Render SPA'}
+];
+render();
+// 模拟用户交互
+state.count = 3;
+state.items.push({id: 4, text: 'Compare with Chrome'});
+render();
+</script>
+</body></html>

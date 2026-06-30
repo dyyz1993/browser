@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!-- 09-css-selectors: CSS 选择器解析 + computed style + classList -->
+<html><head><meta charset="utf-8">
+<style>
+#root .card.active { color: red; }
+div > p:first-child { font-weight: bold; }
+[data-role="nav"] a { text-decoration: none; }
+li:nth-child(2n) { background: #eee; }
+</style>
+</head>
+<body><pre id="out"></pre>
+<div id="root">
+  <p class="lead">first</p>
+  <div class="card active">card1</div>
+  <div class="card">card2</div>
+  <div data-role="nav"><a href="/x">link</a></div>
+  <ul><li>1</li><li>2</li><li>3</li><li>4</li></ul>
+</div>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+// 1. querySelector 各类选择器
+report('qs #root', !!document.querySelector('#root'));
+report('qs .card.active', document.querySelector('.card.active') !== null);
+report('qs div > p:first-child', document.querySelector('div > p:first-child') !== null);
+report('qs [data-role="nav"] a', document.querySelector('[data-role="nav"] a') !== null);
+report('qs li:nth-child(2)', document.querySelector('li:nth-child(2)') !== null);
+
+// 2. querySelectorAll 计数
+report('qsa .card count', document.querySelectorAll('.card').length);
+report('qsa li count', document.querySelectorAll('li').length);
+report('qsa a[href] count', document.querySelectorAll('a[href]').length);
+
+// 3. classList API
+var card = document.querySelector('.card.active');
+report('classList contains active', card.classList.contains('active'));
+report('classList length', card.classList.length);
+card.classList.remove('active');
+report('after remove active', card.classList.contains('active'));
+card.classList.add('flagged');
+report('after add flagged', card.classList.contains('flagged'));
+card.classList.toggle('flagged');
+report('after toggle flagged', card.classList.contains('flagged'));
+
+// 4. getComputedStyle 探测（不要求像素精确，只要不崩 + 返回对象）
+try {
+  var cs = window.getComputedStyle(card);
+  report('getComputedStyle', typeof cs);
+  report('computed display', cs.getPropertyValue('display') ? 'has-value' : 'empty');
+  report('computed color', cs.getPropertyValue('color') ? 'has-value' : 'empty');
+} catch(e) { report('getComputedStyle', 'THREW: ' + e.message); }
+
+// 5. matches() / closest()
+report('card.matches .card', card.matches('.card'));
+var a = document.querySelector('[data-role="nav"] a');
+try {
+  report('a.closest nav', a.closest('[data-role="nav"]') !== null);
+} catch(e) { report('closest', 'THREW: ' + e.message); }
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>

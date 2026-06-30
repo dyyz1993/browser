@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!-- 14-performance: performance API / console 多类型 / 对象属性枚举 / 计时器 -->
+<html><head><meta charset="utf-8"></head>
+<body><pre id="out"></pre>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+// 1. performance API（性能监控核心）
+report('typeof performance', typeof window.performance);
+if (window.performance) {
+  report('performance.now', typeof performance.now);
+  report('performance.timing', typeof performance.timing);
+  report('performance.navigation', typeof performance.navigation);
+  report('performance.getEntriesByType', typeof performance.getEntriesByType);
+  report('performance.mark', typeof performance.mark);
+  report('performance.measure', typeof performance.measure);
+  try {
+    var now = performance.now();
+    report('performance.now() value', typeof now === 'number' ? 'number(' + (now > 0) + ')' : typeof now);
+  } catch(e) { report('performance.now() call', 'THREW: ' + e.message); }
+  // mark/measure（用户自定义计时点）
+  try {
+    performance.mark('start');
+    performance.mark('end');
+    performance.measure('dur', 'start', 'end');
+    report('mark/measure', 'ok');
+  } catch(e) { report('mark/measure', 'THREW: ' + e.message); }
+  // Resource Timing
+  try {
+    var entries = performance.getEntriesByType('resource');
+    report('resource entries count', entries.length);
+  } catch(e) { report('getEntriesByType', 'THREW: ' + e.message); }
+  // Navigation Timing 关键时间点
+  try {
+    var nav = performance.getEntriesByType('navigation');
+    report('navigation entries', nav.length);
+  } catch(e) { report('nav entries', 'THREW: ' + e.message); }
+}
+
+// 2. console 多类型（爬虫采集 console 错误/log）
+['log', 'info', 'warn', 'error', 'debug', 'dir', 'table'].forEach(function(fn) {
+  report('console.' + fn, typeof console[fn]);
+});
+try { console.log('baseline', 1, {a:1}, [1,2]); report('console.log call', 'ok'); } catch(e) {}
+try { console.error('err test'); report('console.error call', 'ok'); } catch(e) {}
+try { console.warn('warn test'); report('console.warn call', 'ok'); } catch(e) {}
+
+// 3. 对象属性枚举（框架检测常读 Object.keys）
+var obj = {a: 1, b: 'two', c: true, method: function(){}};
+report('Object.keys count', Object.keys(obj).length);
+report('Object.keys join', Object.keys(obj).join(','));
+report('Object.getOwnPropertyNames', Object.getOwnPropertyNames(obj).length);
+report('hasOwnProperty a', obj.hasOwnProperty('a'));
+report('JSON.stringify', typeof JSON.stringify(obj));
+report('JSON.stringify circular safe', (function(){
+  var x = {n: 1}; x.self = x;
+  try { JSON.stringify(x); return 'no-throw'; } catch(e) { return 'threw'; }
+})());
+
+// 4. 计时器（性能监控依赖）
+report('setTimeout called', typeof setTimeout);
+report('clearTimeout called', typeof clearTimeout);
+report('setInterval called', typeof setInterval);
+report('requestIdleCallback', typeof window.requestIdleCallback);
+
+// 5. Error 对象 + stack（错误采集核心）
+try { throw new Error('test error'); } catch(e) {
+  report('Error.message', e.message);
+  report('Error.name', e.name);
+  report('Error.stack typeof', typeof e.stack);
+}
+// 自定义错误类型
+report('TypeError exists', typeof TypeError);
+try { null.foo; } catch(e) { report('TypeError caught', e.name); }
+
+// 6. Promise + 微任务（现代 SPA 核心时序）
+report('Promise exists', typeof Promise);
+report('Promise.resolve', typeof Promise.resolve);
+report('Promise.all', typeof Promise.all);
+report('queueMicrotask', typeof window.queueMicrotask);
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>
