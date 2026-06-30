@@ -1,0 +1,13 @@
+createElement iframe: object
+iframe.contentDocument init: null
+iframe.srcdoc set: ok
+iframe.contentWindow: object
+contentDocument after append: exists
+iframe inner text: no inner el
+iframe.id: myframe
+iframe.tagName: IFRAME
+iframe instanceof HTMLIFrameElement: true
+typeof postMessage: function
+typeof onmessage: object
+postMessage call: ok
+message listener registered: ok

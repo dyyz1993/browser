@@ -1,0 +1,26 @@
+createElement canvas: object
+canvas.tagName: CANVAS
+canvas.width: 100
+canvas.height: 50
+canvas instanceof HTMLCanvasElement: true
+typeof getContext: function
+getContext 2d: exists
+ctx.fillRect: function
+ctx.fillText: function
+ctx.arc: function
+ctx.beginPath: function
+ctx.stroke: function
+ctx.getImageData: function
+ctx.toDataURL: undefined
+ctx.measureText: function
+ctx.save: function
+ctx.restore: function
+ctx.translate: function
+ctx.rotate: function
+ctx.drawImage: function
+fillRect call: ok
+measureText: object
+measureText.width: number
+toDataURL: data:image/png;base64,iVBORw0K...
+typeof OffscreenCanvas: function
+getContext webgl: null

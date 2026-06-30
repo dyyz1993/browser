@@ -1,0 +1,11 @@
+first render li count: 3
+first li text: A
+li data-key reflected: a
+after update li count: 4
+after update className: list updated
+after update li0 text: A2
+conditional shown: true
+keys collected: 4
+keys unique: true
+delegate li count: 3
+click delegate result: LI:y

@@ -1,0 +1,26 @@
+webgl supportable: true
+webgl context: exists
+typeof WebGL2RenderingContext: function
+webgl2 context: null
+gl version: WebGL 1.0 (OpenGL ES 2.0 Chromium)
+gl vendor: WebKit
+gl renderer: WebKit WebGL
+gl shadingLanguageVersion: WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)
+gl maxTextureSize: 16384
+gl extension count: 39
+gl.createShader: function
+gl.shaderSource: function
+gl.compileShader: function
+gl.createProgram: function
+gl.attachShader: function
+gl.linkProgram: function
+gl.useProgram: function
+gl.createBuffer: function
+gl.bindBuffer: function
+gl.bufferData: function
+gl.drawArrays: function
+gl.drawElements: function
+gl.createTexture: function
+gl.bindTexture: function
+gl.texImage2D: function
+webgl probe completed: ok

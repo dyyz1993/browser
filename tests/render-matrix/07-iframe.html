@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<!-- 07-iframe: iframe 创建/srcdoc/contentDocument/postMessage 探测 -->
+<html><head><meta charset="utf-8"></head>
+<body><pre id="out"></pre>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+// 1. 创建 iframe
+var iframe = document.createElement('iframe');
+report('createElement iframe', typeof iframe);
+report('iframe.contentDocument init', iframe.contentDocument);
+
+// 2. srcdoc 写入
+iframe.srcdoc = '<p id="inner">hello from iframe</p>';
+report('iframe.srcdoc set', iframe.getAttribute('srcdoc') ? 'ok' : 'empty');
+document.body.appendChild(iframe);
+
+// 3. 读取 iframe 内部 DOM（同步可能拿不到，srcdoc 异步解析）
+report('iframe.contentWindow', typeof iframe.contentWindow);
+try {
+  var idoc = iframe.contentDocument;
+  report('contentDocument after append', idoc ? 'exists' : 'null');
+  if (idoc) {
+    var inner = idoc.getElementById('inner');
+    report('iframe inner text', inner ? inner.textContent : 'no inner el');
+  }
+} catch(e) { report('contentDocument access', 'THREW: ' + e.message); }
+
+// 4. iframe 属性反射
+iframe.id = 'myframe';
+report('iframe.id', iframe.id);
+report('iframe.tagName', iframe.tagName);
+report('iframe instanceof HTMLIFrameElement', iframe instanceof HTMLIFrameElement);
+
+// 5. postMessage 探测（注册 + 发送，不验证回调时序）
+report('typeof postMessage', typeof window.postMessage);
+report('typeof onmessage', typeof window.onmessage);
+var msgReceived = false;
+window.addEventListener('message', function(e) { msgReceived = true; });
+try {
+  window.postMessage({test: 1}, '*');
+  report('postMessage call', 'ok');
+} catch(e) { report('postMessage call', 'THREW: ' + e.message); }
+report('message listener registered', 'ok');
+
+// 输出
+O.textContent = lines.join('\n');
+</script>
+</body></html>

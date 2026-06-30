@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- 08-fragment: DocumentFragment 批量插入 + 模板/克隆 -->
+<html><head><meta charset="utf-8"></head>
+<body><pre id="out"></pre>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+// 1. DocumentFragment 创建
+var frag = document.createDocumentFragment();
+report('createDocumentFragment', typeof frag);
+report('fragment.nodeType', frag.nodeType);          // 11
+report('fragment has appendChild', typeof frag.appendChild);
+
+// 2. 批量构建 + 一次插入
+for (var i = 0; i < 5; i++) {
+  var li = document.createElement('li');
+  li.textContent = 'item ' + i;
+  li.setAttribute('data-idx', i);
+  frag.appendChild(li);
+}
+report('fragment children count', frag.childNodes.length);  // 5
+
+var ul = document.createElement('ul');
+ul.id = 'list';
+ul.appendChild(frag);
+document.body.appendChild(ul);
+
+// 3. 插入后 fragment 应为空（规范行为）
+report('fragment after insert', frag.childNodes.length);     // 0
+
+// 4. 验证 DOM 里确实有 5 个 li
+var lis = document.querySelectorAll('#list li');
+report('ul li count', lis.length);                          // 5
+report('first li text', lis[0].textContent);
+report('first li data-idx', lis[0].getAttribute('data-idx'));
+report('li nodeType', lis[0].nodeType);                     // 1
+
+// 5. cloneNode（深拷贝）
+var ulClone = ul.cloneNode(true);
+report('cloneNode child count', ulClone.querySelectorAll('li').length);
+report('clone != original', ulClone !== ul);
+
+// 6. <template> 元素（content 是 fragment）
+var tmpl = document.createElement('template');
+report('template created', tmpl.tagName);
+report('template.content', tmpl.content ? 'exists' : 'null');
+report('template.content nodeType', tmpl.content ? tmpl.content.nodeType : 'N/A');
+
+// 7. importNode 探测
+report('document.importNode', typeof document.importNode);
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>

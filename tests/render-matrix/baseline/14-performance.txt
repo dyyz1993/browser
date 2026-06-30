@@ -1,0 +1,40 @@
+typeof performance: object
+performance.now: function
+performance.timing: object
+performance.navigation: object
+performance.getEntriesByType: function
+performance.mark: function
+performance.measure: function
+performance.now() value: number(true)
+mark/measure: ok
+resource entries count: 0
+navigation entries: 1
+console.log: function
+console.info: function
+console.warn: function
+console.error: function
+console.debug: function
+console.dir: function
+console.table: function
+console.log call: ok
+console.error call: ok
+console.warn call: ok
+Object.keys count: 4
+Object.keys join: a,b,c,method
+Object.getOwnPropertyNames: 4
+hasOwnProperty a: true
+JSON.stringify: string
+JSON.stringify circular safe: threw
+setTimeout called: function
+clearTimeout called: function
+setInterval called: function
+requestIdleCallback: function
+Error.message: test error
+Error.name: Error
+Error.stack typeof: string
+TypeError exists: function
+TypeError caught: TypeError
+Promise exists: function
+Promise.resolve: function
+Promise.all: function
+queueMicrotask: function

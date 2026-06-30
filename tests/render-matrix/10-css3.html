@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!-- 10-css3: flexbox / transform / transition / matchMedia / @supports 探测 -->
+<html><head><meta charset="utf-8">
+<style>
+.box { display: flex; transform: translateX(10px); transition: all .3s; }
+</style>
+</head>
+<body><pre id="out"></pre>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+// 1. matchMedia（响应式探测，框架常读）
+report('typeof matchMedia', typeof window.matchMedia);
+if (typeof window.matchMedia === 'function') {
+  try {
+    var mq = window.matchMedia('(min-width: 100px)');
+    report('matchMedia returns', typeof mq);
+    report('mq.matches', mq.matches);
+    report('mq.media', mq.media);
+    report('mq.addListener', typeof mq.addListener);
+    report('mq.addEventListener', typeof mq.addEventListener);
+  } catch(e) { report('matchMedia call', 'THREW: ' + e.message); }
+}
+
+// 2. CSS.supports / @supports 探测
+report('typeof CSS', typeof window.CSS);
+if (window.CSS && typeof window.CSS.supports === 'function') {
+  report('supports flex', CSS.supports('display', 'flex'));
+  report('supports grid', CSS.supports('display', 'grid'));
+  report('supports transform', CSS.supports('transform', 'translateX(0)'));
+}
+
+// 3. getComputedStyle 读 flex/transform
+var box = document.createElement('div');
+box.className = 'box';
+document.body.appendChild(box);
+try {
+  var cs = window.getComputedStyle(box);
+  report('computed display (flex)', cs.getPropertyValue('display'));
+  report('computed transform', cs.getPropertyValue('transform') ? 'has-value' : 'empty');
+  report('computed transition', cs.getPropertyValue('transition') ? 'has-value' : 'empty');
+} catch(e) { report('getComputedStyle', 'THREW: ' + e.message); }
+
+// 4. style 属性设置 transform（框架常用）
+box.style.transform = 'translateX(50px)';
+report('style.transform set', box.style.transform);
+report('attr style reflects', box.getAttribute('style'));
+
+// 5. CSS 变量（custom property）
+box.style.setProperty('--my-color', '#f00');
+report('getPropertyValue --my-color', box.style.getPropertyValue('--my-color'));
+
+// 6. requestAnimationFrame（动画驱动，transition 依赖）
+report('typeof requestAnimationFrame', typeof window.requestAnimationFrame);
+if (typeof window.requestAnimationFrame === 'function') {
+  var rafCalled = false;
+  requestAnimationFrame(function(ts) { rafCalled = true; });
+  report('raf registered', 'ok');
+}
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>

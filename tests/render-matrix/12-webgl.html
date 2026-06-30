@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- 12-webgl: WebGL/WebGL2 探测 + 能力查询（爬虫场景：测不崩 + 能报告能力） -->
+<html><head><meta charset="utf-8"></head>
+<body><pre id="out"></pre>
+<script>
+var O = document.getElementById('out');
+var lines = [];
+function report(k, v) { lines.push(k + ': ' + v); }
+
+var canvas = document.createElement('canvas');
+document.body.appendChild(canvas);
+
+// 1. WebGL1 探测
+report('webgl supportable', (function(){
+  try { return !!(window.WebGLRenderingContext || canvas.getContext('webgl')); }
+  catch(e) { return 'THREW: ' + e.message; }
+})());
+
+var gl = null;
+try { gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl'); }
+catch(e) { report('getContext webgl', 'THREW: ' + e.message); }
+report('webgl context', gl ? 'exists' : 'null');
+
+// 2. WebGL2 探测
+report('typeof WebGL2RenderingContext', typeof window.WebGL2RenderingContext);
+var gl2 = null;
+try { gl2 = canvas.getContext('webgl2'); } catch(e) {}
+report('webgl2 context', gl2 ? 'exists' : 'null');
+
+// 3. 能力查询（GL 参数，指纹脚本常读）
+if (gl) {
+  report('gl version', (function(){
+    try { return gl.getParameter(gl.VERSION); } catch(e) { return 'THREW'; }
+  })());
+  report('gl vendor', (function(){
+    try { return gl.getParameter(gl.VENDOR); } catch(e) { return 'THREW'; }
+  })());
+  report('gl renderer', (function(){
+    try { return gl.getParameter(gl.RENDERER); } catch(e) { return 'THREW'; }
+  })());
+  report('gl shadingLanguageVersion', (function(){
+    try { return gl.getParameter(gl.SHADING_LANGUAGE_VERSION); } catch(e) { return 'THREW'; }
+  })());
+  report('gl maxTextureSize', (function(){
+    try { return gl.getParameter(gl.MAX_TEXTURE_SIZE); } catch(e) { return 'THREW'; }
+  })());
+  // 扩展枚举
+  var exts = [];
+  try { exts = gl.getSupportedExtensions() || []; } catch(e) {}
+  report('gl extension count', exts.length);
+}
+
+// 4. WebGL 方法存在性（不调用，只探测存在——页面能力检测）
+if (gl) {
+  ['createShader', 'shaderSource', 'compileShader', 'createProgram',
+   'attachShader', 'linkProgram', 'useProgram', 'createBuffer',
+   'bindBuffer', 'bufferData', 'drawArrays', 'drawElements',
+   'createTexture', 'bindTexture', 'texImage2D'].forEach(function(fn) {
+    report('gl.' + fn, typeof gl[fn]);
+  });
+}
+
+// 5. 不崩就算过（爬虫不渲染 3D，只要脚本探测后能继续执行）
+report('webgl probe completed', 'ok');
+
+O.textContent = lines.join('\n');
+</script>
+</body></html>
