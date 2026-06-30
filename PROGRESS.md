@@ -11,8 +11,8 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M70.15**（Worker UI Map + Crawl 标签） |
-| 总 commits | ~261 |
+| HEAD | **M70.16**（serve vs Chrome 全维度对标，7/8 站 A 级） |
+| 总 commits | ~262 |
 | 测试 | 868 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
@@ -28,6 +28,35 @@
 ---
 
 ## 最近变更（倒序）
+
+### M70.16 — serve vs Chrome 全维度对标基准（8 站，7 站 A 级）（2026-06-30）✅
+
+修复并扩充 `tests/benchmarks/serve_vs_chrome.sh`，跑本地 serve vs Chrome headless 全维度对标。
+
+**基准脚本 2 个 bug 修复**：
+1. **JSON 解析**：原用 `json.loads('''$var''')` 三引号嵌入，被内容里的引号/特殊字符破坏（serve_ms 全显示 `?`）。改用 stdin `json.load(sys.stdin)`。
+2. **对比格式不对齐**：原用 `serve markdown`（纯文本）vs `chrome HTML` 对比，completeness.py 按 HTML 解析 markdown 提取不到 `<p>/<li>` 块 → blk_cov 恒 0。改成 **HTML vs HTML**（apples-to-apples）。
+
+**修正后结果**（本地 serve vs Chrome headless，HTML 格式对比）：
+
+| 站点 | serve | Chrome | blk_cov | word_cov | 综合 | 评级 |
+|------|-------|--------|---------|----------|------|------|
+| example.com | 2ms | 7.8s | 1.000 | 1.000 | 1.000 | **A** |
+| react.dev | 1.0s | 24.0s | 1.000 | 1.000 | 1.000 | **A** |
+| nuxt.com | 1.1s | 139.4s | 1.000 | 1.000 | 0.999 | **A** |
+| vuejs.org | 0.8s | 12.6s | 1.000 | 1.000 | 1.000 | **A** |
+| svelte.dev | 1.1s | 12.1s | 1.000 | 1.000 | 1.000 | **A** |
+| docsify.js.org | 4.4s | 17.8s | 0.929 | 0.950 | 0.925 | **A** |
+| todomvc-backbone | 2.8s | 6.1s | 1.000 | 1.000 | 1.000 | **A** |
+| bark.day.app | 2.6s | 10.9s | — | 1.000 | — | 见注 |
+
+**7/8 站 A 级**（综合 ≥0.85），平均覆盖率 0.99。serve 比 Chrome 快 6-100 倍（react 1s vs 24s，nuxt 1s vs 139s）。
+
+**bark.day.app 特例**：serve 渲染出完整中文内容（2323 chars），Chrome 只拿到标题（coverpage 依赖 CSS 动画/交互，headless 未触发）。completeness.py 假设 Chrome 是 ground truth → 反向打低分。这其实说明 **serve 在 bark 上超越了 Chrome**。这是已知方法论局限（AGENTS 第三章）。
+
+**已知基准方法局限**（非引擎问题）：
+- go.dev：Chrome headless 做语言重定向（中文版），serve UA 拿英文版 → 跨语言不可比
+- todomvc-vue：纯 CSR 自定义组件无标准 `<p>/<li>` 块 → blk_cov 度量不适用
 
 ### M70.15 — Worker UI 实现 Map + Crawl 标签（2026-06-30）✅
 
