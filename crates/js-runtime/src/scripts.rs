@@ -1363,6 +1363,100 @@ if (typeof window.HTMLElement === 'undefined') { window.HTMLElement = Element; }
 if (typeof window.SVGElement === 'undefined') { window.SVGElement = Element; }
 if (typeof window.SVGSVGElement === 'undefined') { window.SVGSVGElement = Element; }
 if (typeof window.HTMLCanvasElement === 'undefined') { window.HTMLCanvasElement = Element; }
+// Canvas/WebGL stub：爬虫场景不要求像素渲染，但 getContext 必须返回不崩的 stub，
+// 否则页面能力探测脚本（指纹/兼容检测）中断。M71.3 GAP-E/F。
+Element.prototype.getContext = function(type) {
+    if (type === '2d') {
+        return window.__canvas2dStub();
+    }
+    if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
+        return window.__webglStub(type);
+    }
+    return null;
+};
+Element.prototype.toDataURL = function() { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; };
+Element.prototype.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
+Element.prototype.captureStream = function() { return {}; };
+if (typeof window.OffscreenCanvas === 'undefined') {
+    window.OffscreenCanvas = function(w, h) { return { width: w||300, height: h||150, getContext: Element.prototype.getContext }; };
+}
+// 2D context stub：所有方法是 no-op，measureText.width 返回估算值。
+window.__canvas2dStub = function() {
+    var noop = function() {};
+    return {
+        canvas: null,
+        fillStyle: '', strokeStyle: '', lineWidth: 1, font: '10px sans-serif',
+        textAlign: 'start', textBaseline: 'alphabetic', globalAlpha: 1,
+        globalCompositeOperation: 'source-over', lineCap: 'butt', lineJoin: 'miter',
+        miterLimit: 10, shadowBlur: 0, shadowColor: 'rgba(0,0,0,0)',
+        fillRect: noop, strokeRect: noop, clearRect: noop,
+        beginPath: noop, closePath: noop, moveTo: noop, lineTo: noop,
+        arc: noop, arcTo: noop, rect: noop, ellipse: noop, bezierCurveTo: noop,
+        quadraticCurveTo: noop, fill: noop, stroke: noop, clip: noop,
+        drawImage: noop, putImageData: noop,
+        fillText: noop, strokeText: noop,
+        measureText: function(t) { return { width: (String(t).length || 0) * 5, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
+        save: noop, restore: noop, scale: noop, rotate: noop, translate: noop, transform: noop, setTransform: noop, resetTransform: noop,
+        setLineDash: noop, getLineDash: function() { return []; },
+        createLinearGradient: function() { return { addColorStop: noop }; },
+        createRadialGradient: function() { return { addColorStop: noop }; },
+        createPattern: function() { return {}; },
+        getImageData: function(x,y,w,h) { return { width: w, height: h, data: new Uint8ClampedArray((w||0)*(h||0)*4) }; },
+        isPointInPath: function() { return false; }, isPointInStroke: function() { return false; }
+    };
+};
+// WebGL stub：getParameter 返回占位字符串/数字，方法返回 stub 对象。
+window.__webglStub = function(type) {
+    var noop = function() {};
+    var stubObj = function() { return {}; };
+    var ver = (type === 'webgl2') ? '2.0' : '1.0';
+    var gl = {
+        canvas: null, drawingBufferWidth: 300, drawingBufferHeight: 150,
+        // 常量（部分）
+        VERSION: 0x1F02, VENDOR: 0x1F00, RENDERER: 0x1F01, SHADING_LANGUAGE_VERSION: 0x8B8C,
+        MAX_TEXTURE_SIZE: 0x0D33, MAX_VERTEX_ATTRIBS: 0x8869, MAX_VARYING_VECTORS: 0x8DFC,
+        MAX_VERTEX_UNIFORM_VECTORS: 0x8DFB, MAX_FRAGMENT_UNIFORM_VECTORS: 0x8DFD,
+        ALIASED_LINE_WIDTH_RANGE: 0x846E, ALIASED_POINT_SIZE_RANGE: 0x846D,
+        // 方法
+        getParameter: function(p) {
+            if (p === 0x1F02) return 'WebGL ' + ver + ' (stub)';
+            if (p === 0x1F00) return 'stub-vendor';
+            if (p === 0x1F01) return 'stub-renderer';
+            if (p === 0x8B8C) return 'WebGL GLSL ES ' + ver + ' (stub)';
+            if (p === 0x0D33) return 16384;
+            return null;
+        },
+        getSupportedExtensions: function() { return []; },
+        getExtension: function() { return null; },
+        createShader: stubObj, shaderSource: noop, compileShader: noop, getShaderParameter: function() { return true; },
+        getShaderInfoLog: function() { return ''; }, deleteShader: noop,
+        createProgram: stubObj, attachShader: noop, linkProgram: noop, useProgram: noop,
+        getProgramParameter: function() { return true; }, getProgramInfoLog: function() { return ''; },
+        deleteProgram: noop, validateProgram: noop,
+        createBuffer: stubObj, bindBuffer: noop, bufferData: noop, deleteBuffer: noop,
+        createTexture: stubObj, bindTexture: noop, texImage2D: noop, texParameteri: noop, deleteTexture: noop,
+        createFramebuffer: stubObj, bindFramebuffer: noop, deleteFramebuffer: noop,
+        createRenderbuffer: stubObj, bindRenderbuffer: noop, deleteRenderbuffer: noop,
+        vertexAttribPointer: noop, enableVertexAttribArray: noop, disableVertexAttribArray: noop,
+        drawArrays: noop, drawElements: noop, finish: noop, flush: noop,
+        viewport: noop, clear: noop, clearColor: noop, enable: noop, disable: noop,
+        depthFunc: noop, blendFunc: noop, cullFace: noop, frontFace: noop,
+        getAttribLocation: function() { return 0; }, getUniformLocation: function() { return {}; },
+        uniform1f: noop, uniform2f: noop, uniform3f: noop, uniform4f: noop,
+        uniform1i: noop, uniform2i: noop, uniform3i: noop, uniform4i: noop,
+        uniformMatrix4fv: noop, uniformMatrix3fv: noop,
+        readPixels: noop
+    };
+    return gl;
+};
+if (typeof window.WebGLRenderingContext === 'undefined') {
+    window.WebGLRenderingContext = function() {};
+    window.WebGLRenderingContext.prototype = { VERSION: 0x1F02 };
+}
+if (typeof window.WebGL2RenderingContext === 'undefined') {
+    window.WebGL2RenderingContext = function() {};
+    window.WebGL2RenderingContext.prototype = { VERSION: 0x1F02 };
+}
 if (typeof window.HTMLInputElement === 'undefined') { window.HTMLInputElement = Element; }
 if (typeof window.HTMLButtonElement === 'undefined') { window.HTMLButtonElement = Element; }
 if (typeof window.HTMLDivElement === 'undefined') { window.HTMLDivElement = Element; }
