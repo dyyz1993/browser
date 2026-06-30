@@ -1464,6 +1464,63 @@ if (typeof window.HTMLSpanElement === 'undefined') { window.HTMLSpanElement = El
 if (typeof window.HTMLAnchorElement === 'undefined') { window.HTMLAnchorElement = Element; }
 if (typeof window.HTMLImageElement === 'undefined') { window.HTMLImageElement = Element; }
 if (typeof window.HTMLIFrameElement === 'undefined') { window.HTMLIFrameElement = Element; }
+// iframe 子文档能力 stub（M71.3 GAP-A 续）。爬虫场景：页面往 iframe 写内容再读，
+// 需 contentDocument/contentWindow 返回可用对象。M71.3 iframe 69%→高。
+Object.defineProperty(Element.prototype, 'contentDocument', {
+    get: function() {
+        // iframe 的 contentDocument：返回一个简易 document（含 body），
+        // 这样页面可往里写内容。非 iframe 返回 null。
+        if (this.tagName !== 'IFRAME') return null;
+        if (!this.__contentDoc) {
+            this.__contentDoc = { body: null, documentElement: null };
+        }
+        return this.__contentDoc;
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'contentWindow', {
+    get: function() {
+        if (this.tagName !== 'IFRAME') return null;
+        if (!this.__contentWin) {
+            var self = this;
+            this.__contentWin = {
+                document: self.contentDocument,
+                postMessage: function(msg) {
+                    if (typeof window.onmessage === 'function') {
+                        try { window.onmessage({ data: msg, origin: '*', source: self.__contentWin }); } catch(e) {}
+                    }
+                }
+            };
+            this.__contentDoc.defaultView = this.__contentWin;
+        }
+        return this.__contentWin;
+    },
+    enumerable: true, configurable: true
+});
+// srcdoc：iframe 的内嵌文档（页面常设 iframe.srcdoc='<div>..'</div>）。
+Object.defineProperty(Element.prototype, 'srcdoc', {
+    get: function() {
+        try { return this.getAttribute('srcdoc') || ''; } catch(e) { return this.__srcdoc || ''; }
+    },
+    set: function(v) {
+        this.__srcdoc = String(v);
+        try { this.setAttribute('srcdoc', String(v)); } catch(e) {}
+    },
+    enumerable: true, configurable: true
+});
+// postMessage / onmessage：跨窗口消息（iframe 通信、SPA 路由）。M71.3 GAP-A。
+window.postMessage = function(msg, _origin, _transfer) {
+    // 同窗口 postMessage：触发 window.onmessage。异步语义简化为同步。
+    if (typeof window.onmessage === 'function') {
+        try { window.onmessage({ data: msg, origin: typeof location!=='undefined'?location.href:'*', source: window }); } catch(e) {}
+    }
+};
+if (typeof window.onmessage === 'undefined') { window.onmessage = null; }
+window.addEventListener = window.addEventListener || function(type, cb) {
+    if (typeof cb === 'function' && type) {
+        if (type === 'message') window.onmessage = cb;
+    }
+};
 if (typeof window.HTMLOptionElement === 'undefined') { window.HTMLOptionElement = Element; }
 if (typeof window.HTMLOptionsCollection === 'undefined') { window.HTMLOptionsCollection = Element; }
 if (typeof window.HTMLLabelElement === 'undefined') { window.HTMLLabelElement = Element; }
