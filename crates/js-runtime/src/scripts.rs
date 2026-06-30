@@ -1328,7 +1328,13 @@ window.__makeElement = function(nodeId) {
 
 // console（QuickJS 有原生 console，确保兼容）
 if (typeof console === 'undefined') {
-    window.console = { log: function(){}, error: function(){}, warn: function(){}, info: function(){} };
+    window.console = {
+        log: function(){}, error: function(){}, warn: function(){},
+        info: function(){}, debug: function(){}, dir: function(){},
+        table: function(){}, group: function(){}, groupEnd: function(){},
+        trace: function(){}, time: function(){}, timeEnd: function(){},
+        assert: function(){}, count: function(){}, clear: function(){}
+    };
 }
 
 // window EventTarget 方法（很多框架在 window 上注册事件）
@@ -1363,6 +1369,21 @@ if (typeof window.HTMLDivElement === 'undefined') { window.HTMLDivElement = Elem
 if (typeof window.HTMLSpanElement === 'undefined') { window.HTMLSpanElement = Element; }
 if (typeof window.HTMLAnchorElement === 'undefined') { window.HTMLAnchorElement = Element; }
 if (typeof window.HTMLImageElement === 'undefined') { window.HTMLImageElement = Element; }
+if (typeof window.HTMLIFrameElement === 'undefined') { window.HTMLIFrameElement = Element; }
+if (typeof window.HTMLOptionElement === 'undefined') { window.HTMLOptionElement = Element; }
+if (typeof window.HTMLOptionsCollection === 'undefined') { window.HTMLOptionsCollection = Element; }
+if (typeof window.HTMLLabelElement === 'undefined') { window.HTMLLabelElement = Element; }
+if (typeof window.HTMLHeadingElement === 'undefined') { window.HTMLHeadingElement = Element; }
+if (typeof window.HTMLParagraphElement === 'undefined') { window.HTMLParagraphElement = Element; }
+if (typeof window.HTMLUListElement === 'undefined') { window.HTMLUListElement = Element; }
+if (typeof window.HTMLLIElement === 'undefined') { window.HTMLLIElement = Element; }
+if (typeof window.HTMLScriptElement === 'undefined') { window.HTMLScriptElement = Element; }
+if (typeof window.HTMLLinkElement === 'undefined') { window.HTMLLinkElement = Element; }
+if (typeof window.HTMLMetaElement === 'undefined') { window.HTMLMetaElement = Element; }
+if (typeof window.HTMLStyleElement === 'undefined') { window.HTMLStyleElement = Element; }
+if (typeof window.HTMLHeadElement === 'undefined') { window.HTMLHeadElement = Element; }
+if (typeof window.HTMLBodyElement === 'undefined') { window.HTMLBodyElement = Element; }
+if (typeof window.HTMLHtmlElement === 'undefined') { window.HTMLHtmlElement = Element; }
 if (typeof window.HTMLSelectElement === 'undefined') { window.HTMLSelectElement = Element; }
 if (typeof window.HTMLTextAreaElement === 'undefined') { window.HTMLTextAreaElement = Element; }
 if (typeof window.HTMLFormElement === 'undefined') { window.HTMLFormElement = Element; }
@@ -1402,6 +1423,7 @@ window.ResizeObserver = function() { this.observe = function(){}; this.unobserve
 
 window.performance = {
     timing: { navigationStart: Date.now(), loadEventEnd: Date.now() },
+    navigation: { type: 0, redirectCount: 0 },
     now: function() { return Date.now(); },
     getEntries: function() { return []; },
     getEntriesByName: function() { return []; },
@@ -1869,7 +1891,7 @@ Object.defineProperty(Element.prototype, 'parentElement', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'nodeType', {
-    get: function() { return 1; },
+    get: function() { return this.__isFragment ? 11 : 1; },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'style', {
@@ -1927,6 +1949,49 @@ Element.prototype.querySelectorAll = function(sel) {
     return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
 };
 Element.prototype.contains = function(node) { return false; };
+// matches/closest：CSS 选择器匹配。依赖 __qsMatch/__qsClosest bridge。
+Element.prototype.matches = function(sel) {
+    if (typeof __qsMatch === 'function') {
+        try { return !!__qsMatch(this.__nodeId, String(sel)); } catch(e) { return false; }
+    }
+    return false;
+};
+Element.prototype.closest = function(sel) {
+    if (typeof __qsClosest === 'function') {
+        try {
+            var id = __qsClosest(this.__nodeId, String(sel));
+            return (id >= 0) ? __makeElement(id) : null;
+        } catch(e) { return null; }
+    }
+    return null;
+};
+// childNodes：返回子节点的伪数组（框架常读 childNodes.length）。从 __children 反射。
+Object.defineProperty(Element.prototype, 'childNodes', {
+    get: function() {
+        try {
+            var cs = __children(this.__nodeId);
+            var ids = cs ? cs.split(',').filter(function(s) { return s; }) : [];
+            var arr = ids.map(function(s) { return parseInt(s, 10); });
+            arr.item = function(i) { return (i >= 0 && i < arr.length) ? arr[i] : null; };
+            return arr;
+        } catch(e) { return []; }
+    },
+    enumerable: true, configurable: true
+});
+// <template>.content：返回一个 DocumentFragment（nodeType=11）。爬虫场景空 fragment 够用。
+Object.defineProperty(Element.prototype, 'content', {
+    get: function() {
+        if (this.tagName === 'TEMPLATE') {
+            return document.createDocumentFragment();
+        }
+        return undefined;
+    },
+    enumerable: true, configurable: true
+});
+// importNode：简化为 cloneNode（爬虫场景够用）。
+document.importNode = function(node, deep) {
+    try { return node.cloneNode(deep !== false); } catch(e) { return null; }
+};
 Element.prototype.removeEventListener = function(type, cb) {};
 Element.prototype.dispatchEvent = function(ev) {
     if (this.__listeners && ev && this.__listeners[ev.type]) {
@@ -1935,6 +2000,29 @@ Element.prototype.dispatchEvent = function(ev) {
             try { cbs[i].call(this, ev); } catch(e) {}
         }
     }
+};
+// getComputedStyle：返回一个只读 style 对象（爬虫场景，不需像素精确）。
+window.getComputedStyle = function(el) {
+    if (!el) return null;
+    var styleObj = {
+        getPropertyValue: function(p) { return styleObj[p] || ''; },
+        getPropertyPriority: function() { return ''; },
+        setProperty: function() {},
+        removeProperty: function() {},
+        length: 0,
+        item: function() { return ''; }
+    };
+    // 从 el.style 反射已知属性
+    try {
+        var cs = el.style;
+        if (cs) {
+            for (var p in cs) {
+                if (typeof cs[p] === 'string' && cs[p]) styleObj[p] = cs[p];
+            }
+            styleObj.cssText = cs.cssText || '';
+        }
+    } catch(e) {}
+    return styleObj;
 };
 Element.prototype.insertAdjacentHTML = function(pos, html) {
     // 简化：只支持 beforeend（最常用）
@@ -2116,7 +2204,13 @@ document.createTextNode = function(text) {
     __setText(id, String(text || ''));
     return __makeElement(id);
 };
-document.createDocumentFragment = function() { return document.createElement('div'); };
+document.createDocumentFragment = function() {
+    // 真正的 DocumentFragment：nodeType=11，appendChild 可用。
+    // 用 Element 创建后打 __isFragment 标记，nodeType getter 据此返回 11。
+    var frag = document.createElement('div');
+    frag.__isFragment = true;
+    return frag;
+};
 document.createComment = function(text) { return document.createElement('div'); };
 document.getElementById = function(id) {
     var nodeId = __getElById(String(id));

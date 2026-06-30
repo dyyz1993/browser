@@ -2750,6 +2750,47 @@ pub mod qjs_bridge {
         })
     }
 
+    /// qsMatch(nodeId, selector) -> bool —— Element.matches() 后端。
+    pub fn qs_match(node_id: f64, selector: String) -> bool {
+        with_tree(|t| {
+            let id = node_id as usize;
+            if id >= t.len() {
+                return false;
+            }
+            let tokens = tokenize_selector(&selector);
+            let node = t.get(id);
+            matches_selector(node, &tokens)
+        })
+    }
+
+    /// qsClosest(nodeId, selector) -> NodeId (-1 未匹配) —— Element.closest() 后端。
+    /// 从 node 往上走 parent 链，找第一个匹配 selector 的祖先（含自身）。
+    pub fn qs_closest(node_id: f64, selector: String) -> f64 {
+        with_tree(|t| {
+            let mut id = node_id as usize;
+            if id >= t.len() {
+                return -1.0;
+            }
+            let tokens = tokenize_selector(&selector);
+            loop {
+                let node = t.get(id);
+                if matches_selector(node, &tokens) {
+                    return id as f64;
+                }
+                match node.parent {
+                    Some(p) => {
+                        if p == id {
+                            break;
+                        }
+                        id = p;
+                    }
+                    None => break,
+                }
+            }
+            -1.0
+        })
+    }
+
     /// getBody() -> NodeId。
     pub fn get_body() -> f64 {
         with_tree(|t| {
