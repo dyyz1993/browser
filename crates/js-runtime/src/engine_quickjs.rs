@@ -309,6 +309,29 @@ impl QuickJsEngine {
             })
     }
 
+    /// M71.4: 执行**用户 script**（非 shim）。
+    ///
+    /// 与 `eval_safe` 的关键区别：关闭 strict 模式（`EvalOptions{strict:false}`）。
+    /// 原因：rquickjs 的 `ctx.eval()` 默认 `strict: true`，导致用户 script 里
+    /// 的**裸赋值未声明变量**（如 SvelteKit 的 `__sveltekit_xxx = {...}`）抛
+    /// ReferenceError，整段 script 中断。真实浏览器是 sloppy mode，裸赋值会
+    /// 自动创建 globalThis 属性。
+    ///
+    /// 仅对用户 script 关闭 strict；shim 安装代码（eval_safe）保持 strict。
+    /// CaughtError 在 with 闭包内 drop（GC 安全）。
+    pub fn eval_user_script(&mut self, js: &str) -> Result<(), String> {
+        use rquickjs::context::EvalOptions;
+        use rquickjs::CatchResultExt;
+        self.ctx.with(|ctx: Ctx| {
+            let mut opts = EvalOptions::default();
+            opts.strict = false;
+            match ctx.eval_with_options::<(), _>(js, opts).catch(&ctx) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(format!("{e}")),
+            }
+        })
+    }
+
     /// M66: 带整数返回值的 eval。
     pub fn eval_i32(&mut self, js: &str) -> Option<i32> {
         self.ctx.with(|ctx: Ctx| ctx.eval::<i32, _>(js).ok())

@@ -913,6 +913,34 @@ try {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn quickjs_bare_global_assignment_cross_script() {
+    // M71.4 回归测试：SvelteKit/Nuxt 等框架用裸全局赋值（`__x = {}`，无 var/window.）
+    // 在多个 <script> 间共享 hydration 数据。rquickjs 默认 strict 模式会抛
+    // ReferenceError 中断整段 script。修复（eval_user_script 用 strict:false）后
+    // 裸赋值应自动创建 globalThis 属性，并能跨 script 读取。
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+  // 模拟 SvelteKit hydration 数据注入（裸全局赋值）
+  __sveltekit_test = { val: 42, routes: ['/', '/about'] };
+</script>
+<script>
+  // 模拟 SvelteKit 入口读取 hydration 数据
+  var data = window.__sveltekit_test;
+  var bare = (typeof __sveltekit_test !== 'undefined');
+  document.getElementById('out').textContent =
+    'BARE_GLOBAL_' + (data && data.val) + '_' + bare;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BARE_GLOBAL_42_true"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

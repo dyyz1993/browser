@@ -807,7 +807,9 @@ fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEng
         if has_ts_syntax(&code) {
             continue;
         }
-        match engine.eval_safe(&code) {
+        // M71.4: 用户 script 用 sloppy mode（eval_user_script），
+        // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
+        match engine.eval_user_script(&code) {
             Ok(()) => {}
             Err(e) => eprintln!("[js] [quickjs dynamic] {e}"),
         }
@@ -975,7 +977,9 @@ fn run_scripts_quickjs(
             }
         };
         if let Some(code) = code {
-            match engine.eval_safe(&code) {
+            // M71.4: 用户 script 用 sloppy mode（eval_user_script），
+            // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
+            match engine.eval_user_script(&code) {
                 Ok(_) => executed += 1,
                 Err(e) => eprintln!("[js] [quickjs] {e}"),
             }
