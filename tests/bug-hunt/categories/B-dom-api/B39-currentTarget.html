@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Event.currentTarget</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var el=document.createElement('div');
+ var result='no';
+ el.addEventListener('t39',function(e){result=e.currentTarget===el?'el':'?';});
+ el.dispatchEvent(new Event('t39'));
+ assert('ct-ok', result==='el');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

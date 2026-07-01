@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>br 标签行为不抛错</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+document.body.innerHTML='line1<br>line2<br/>line3<br />line4';
+ var brs=document.querySelectorAll('br');
+ assert('br-count', brs.length>=3);
+ assert('br-next', brs[0].nextElementSibling!==undefined);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

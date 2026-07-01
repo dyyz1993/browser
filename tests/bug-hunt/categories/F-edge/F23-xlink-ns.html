@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>XLink namespace</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {var el=document.createElementNS('http://www.w3.org/2000/svg','use');
+ var threw=false; try{{el.setAttributeNS('http://www.w3.org/1999/xlink','href','#');}}catch(e){{threw=true;}}
+ a('xlns-noerr', !threw);}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

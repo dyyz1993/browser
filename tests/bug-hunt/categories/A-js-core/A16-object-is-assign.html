@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Object.is/assign</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+assert('is-nan', Object.is(NaN, NaN));
+ assert('is-0n', Object.is(-0, -0));
+ assert('is-0p0n', !Object.is(-0, 0));
+ var dst={{}}; Object.assign(dst, {{a:1}}, {{b:2}});
+ assert('assign', dst.a===1 && dst.b===2);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

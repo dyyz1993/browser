@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>querySelectorAll 伪类/属性选择器</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+document.body.innerHTML = '<div class=\"list\"><ul><li class=\"item active\">A</li><li class=\"item\">B</li></ul></div>';
+ var first = document.querySelectorAll('.list .item:first-child');
+ assert('qs-first', first.length === 1);
+ var not = document.querySelectorAll('.item:not(.active)');
+ assert('qs-not', not.length === 1);
+ var attr = document.querySelectorAll('[class*=active]');
+ assert('qs-attr', attr.length >= 1);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

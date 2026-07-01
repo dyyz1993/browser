@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>Object.create/freeze/seal</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {var p={{x:1}}; var o=Object.create(p); a('oc-x', o.x===1);
+ var f=Object.freeze({{a:1}}); a('of-frozen', Object.isFrozen(f));
+ var s=Object.seal({{b:2}}); a('os-sealed', Object.isSealed(s));}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

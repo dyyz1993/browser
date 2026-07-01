@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Array.from/keys/values</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+assert('from', Array.from('ab').join()==='a,b');
+ assert('from-set', Array.from(new Set([1,1,2])).join()==='1,2');
+ assert('keys', [10,20].keys ? Array.from([10,20].keys()).join(',')==='0,1' : false);
+ assert('at-neg', [1,2,3].at(-1)===3);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

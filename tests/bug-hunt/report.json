@@ -1,0 +1,228 @@
+{
+  "categories/A-js-core": [
+    {
+      "name": "A01-promise-allSettled",
+      "status": "SKIP",
+      "detail": "Chrome timeout"
+    },
+    {
+      "name": "A02-promise-any",
+      "status": "SKIP",
+      "detail": "Chrome timeout"
+    },
+    {
+      "name": "A03-promise-finally",
+      "status": "SKIP",
+      "detail": "Chrome timeout"
+    },
+    {
+      "name": "A04-bigint-basic",
+      "status": "MATCH",
+      "chrome": "bigint-lit:PASS\nbigint-add:PASS\nbigint-mul:PASS\nbigint-toStr:PASS\nbigint-parse:PASS",
+      "ours": "bigint-lit:PASS\nbigint-add:PASS\nbigint-mul:PASS\nbigint-toStr:PASS\nbigint-parse:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A05-optional-chaining",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A06-nullish-coalescing",
+      "status": "MATCH",
+      "chrome": "nc-null:PASS\nnc-undef:PASS\nnc-zero:PASS\nnc-empty:PASS",
+      "ours": "nc-null:PASS\nnc-undef:PASS\nnc-zero:PASS\nnc-empty:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A07-globalThis",
+      "status": "MATCH",
+      "chrome": "gt-defined:PASS\ngt-assign:PASS\ngt-window:PASS",
+      "ours": "gt-defined:PASS\ngt-assign:PASS\ngt-window:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A08-reflect",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A09-proxy-basic",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A10-proxy-revocable",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A11-symbol-iterator",
+      "status": "MATCH",
+      "chrome": "sym-next1:PASS\nsym-next2:PASS\nsym-done:PASS",
+      "ours": "sym-next1:PASS\nsym-next2:PASS\nsym-done:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A12-symbol-toPrimitive",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A13-array-flat",
+      "status": "MATCH",
+      "chrome": "flat-1:PASS\nflat-2:PASS\nflatMap:PASS",
+      "ours": "flat-1:PASS\nflat-2:PASS\nflatMap:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A14-array-from-entries",
+      "status": "MATCH",
+      "chrome": "from:PASS\nfrom-set:PASS\nkeys:PASS\nat-neg:PASS",
+      "ours": "from:PASS\nfrom-set:PASS\nkeys:PASS\nat-neg:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A15-object-fromEntries",
+      "status": "BUG",
+      "chrome": "",
+      "ours": "ofe-a:PASS\n__SCRIPT_THREW__:not a function",
+      "diffs": [
+        {
+          "line": 1,
+          "chrome": "",
+          "ours": "ofe-a:PASS"
+        },
+        {
+          "line": 2,
+          "chrome": "",
+          "ours": "__SCRIPT_THREW__:not a function"
+        }
+      ],
+      "js_errors": [],
+      "detail": "2 diff(s)"
+    },
+    {
+      "name": "A16-object-is-assign",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A17-string-pad-matchall",
+      "status": "MATCH",
+      "chrome": "pad:PASS\npadEnd:PASS\nmatchAll:PASS\nreplaceAll:PASS",
+      "ours": "pad:PASS\npadEnd:PASS\nmatchAll:PASS\nreplaceAll:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A18-regex-named-lookbehind",
+      "status": "MATCH",
+      "chrome": "rg-name:PASS\nrg-lb:PASS\nrg-dotAll:PASS",
+      "ours": "rg-name:PASS\nrg-lb:PASS\nrg-dotAll:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A19-destructuring",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A20-generator",
+      "status": "MATCH",
+      "chrome": "gen-1:PASS\ngen-2:PASS\ngen-done:PASS\ngen-spread:PASS",
+      "ours": "gen-1:PASS\ngen-2:PASS\ngen-done:PASS\ngen-spread:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A21-import-meta-dynamic",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A22-class-private-static",
+      "status": "MATCH",
+      "chrome": "",
+      "ours": "",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A23-try-nobinding",
+      "status": "MATCH",
+      "chrome": "try-nobind:PASS",
+      "ours": "try-nobind:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A24-template-tagged",
+      "status": "MATCH",
+      "chrome": "tpl-tag:PASS\ntpl-multiline:PASS",
+      "ours": "tpl-tag:PASS\ntpl-multiline:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    },
+    {
+      "name": "A25-map-set-iter",
+      "status": "MATCH",
+      "chrome": "map-get:PASS\nmap-size:PASS\nmap-iter:PASS\nset-unique:PASS\nset-has:PASS",
+      "ours": "map-get:PASS\nmap-size:PASS\nmap-iter:PASS\nset-unique:PASS\nset-has:PASS",
+      "diffs": [],
+      "js_errors": [],
+      "detail": "aligned"
+    }
+  ]
+}

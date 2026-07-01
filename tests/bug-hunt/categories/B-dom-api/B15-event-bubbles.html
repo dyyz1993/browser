@@ -1,0 +1,23 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>事件冒泡</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var parent = document.createElement('div'); parent.id='evt-p';
+ var child = document.createElement('span'); child.id='evt-c';
+ parent.appendChild(child);
+ var parentHit = false, childHit = false;
+ parent.addEventListener('test', function(){ parentHit = true; });
+ child.addEventListener('test', function(){ childHit = true; });
+ var ev = new Event('test', {bubbles:true});
+ child.dispatchEvent(ev);
+ assert('ev-child', childHit);
+ // 冒泡可能要等 dispatchEvent 实现
+ assert('ev-bubble', parentHit);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

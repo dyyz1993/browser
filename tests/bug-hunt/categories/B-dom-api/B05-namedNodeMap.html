@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Element.attributes (NamedNodeMap)</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var el = document.createElement('div');
+ el.setAttribute('class', 'x');
+ el.setAttribute('id', 'y');
+ assert('attr-len', el.attributes.length >= 2);
+ assert('attr-get', el.attributes.getNamedItem('id').value === 'y');
+ assert('attr-name', el.attributes[0].name.length > 0);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

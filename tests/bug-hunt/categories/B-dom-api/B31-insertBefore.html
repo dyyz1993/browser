@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>insertBefore</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var p=document.createElement('div'); p.id='ib';
+ var a=document.createElement('span'); a.textContent='A';
+ var b=document.createElement('span'); b.textContent='B';
+ p.appendChild(a); p.insertBefore(b,a);
+ assert('ib-len', p.childNodes.length===2);
+ assert('ib-order', p.firstChild.textContent==='B');
+ assert('ib-last', p.lastChild.textContent==='A');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

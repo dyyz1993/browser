@@ -1,0 +1,42 @@
+[
+  {
+    "name": "react.dev",
+    "url": "https://react.dev/learn",
+    "status": "SKIP",
+    "chrome_error": "TIMEOUT"
+  },
+  {
+    "name": "vuejs.org",
+    "url": "https://vuejs.org/guide/introduction.html",
+    "chrome_length": 11512,
+    "chrome_preview": "Introduction | Vue.js Skip to content Vue.js Search ⌘ K Main Navigation Docs Quick Start Guide Tutorial Examples API Glossary Error Reference Vue 2 Docs Migration from Vue 2 Playground Ecosystem Resou",
+    "our_length": 9004,
+    "our_preview": "Skip to content\nOn this page\nAre you an LLM? You can read better optimized documentation at /guide/introduction.md for this page in Markdown format\nIntroduction ​\nYou are reading the documentation for",
+    "js_errors": [],
+    "content_ratio": 0.782,
+    "status": "OK",
+    "detail": "content_ok(78%) | js_errors(0)"
+  },
+  {
+    "name": "svelte.dev",
+    "url": "https://svelte.dev/",
+    "status": "SKIP",
+    "chrome_error": "TIMEOUT"
+  },
+  {
+    "name": "nuxt.com",
+    "url": "https://nuxt.com/",
+    "status": "SKIP",
+    "chrome_error": "TIMEOUT"
+  },
+  {
+    "name": "solidjs.com",
+    "url": "https://solidjs.com/",
+    "chrome_length": 1707,
+    "chrome_preview": "SolidJS · 反应式 JavaScript 库 Support Global Ceasefire! &nbsp;End war in Ukraine and all global conflict → 一个用于构建用户界面，简单高效、性能卓越的JavaScript库 快速开始 100秒 介绍 5分钟 进阶 Support Global Ceasefire! 指南 教程 API文档 Solid",
+    "status": "BUG",
+    "our_length": 0,
+    "js_errors": [],
+    "detail": "empty output"
+  }
+]

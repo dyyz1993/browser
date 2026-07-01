@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>正则 named groups/lookbehind/dotAll</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var m = /(?<y>\d{4})-(?<m>\d{2})/.exec('2024-03');
+ assert('rg-name', m.groups.y==='2024' && m.groups.m==='03');
+ var lb = /(?<=\$)\d+/.exec('price $100');
+ assert('rg-lb', lb && lb[0]==='100');
+ var ds = /a.b/s.test('a\nb');
+ assert('rg-dotAll', ds);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

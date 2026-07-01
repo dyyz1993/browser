@@ -1,0 +1,10 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>document.all 存在</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {a('dall-type', typeof document.all==='object'||typeof document.all==='undefined');}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

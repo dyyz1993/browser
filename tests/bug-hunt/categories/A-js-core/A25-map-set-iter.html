@@ -1,0 +1,20 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Map/Set 迭代与构造</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var m = new Map([['k',1]]);
+ m.set('x', 2);
+ assert('map-get', m.get('k')===1 && m.get('x')===2);
+ assert('map-size', m.size===2);
+ assert('map-iter', [...m.keys()].join()==='k,x');
+ var s = new Set([1,1,2,3,3]);
+ assert('set-unique', s.size===3);
+ assert('set-has', s.has(2) && !s.has(4));
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

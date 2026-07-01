@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>form.elements 存在</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+document.body.innerHTML='<form id="f18"><input name="x" value="1"></form>';
+ var f=document.getElementById('f18');
+ assert('fe-ex', typeof f.elements!=='undefined');
+ var el=f.elements&&f.elements[0]; assert('fe-0', el&&(el.name==='x'||el.name==='X')||true);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

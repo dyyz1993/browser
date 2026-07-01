@@ -1,0 +1,13 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>反复 dispatchEvent</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {var el=document.createElement('div'); var c=0;
+ el.addEventListener('e43',function(){{c++;}});
+ for(var i=0;i<5;i++) el.dispatchEvent(new Event('e43'));
+ a('dt-count', c===5);}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

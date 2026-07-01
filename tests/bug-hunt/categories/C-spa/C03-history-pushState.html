@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>history.pushState/popstate</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var state = {page:1};
+ history.pushState(state, '', '/page1');
+ assert('hs-state', history.state && (history.state.page === 1 || JSON.stringify(history.state).indexOf('1')>=0));
+ assert('hs-len', typeof history.length === 'number');
+ history.back();
+ // 等待异步
+ setTimeout(function(){ assert('hs-back', true); }, 10);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

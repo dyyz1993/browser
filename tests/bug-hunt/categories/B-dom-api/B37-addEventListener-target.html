@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>addEventListener on target</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var el=document.createElement('div');
+ var threw1=false; try{el.addEventListener('click',function(){});}catch(e){threw1=true;}
+ var threw2=false; try{el.removeEventListener('click',function(){});}catch(e){threw2=true;}
+ assert('ael-add', !threw1); assert('ael-rm', !threw2);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

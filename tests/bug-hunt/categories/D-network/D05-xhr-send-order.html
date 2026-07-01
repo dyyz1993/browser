@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>同步 XHR send 不抛错</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var x = new XMLHttpRequest();
+ x.open('GET', 'data:text/plain,data', false);
+ var threw = false;
+ try { x.send(); } catch(e) { threw = true; }
+ assert('xhr-sync', !threw);
+ assert('xhr-sync-txt', x.responseText === 'data');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

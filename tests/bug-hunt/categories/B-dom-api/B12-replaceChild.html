@@ -1,0 +1,20 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Node.replaceChild</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var p = document.createElement('div'); p.id='rpc';
+ var old = document.createElement('span'); old.textContent='old';
+ var nw = document.createElement('b'); nw.textContent='new';
+ p.appendChild(old);
+ p.replaceChild(nw, old);
+ assert('rpc-count', p.childNodes.length === 1);
+ assert('rpc-tag', p.firstChild.tagName === 'B' || p.firstChild.tagName === 'b');
+ assert('rpc-text', p.firstChild.textContent === 'new');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

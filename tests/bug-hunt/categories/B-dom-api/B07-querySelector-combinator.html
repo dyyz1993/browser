@@ -1,0 +1,23 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>querySelector 后代/子/兄弟选择器</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+document.body.innerHTML = '<div id=\"a\"><div class=\"b\"><span class=\"c\">X</span></div></div>';
+ assert('qs-desc', document.querySelectorAll('#a span').length === 1);
+ assert('qs-child', document.querySelectorAll('#a > div').length === 1);
+ document.body.innerHTML += '<div class=\"b\" id=\"a2\"></div>';
+ // sibling: previous/next
+ document.body.innerHTML = '<p>a</p><span id=\"sib\">b</span><p>c</p>';
+ var sib = document.getElementById('sib');
+ var prev = sib.previousElementSibling;
+ assert('qs-prev', prev && prev.tagName === 'P');
+ var next = sib.nextElementSibling;
+ assert('qs-next', next && next.tagName === 'P');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

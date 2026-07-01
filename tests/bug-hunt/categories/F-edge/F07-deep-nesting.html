@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>超深嵌套（50 层）不抛错不栈溢出</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var top = document.createElement('div');
+ var cur = top;
+ for(var i=0;i<50;i++){ var n = document.createElement('div'); cur.appendChild(n); cur = n; }
+ assert('dn-depth', true);
+ // 检查最深节点的内容
+ cur.textContent = 'deepest';
+ var walk = top;
+ while(walk.firstChild){ walk = walk.firstChild; }
+ assert('dn-leaf', walk.textContent === 'deepest');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

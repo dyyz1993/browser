@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>URL API + searchParams</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var u=new URL('http://example.com?a=1&b=2');
+ assert('usp-get', u.searchParams.get('a')==='1');
+ assert('usp-has', u.searchParams.has('b'));
+ u.searchParams.append('c','3'); assert('usp-all', u.searchParams.getAll('c')[0]==='3');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

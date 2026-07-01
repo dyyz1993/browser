@@ -1,0 +1,11 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>parseInt/parseFloat base</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {a('pi-dec', parseInt('10')===10); a('pi-hex', parseInt('FF',16)===255);
+ a('pi-bin', parseInt('1010',2)===10); a('pf-ok', parseFloat('3.14')===3.14);}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

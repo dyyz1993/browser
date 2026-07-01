@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>cloneNode 浅/深</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var p = document.createElement('div'); p.id='p1';
+ var c = document.createElement('span'); c.textContent='child';
+ p.appendChild(c);
+ var shallow = p.cloneNode(false);
+ assert('cn-shallow', shallow.childNodes.length === 0);
+ var deep = p.cloneNode(true);
+ assert('cn-deep-count', deep.childNodes.length === 1);
+ assert('cn-deep-tag', deep.childNodes[0].tagName === 'SPAN' || deep.childNodes[0].tagName === 'span');
+ assert('cn-deep-text', deep.childNodes[0].textContent === 'child');
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

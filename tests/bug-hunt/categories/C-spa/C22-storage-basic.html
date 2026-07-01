@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>localStorage 基本 set/get</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+try{
+   localStorage.setItem('tk','v1');
+   assert('ls-get', localStorage.getItem('tk')==='v1');
+   assert('ls-len', localStorage.length>=1);
+   localStorage.removeItem('tk');
+   localStorage.clear();
+ }catch(e){ assert('ls-err', false, e.message); }
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

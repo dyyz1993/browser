@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>Range 方法不抛错</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {var r=document.createRange(); var div=document.createElement('div'); div.innerHTML='text';
+ var t1=false; try{{r.selectNodeContents(div);}}catch(e){{t1=true;}}
+ a('rn-sel', !t1);}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

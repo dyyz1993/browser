@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Int32Array/set/subarray</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var a=new Int32Array(5); a[0]=42; a[4]=-1;
+ assert('tia-len', a.length===5); assert('tia-0', a[0]===42);
+ assert('tia-buf', a.buffer instanceof ArrayBuffer);
+ var sub=a.subarray(0,2); assert('tia-sub', sub.length===2);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

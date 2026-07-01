@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Node.removeChild</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var p = document.createElement('div'); p.id='rc';
+ var c = document.createElement('span'); c.textContent='rm';
+ p.appendChild(c);
+ assert('rc-before', p.childNodes.length === 1);
+ p.removeChild(c);
+ assert('rc-after', p.childNodes.length === 0);
+ assert('rc-orphan', c.parentNode === null || c.parentNode === undefined);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

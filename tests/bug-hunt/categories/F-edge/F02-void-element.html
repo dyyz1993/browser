@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>void 元素自闭合（br/hr/input）</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var br = document.createElement('br');
+ assert('ve-br', br.tagName === 'BR' || br.tagName === 'br');
+ var hr = document.createElement('hr');
+ assert('ve-hr', hr.tagName === 'HR' || hr.tagName === 'hr');
+ var inp = document.createElement('input');
+ inp.type = 'text';
+ assert('ve-inp', inp.type === 'text');
+ // void 元素不应有子节点
+ assert('ve-children', br.childNodes.length === 0);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

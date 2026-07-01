@@ -1,0 +1,11 @@
+<!DOCTYPE html><html><meta charset="utf-8"><title>console 复杂格式</title>
+<body><div id="out"></div>
+<script>
+var o=document.getElementById('out');
+function w(l){ o.appendChild(document.createTextNode(l+'
+')); }
+function a(n,c,d){ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:'+e.message; } }
+try {try{{console.log('%%s %%d %%o','str',42,{{k:'v'}});}}catch(e){{a('cpx-err',false,e.message);}}
+ a('cpx-ok', true);}catch(e){ w('__SCRIPT_THREW__:'+e.message); }
+</script></body></html>

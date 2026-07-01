@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>解构嵌套/默认/rest/交换</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var {{a, b=5, ...r}} = {{a:1, c:3, d:4}};
+ assert('dc-vals', a===1 && b===5);
+ assert('dc-rest', r.c===3 && r.d===4);
+ var [x, , z] = [1,2,3];
+ assert('dc-arr', x===1 && z===3);
+ var [p,q] = [10,20]; [p,q]=[q,p];
+ assert('dc-swap', p===20 && q===10);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

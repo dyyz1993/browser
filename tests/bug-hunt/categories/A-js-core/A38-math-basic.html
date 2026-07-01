@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Math 函数</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var eps=0.001;
+ assert('ma-fl', Math.floor(1.9)===1); assert('ma-ce', Math.ceil(1.1)===2);
+ assert('ma-ro', Math.round(1.5)===2); assert('ma-ab', Math.abs(-5)===5);
+ assert('ma-max', Math.max(1,5,3)===5); assert('ma-min', Math.min(1,5,3)===1);
+ assert('ma-pow', Math.pow(2,3)===8); assert('ma-sqrt', Math.abs(Math.sqrt(25)-5)<eps);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>

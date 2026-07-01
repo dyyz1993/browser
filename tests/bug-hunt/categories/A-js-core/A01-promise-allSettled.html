@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Promise.allSettled</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var p = Promise.allSettled([Promise.resolve(1), Promise.reject('x')]);
+ p.then(function(r){ assert('allSettled-len', r.length===2);
+   assert('allSettled-0', r[0].status==='fulfilled' && r[0].value===1);
+   assert('allSettled-1', r[1].status==='rejected' && r[1].reason==='x');
+ });
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>
