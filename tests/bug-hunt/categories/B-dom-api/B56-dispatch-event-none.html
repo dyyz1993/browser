@@ -8,7 +8,7 @@ function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message;
 try {
 var el=document.createElement('div');
          var threw=false; try{el.dispatchEvent(new Event('x'));}catch(e){threw=true;}
-         a('den-noerr', !threw);
+         assert('den-noerr', !threw);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

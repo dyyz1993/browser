@@ -7,8 +7,8 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var t=new TypeError('type err');
-         a('te-name', t.name==='TypeError'); a('te-msg', t.message==='type err');
-         a('te-err', t instanceof Error);
+         assert('te-name', t.name==='TypeError'); assert('te-msg', t.message==='type err');
+         assert('te-err', t instanceof Error);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

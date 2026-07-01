@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var c=safe(function(){return structuredClone({a:1,b:[2]});});
-         a('sc-fn', c.indexOf('__THREW__')<0||true);
+         assert('sc-fn', c.indexOf('__THREW__')<0||true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

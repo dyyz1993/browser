@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var s=new SyntaxError('syn');
-         a('se-name', s.name==='SyntaxError'); a('se-msg', s.message==='syn');
+         assert('se-name', s.name==='SyntaxError'); assert('se-msg', s.message==='syn');
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

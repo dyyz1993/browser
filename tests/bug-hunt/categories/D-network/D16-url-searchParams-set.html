@@ -7,9 +7,9 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var p=new URLSearchParams('a=1&b=2&a=3');
-         a('usp-get', p.get('a')==='1'); p.set('a','x'); a('usp-set', p.get('a')==='x');
-         p.delete('b'); a('usp-del', p.get('b')===null);
-         p.sort(); a('usp-sort', true);
+         assert('usp-get', p.get('a')==='1'); p.set('a','x'); assert('usp-set', p.get('a')==='x');
+         p.delete('b'); assert('usp-del', p.get('b')===null);
+         p.sort(); assert('usp-sort', true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

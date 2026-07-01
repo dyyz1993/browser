@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var t1=false; try{location.assign('#');}catch(e){t1=true;}
-         a('la-fn', !t1);
+         assert('la-fn', !t1);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

@@ -9,7 +9,7 @@ try {
 var s=document.createElement('select');
          var o=document.createElement('option'); o.value='x';
          var threw=false; try{s.add(o);}catch(e){threw=true;}
-         a('soa-add', !threw);
+         assert('soa-add', !threw);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

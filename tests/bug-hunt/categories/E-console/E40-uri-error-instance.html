@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var u=safe(function(){return new URIError('uri');});
-         a('ue-ok', u.indexOf('__THREW__')<0||true);
+         assert('ue-ok', u.indexOf('__THREW__')<0||true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

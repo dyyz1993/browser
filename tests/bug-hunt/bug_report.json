@@ -705,50 +705,50 @@
     },
     {
       "name": "A51-weakRef",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "wr-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "wr-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A52-finalizationRegistry",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "fr-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "fr-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A53-atomics",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "at-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "at-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A54-intl-collator",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "intl-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "intl-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -756,10 +756,10 @@
       "passes": [],
       "fails": [],
       "script_throws": [
-        "a is not defined\\n"
+        "not a function\\n"
       ],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "__SCRIPT_THREW__:not a function\\n",
       "has_error": true,
       "has_content": true
     }
@@ -1511,121 +1511,124 @@
     {
       "name": "B51-select-options-add",
       "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "fails": [
+        {
+          "name": "soa-add",
+          "detail": ""
+        }
       ],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "soa-add:FAIL\\n",
       "has_error": true,
       "has_content": true
     },
     {
       "name": "B52-contentEditable-true",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "cet-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "cet-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B53-input-placeholder",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "ipl-g"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "ipl-g:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B54-style-csstext",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "sct-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "sct-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B55-tabIndex",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "ti-get"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "ti-get:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B56-dispatch-event-none",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "den-noerr"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "den-noerr:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B57-element-tagname",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "etag-up"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "etag-up:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B58-hidden-prop",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "hidd-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "hidd-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B59-dir-property",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "dir-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "dir-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "B60-htmlFor",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "hf-get"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "hf-get:PASS\\n",
+      "has_error": false,
       "has_content": true
     }
   ],
@@ -2129,12 +2132,15 @@
     {
       "name": "C41-history-length",
       "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "fails": [
+        {
+          "name": "hl-len",
+          "detail": ""
+        }
       ],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "hl-len:FAIL\\n",
       "has_error": true,
       "has_content": true
     },
@@ -2152,38 +2158,38 @@
     },
     {
       "name": "C43-jsonp-like",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "jlp-ok"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "jlp-ok:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "C44-manual-location",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "la-fn"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "la-fn:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "C45-navigator-onLine",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "nol-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "nol-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     }
   ],
@@ -2417,25 +2423,34 @@
     },
     {
       "name": "D16-url-searchParams-set",
-      "passes": [],
-      "fails": [],
+      "passes": [
+        "nusp-set"
+      ],
+      "fails": [
+        {
+          "name": "usp-get",
+          "detail": ""
+        }
+      ],
       "script_throws": [
-        "a is not defined\\n"
+        "not a function\\n"
       ],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "usp-get:FAIL\\nusp-set:PASS\\n__SCRIPT_THREW__:not a function\\n",
       "has_error": true,
       "has_content": true
     },
     {
       "name": "D17-fetch-bad-protocol",
-      "passes": [],
+      "passes": [
+        "fbp-rej"
+      ],
       "fails": [],
       "script_throws": [],
       "js_errors": [],
-      "content_preview": "(empty)",
+      "content_preview": "fbp-rej:PASS\\n",
       "has_error": false,
-      "has_content": false
+      "has_content": true
     },
     {
       "name": "D17-xhr-getAllResponseHeaders",
@@ -2453,14 +2468,14 @@
     },
     {
       "name": "D18-xhr-abort",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "xab-noerr"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "xab-noerr:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -2492,26 +2507,27 @@
     },
     {
       "name": "D19-fetch-headers-forEach",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "hfe-count"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "hfe-count:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "D20-formData-delete",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "fd-append",
+        "nfd-del"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "fd-append:PASS\\nfd-del:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -3042,50 +3058,60 @@
     },
     {
       "name": "E36-console-debug-all",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "ncda-ok"
       ],
+      "fails": [
+        {
+          "name": "cda-err",
+          "detail": "not a function"
+        }
+      ],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "cda-err:FAIL(not a function)\\ncda-ok:PASS\\n",
       "has_error": true,
       "has_content": true
     },
     {
       "name": "E37-error-props",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "ep-msg",
+        "nep-name",
+        "nep-stack"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "ep-msg:PASS\\nep-name:PASS\\nep-stack:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "E38-type-error-instance",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "te-name",
+        "nte-msg",
+        "nte-err"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "te-name:PASS\\nte-msg:PASS\\nte-err:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "E39-syntax-error-instance",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "se-name",
+        "nse-msg"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "se-name:PASS\\nse-msg:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -3093,10 +3119,10 @@
       "passes": [],
       "fails": [],
       "script_throws": [
-        "a is not defined\\n"
+        "not a function\\n"
       ],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "__SCRIPT_THREW__:not a function\\n",
       "has_error": true,
       "has_content": true
     }
@@ -3360,59 +3386,59 @@
       "passes": [],
       "fails": [],
       "script_throws": [
-        "a is not defined\\n"
+        "cannot read property 'name' of undefined\\n"
       ],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "content_preview": "__SCRIPT_THREW__:cannot read property 'name' of undefined\\n",
       "has_error": true,
       "has_content": true
     },
     {
       "name": "F22-svg-use-href",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "suh-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "suh-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "F23-video-element",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "vid-tag"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "vid-tag:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "F24-audio-element",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "not a function\\n"
+      "passes": [
+        "aud-tag"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:not a function\\n",
-      "has_error": true,
+      "content_preview": "aud-tag:PASS\\n",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "F25-progress-element",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "a is not defined\\n"
+      "passes": [
+        "prg-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
-      "has_error": true,
+      "content_preview": "prg-ex:PASS\\n",
+      "has_error": false,
       "has_content": true
     }
   ]

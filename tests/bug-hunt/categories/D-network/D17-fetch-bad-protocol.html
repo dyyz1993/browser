@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-fetch('ftp://invalid').then(function(){a('fbp-fail',false);}).catch(function(){a('fbp-rej',true);});
+fetch('ftp://invalid').then(function(){assert('fbp-fail',false);}).catch(function(){assert('fbp-rej',true);});
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

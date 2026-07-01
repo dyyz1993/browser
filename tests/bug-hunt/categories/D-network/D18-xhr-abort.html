@@ -8,7 +8,7 @@ function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message;
 try {
 var x=new XMLHttpRequest(); x.open('GET','data:text/plain,x');
          var threw=false; try{x.abort();}catch(e){threw=true;}
-         a('xab-noerr', !threw);
+         assert('xab-noerr', !threw);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

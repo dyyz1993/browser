@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var threw=false; try{var wr=new WeakRef({});}catch(e){threw=true;}
-         a('wr-ex', !threw);
+         assert('wr-ex', !threw);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

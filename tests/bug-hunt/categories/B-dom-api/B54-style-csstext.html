@@ -8,7 +8,7 @@ function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message;
 try {
 var el=document.createElement('div');
          el.style.cssText='color:red;font-size:14px';
-         a('sct-ex', true);
+         assert('sct-ex', true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

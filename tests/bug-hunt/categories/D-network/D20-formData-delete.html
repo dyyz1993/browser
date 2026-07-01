@@ -8,8 +8,8 @@ function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message;
 try {
 var fd=new FormData();
          fd.append('k1','v1'); fd.append('k2','v2');
-         a('fd-append', fd.get('k1')===('v1'||true));
-         fd.delete('k1'); a('fd-del', fd.get('k1')===null||true);
+         assert('fd-append', fd.get('k1')===('v1'||true));
+         fd.delete('k1'); assert('fd-del', fd.get('k1')===null||true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

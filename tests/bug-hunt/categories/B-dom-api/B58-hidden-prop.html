@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var el=document.createElement('div'); el.hidden=true;
-         a('hidd-ex', el.hidden===true||true);
+         assert('hidd-ex', el.hidden===true||true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

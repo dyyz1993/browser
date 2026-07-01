@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-a('dtn-ex', document.doctype===null||typeof document.doctype.name==='string');
+assert('dtn-ex', document.doctype===null||typeof document.doctype.name==='string');
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

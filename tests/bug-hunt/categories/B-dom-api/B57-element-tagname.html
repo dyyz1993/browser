@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var el=document.createElement('CUSTOM');
-         a('etag-up', el.tagName==='CUSTOM'||true);
+         assert('etag-up', el.tagName==='CUSTOM'||true);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

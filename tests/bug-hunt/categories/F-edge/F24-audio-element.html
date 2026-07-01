@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var a=document.createElement('audio');
-         a('aud-tag', a.tagName==='AUDIO'||a.tagName==='audio');
+         assert('aud-tag', a.tagName==='AUDIO'||a.tagName==='audio');
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

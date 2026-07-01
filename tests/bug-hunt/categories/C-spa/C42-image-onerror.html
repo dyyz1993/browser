@@ -8,7 +8,7 @@ function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message;
 try {
 var img=new Image();
          var threw=false; try{img.onerror=function(){};}catch(e){threw=true;}
-         a('ioe-set', !threw);
+         assert('ioe-set', !threw);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }
