@@ -11,12 +11,12 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M70.18**（修正 Map/Crawl 为递归+并发批量） |
+| HEAD | **M71.4**（boa→optional 9.4M + Web API GAP 修复 + sloppy mode） |
 | 总 commits | ~264 |
 | 测试 | 868 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
-| JS 引擎 | **双引擎**：QuickJS（默认，CLI + CDP）+ boa（`--js-engine boa`） |
+| JS 引擎 | **QuickJS（默认，9.4M）**；boa 改为 `--features boa` 可选（17M，纯 CSR 站天花板，保留备用） |
 | CDP navigate | ✅ M68 执行页面 `<script>`（spawn_blocking + catch_unwind） |
 | 动态 script | ✅ M69 appendChild(script) 触发 fetch+eval+onload（webpack/vite 兼容） |
 | HTTP API | ✅ M70.12 `browser serve` 命令 + Cloudflare Worker 前端 |
@@ -28,6 +28,31 @@
 ---
 
 ## 最近变更（倒序）
+
+### M71.1–M71.4 — boa→optional + Web API 差距修复（worktree 隔离，20 commits）（2026-07-01）✅
+
+**体积优化（M71.1）**：boa 从强制依赖降为 `--features boa` 可选。
+默认构建（纯 QuickJS）**17M→9.4M（-45%）**，gzip 4.7M。`--features boa` 仍可编双引擎（17M）。
+
+**渲染质量对比方法论（M71.2）**：自写 8 档渐进复杂度 HTML
+（iframe/vdom/fragment/css/css3/canvas/webgl/performance），Chrome dump-dom 产 baseline，
+逐行对比找差距。工具沉淀到 `tests/render-matrix/`。
+
+**Web API GAP 修复（M71.3，render-matrix 42%→89%）**：
+- **GAP-I（根因 bug）**：`querySelector/All` 对「以 # 开头的后代选择器」（如 `#dyn1 .p`）
+  彻底失效——id 短路逻辑未排除含空格选择器。5 个回归测试固化。
+- **GAP-A**：`HTMLIFrameElement` 构造器 + iframe contentDocument/contentWindow/postMessage stub。
+- **GAP-B**：`DocumentFragment` nodeType=11/childNodes + 插入展开子节点。
+- **GAP-D**：`CSS.supports` + `matchMedia` 视口判断。
+- **GAP-E/F**：Canvas/WebGL `getContext` 返回 stub（符合项目宗旨不做真渲染）。
+- **GAP-H**：`performance.navigation` + console 扩展。
+- **GAP-J/K/L/M**：cloneNode/fragment/getComputedStyle/dispatchEvent 收尾。
+
+**sloppy mode 兼容（M71.4，GAP-N 根因修复）**：rquickjs 默认 `strict:true` 导致
+SvelteKit/Nuxt 裸全局赋值抛 ReferenceError中断 CSR。新增 `eval_user_script()`（sloppy）
+仅对用户 script 关闭 strict。回归测试固化。
+
+---
 
 ### M70.18 — 修正 Map/Crawl 为递归+并发批量（Firecrawl 对齐）（2026-06-30）✅
 
