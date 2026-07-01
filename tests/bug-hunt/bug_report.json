@@ -684,124 +684,64 @@
       "has_content": true
     },
     {
-      "name": "A51-bind-new",
+      "name": "A51-weakRef",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "A52-string-charCode",
+      "name": "A52-finalizationRegistry",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "A53-array-splice",
+      "name": "A53-atomics",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "A54-array-sort-reverse",
+      "name": "A54-intl-collator",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "A55-string-indexOf",
+      "name": "A55-structuredClone",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
-    },
-    {
-      "name": "A56-string-slice",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
-    },
-    {
-      "name": "A57-math-random-trunc",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
-    },
-    {
-      "name": "A58-parseInt-base",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
-    },
-    {
-      "name": "A59-object-create",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
-    },
-    {
-      "name": "A60-setTimeout-multi-arg",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "has_content": true
     }
   ],
   "B-dom-api": [
@@ -1549,124 +1489,124 @@
       "has_content": true
     },
     {
-      "name": "B51-textContent-nodeList",
+      "name": "B51-select-options-add",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B52-document-all",
+      "name": "B52-contentEditable-true",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B53-nodeName-tagName",
+      "name": "B53-input-placeholder",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B54-id-prop",
+      "name": "B54-style-csstext",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B55-className",
+      "name": "B55-tabIndex",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B56-closest",
+      "name": "B56-dispatch-event-none",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B57-matched-selector",
+      "name": "B57-element-tagname",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B58-window-event",
+      "name": "B58-hidden-prop",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B59-childElementCount",
+      "name": "B59-dir-property",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "B60-rowspan-colspan",
+      "name": "B60-htmlFor",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     }
   ],
   "C-spa": [
@@ -2167,64 +2107,64 @@
       "has_content": true
     },
     {
-      "name": "C41-range-contents",
+      "name": "C41-history-length",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "C42-mutation-takeRecords",
+      "name": "C42-image-onerror",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "Image is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:Image is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "C43-dispatch-twice",
+      "name": "C43-jsonp-like",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "C44-fetch-timeout",
+      "name": "C44-manual-location",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "C45-window-frame",
+      "name": "C45-navigator-onLine",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     }
   ],
   "D-network": [
@@ -2456,6 +2396,28 @@
       "has_content": true
     },
     {
+      "name": "D16-url-searchParams-set",
+      "passes": [],
+      "fails": [],
+      "script_throws": [
+        "a is not defined\\n"
+      ],
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "has_error": true,
+      "has_content": true
+    },
+    {
+      "name": "D17-fetch-bad-protocol",
+      "passes": [],
+      "fails": [],
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "(empty)",
+      "has_error": false,
+      "has_content": false
+    },
+    {
       "name": "D17-xhr-getAllResponseHeaders",
       "passes": [
         "xgrh-ok"
@@ -2466,6 +2428,18 @@
         "[js] [xhr] send data:text/plain,hx → null"
       ],
       "content_preview": "xgrh-ok:PASS",
+      "has_error": true,
+      "has_content": true
+    },
+    {
+      "name": "D18-xhr-abort",
+      "passes": [],
+      "fails": [],
+      "script_throws": [
+        "a is not defined\\n"
+      ],
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
       "has_content": true
     },
@@ -2493,6 +2467,30 @@
       "script_throws": [],
       "js_errors": [],
       "content_preview": "fbj-err:FAIL(Failed to fetch data:application/json,{\"k\":\"v\"})",
+      "has_error": true,
+      "has_content": true
+    },
+    {
+      "name": "D19-fetch-headers-forEach",
+      "passes": [],
+      "fails": [],
+      "script_throws": [
+        "a is not defined\\n"
+      ],
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
+      "has_error": true,
+      "has_content": true
+    },
+    {
+      "name": "D20-formData-delete",
+      "passes": [],
+      "fails": [],
+      "script_throws": [
+        "a is not defined\\n"
+      ],
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
       "has_content": true
     },
@@ -3023,64 +3021,64 @@
       "has_content": true
     },
     {
-      "name": "E36-error-lineno",
+      "name": "E36-console-debug-all",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "E37-console-complex",
+      "name": "E37-error-props",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "E38-throw-string",
+      "name": "E38-type-error-instance",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "E39-throw-number",
+      "name": "E39-syntax-error-instance",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "E40-catch-rethrow",
+      "name": "E40-uri-error-instance",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     }
   ],
   "F-edge": [
@@ -3338,64 +3336,64 @@
       "has_content": true
     },
     {
-      "name": "F21-doctype",
+      "name": "F21-doctype-name",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "F22-characterData",
+      "name": "F22-svg-use-href",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "F23-xlink-ns",
+      "name": "F23-video-element",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "F24-embed-object",
+      "name": "F24-audio-element",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "not a function\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:not a function\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
-      "name": "F25-documentMode",
+      "name": "F25-progress-element",
       "passes": [],
       "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: unexpected end of string"
+      "script_throws": [
+        "a is not defined\\n"
       ],
-      "content_preview": "(empty)",
+      "js_errors": [],
+      "content_preview": "__SCRIPT_THREW__:a is not defined\\n",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     }
   ]
 }

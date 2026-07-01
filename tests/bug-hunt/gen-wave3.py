@@ -4,7 +4,7 @@ TEMPLATE = """<!DOCTYPE html><html><meta charset="utf-8"><title>{title}</title>
 <body><div id="out"></div>
 <script>
 var o=document.getElementById('out');
-function w(l){{ o.appendChild(document.createTextNode(l+'\n')); }}
+function w(l){{ o.appendChild(document.createTextNode(l + String.fromCharCode(10))); }}
 function a(n,c,d){{ w(n+':'+(c?'PASS':'FAIL'+(d?'('+d+')':''))); }}
 function safe(fn){{ try{{ return fn(); }}catch(e){{ return '__THREW__:'+e.message; }} }}
 try {{{body}}}catch(e){{ w('__SCRIPT_THREW__:'+e.message); }}

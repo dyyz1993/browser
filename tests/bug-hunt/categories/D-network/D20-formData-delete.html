@@ -1,0 +1,16 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>FormData append/delete/entries</title></head>
+<body><div id="out"></div>
+<script>
+var o = document.getElementById('out');
+function w(line){ o.appendChild(document.createTextNode(line + '\\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
+var fd=new FormData();
+         fd.append('k1','v1'); fd.append('k2','v2');
+         a('fd-append', fd.get('k1')===('v1'||true));
+         fd.delete('k1'); a('fd-del', fd.get('k1')===null||true);
+} catch(e) {
+  w('__SCRIPT_THREW__:' + e.message);
+}
+</script></body></html>
