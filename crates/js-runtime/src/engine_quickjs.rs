@@ -281,14 +281,13 @@ impl QuickJsEngine {
                 Ok(module) => {
                     match module.eval() {
                         Ok((_m, promise)) => {
-                            // drain promise（在闭包内 drop，安全）
-                            match promise.finish::<Value>() {
-                                Ok(_) => Ok(()),
+                            // 用 finish::<()>() 避免 JS Value 泄漏（GC assertion）。
+                            match promise.finish::<()>() {
+                                Ok(()) => Ok(()),
                                 Err(e) => Err(format!("module promise: {e:?}")),
                             }
                         }
                         Err(e) => {
-                            // eval 失败——caught error 在闭包内 drop
                             Err(format!("module eval: {e:?}"))
                         }
                     }
@@ -378,7 +377,7 @@ impl QuickJsEngine {
             |ctx: Ctx| match Module::declare(ctx.clone(), name, source) {
                 Ok(module) => match module.eval() {
                     Ok((_module, promise)) => {
-                        let _ = promise.finish::<Value>();
+                        let _ = promise.finish::<()>();
                         Ok(())
                     }
                     Err(e) => Err(format!("module eval: {e:?}")),
