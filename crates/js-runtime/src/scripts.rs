@@ -1041,40 +1041,56 @@ fn run_scripts_quickjs(
         // M70.13: drain CSS transition 队列——触发到期的 transitionend/animationend。
         // 在 timer drain 之后、microtask drain 之前执行（transition 回调可能 schedule 新 timer）。
         let trans_fired = engine.eval_i32("__drainDueTransitions()").unwrap_or(0);
+        // M72.4: drain WebSocket 事件（Open/Message/Close/Error）。
+        // 后台线程 WsManager 产生的事件，通过 __wsDispatchEvent 分派到 JS 回调。
+        let ws_events = crate::bridge::drain_ws_events();
+        let mut ws_fired = 0;
+        for (id, etype, data) in &ws_events {
+            let escaped = data.replace('\\', "\\\\").replace('\'', "\\'");
+            let js = format!("__wsDispatchEvent({id}, '{etype}', '{escaped}')");
+            let _ = engine.eval_safe(&js);
+            ws_fired += 1;
+        }
         // M66-fix: 每轮 timer 回调触发后，drain 其 schedule 的新 Promise microtask。
-        if fired > 0 || dyn_executed > 0 || trans_fired > 0 {
+        if fired > 0 || dyn_executed > 0 || trans_fired > 0 || ws_fired > 0 {
             engine.run_jobs();
             idle_start = None;
             idle_rounds = 0;
         } else {
             // 无活动 → idle 检测 + DOM 稳定检测
+            // M72.4: 但有活动 WebSocket 连接时不 idle 退出（等 onopen/onmessage）
+            let has_ws = crate::bridge::ws_connection_count() > 0;
             if idle_start.is_none() {
                 idle_start = Some(el_start.elapsed());
             }
-            if idle_start.unwrap() >= EL_IDLE_GRACE {
-                idle_rounds += 1;
-                if idle_rounds >= EL_IDLE_ROUNDS {
-                    break;
+            if !has_ws {
+                if idle_start.unwrap() >= EL_IDLE_GRACE {
+                    idle_rounds += 1;
+                    if idle_rounds >= EL_IDLE_ROUNDS {
+                        break;
+                    }
+                } else {
+                    idle_rounds = 0;
                 }
-            } else {
-                idle_rounds = 0;
-            }
-            // M70.13: DOM 稳定检测——body 有子节点则内容已就绪，提前退出。
-            if idle_start.unwrap() >= EL_IDLE_GRACE {
-                let dom_ready = engine
-                    .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
-                    .unwrap_or(false);
-                if dom_ready {
-                    break;
+                // M70.13: DOM 稳定检测——body 有子节点则内容已就绪，提前退出。
+                if idle_start.unwrap() >= EL_IDLE_GRACE {
+                    let dom_ready = engine
+                        .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
+                        .unwrap_or(false);
+                    if dom_ready {
+                        break;
+                    }
                 }
             }
         }
-        if fired == 0 && dyn_executed == 0 && trans_fired == 0 {
+        if fired == 0 && dyn_executed == 0 && trans_fired == 0 && ws_events.is_empty() {
             let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
             let has_trans = engine
                 .eval_js_bool("__hasPendingTransitions()")
                 .unwrap_or(false);
-            if !has && !has_trans {
+            // M72.4: 有活动 WS 连接时继续轮询（等 onopen/onmessage）
+            let has_ws = crate::bridge::ws_connection_count() > 0;
+            if !has && !has_trans && !has_ws {
                 break;
             }
         }
@@ -2689,47 +2705,67 @@ XMLHttpRequest.prototype.overrideMimeType = function(mime) {};
 XMLHttpRequest.prototype.upload = {};
 XMLHttpRequest.prototype.withCredentials = false;
 
-// WebSocket
-var __wsSeq = 0;
+// WebSocket（复用 boa 的后台线程 WsManager）
+var __wsInstances = {};
 function WebSocket(url, protocols) {
     if (!url) throw new TypeError('Failed to construct "WebSocket": 1 argument required');
-    __wsSeq++;
-    this.__id = __wsSeq;
+    this.__wsId = (typeof __wsCreate === 'function') ? __wsCreate(url) : -1;
     this.url = url;
     this.readyState = 0; // CONNECTING
     this.bufferedAmount = 0;
     this.extensions = '';
-    this.protocol = '';
+    this.protocol = protocols || '';
     this.binaryType = 'blob';
-    var self = this;
-    // 异步触发 open
-    setTimeout(function() {
-        self.readyState = 1; // OPEN
-        self.protocol = protocols || '';
-        if (typeof self.onopen === 'function') {
-            try { self.onopen.call(self, { type: 'open' }); } catch(e) {}
-        }
-    }, 0);
+    this.__listeners = {};
+    if (this.__wsId >= 0) {
+        __wsInstances[this.__wsId] = this;
+    }
 }
 WebSocket.CONNECTING = 0;
 WebSocket.OPEN = 1;
 WebSocket.CLOSING = 2;
 WebSocket.CLOSED = 3;
 WebSocket.prototype.send = function(data) {
-    if (typeof __log === 'function' && typeof data === 'string') {
-        __log('[ws] send: ' + data.substring(0, 100));
+    if (this.__wsId >= 0 && typeof __wsSend === 'function') {
+        __wsSend(this.__wsId, String(data));
     }
 };
 WebSocket.prototype.close = function() {
-    this.readyState = 3; // CLOSED
-    if (typeof this.onclose === 'function') {
-        try { this.onclose.call(this, { type: 'close', code: 1000, reason: '' }); } catch(e) {}
+    if (this.__wsId >= 0 && typeof __wsClose === 'function') {
+        __wsClose(this.__wsId);
     }
 };
 WebSocket.prototype.addEventListener = function(type, cb) {
-    if (!this.__listeners) this.__listeners = {};
     if (!this.__listeners[type]) this.__listeners[type] = [];
     this.__listeners[type].push(cb);
+};
+// 后台 WS 事件分派器（Rust event loop 每轮 eval 调用）
+window.__wsDispatchEvent = function(id, type, data) {
+    var ws = __wsInstances[id];
+    if (!ws) return;
+    var ev = { type: type, data: data, target: ws, currentTarget: ws };
+    if (type === 'open') {
+        ws.readyState = 1; // OPEN
+        if (typeof ws.onopen === 'function') {
+            try { ws.onopen.call(ws, ev); } catch(e) {}
+        }
+    } else if (type === 'message') {
+        if (typeof ws.onmessage === 'function') {
+            try { ws.onmessage.call(ws, ev); } catch(e) {}
+        }
+    } else if (type === 'close') {
+        ws.readyState = 3; // CLOSED
+        if (typeof ws.onclose === 'function') {
+            try { ws.onclose.call(ws, ev); } catch(e) {}
+        }
+        delete __wsInstances[id];
+    } else if (type === 'error') {
+        ws.readyState = 3; // CLOSED on error
+        if (typeof ws.onerror === 'function') {
+            try { ws.onerror.call(ws, ev); } catch(e) {}
+        }
+        delete __wsInstances[id];
+    }
 };
 window.WebSocket = WebSocket;
 

@@ -2009,6 +2009,19 @@ fn ensure_ws_manager() {
     });
 }
 
+/// 引擎无关：发起 ws:// 连接，返回连接 id。
+/// QuickJS 和 boa 共用。
+pub fn ws_create(url: String) -> u32 {
+    let resolved = resolve_url(&url);
+    ensure_ws_manager();
+    WS_MANAGER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|m| m.connect(resolved))
+            .unwrap_or(0)
+    })
+}
+
 /// `__wsCreate(url: string) -> number`：发起 ws:// 连接，返回 id。
 /// 实际握手在后台线程异步进行；Open/Error 事件经 drain_ws_events 分派。
 #[cfg(feature = "boa")]
@@ -2018,15 +2031,16 @@ fn ws_create_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> Js
         .and_then(|v| v.as_string())
         .map(|s| s.to_std_string_escaped())
         .unwrap_or_default();
-    let resolved = resolve_url(&url);
-    ensure_ws_manager();
-    let id = WS_MANAGER.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map(|m| m.connect(resolved))
-            .unwrap_or(0)
+    Ok(JsValue::new(ws_create(url) as f64))
+}
+
+/// 引擎无关：队列文本消息。
+pub fn ws_send(id: u32, data: String) {
+    WS_MANAGER.with(|slot| {
+        if let Some(m) = slot.borrow().as_ref() {
+            m.send_text(id, data);
+        }
     });
-    Ok(JsValue::new(id as f64))
 }
 
 /// `__wsSend(id: number, data: string) -> undefined`：队列文本消息到后台线程。
@@ -2041,12 +2055,17 @@ fn ws_send_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsRe
         .and_then(|v| v.as_string())
         .map(|s| s.to_std_string_escaped())
         .unwrap_or_default();
+    ws_send(id, data);
+    Ok(JsValue::undefined())
+}
+
+/// 引擎无关：队列关闭帧。
+pub fn ws_close(id: u32) {
     WS_MANAGER.with(|slot| {
         if let Some(m) = slot.borrow().as_ref() {
-            m.send_text(id, data);
+            m.close(id);
         }
     });
-    Ok(JsValue::undefined())
 }
 
 /// `__wsClose(id: number) -> undefined`：队列关闭帧。
@@ -2056,11 +2075,7 @@ fn ws_close_bridge(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsR
         Some(n) => n,
         None => return Ok(JsValue::undefined()),
     };
-    WS_MANAGER.with(|slot| {
-        if let Some(m) = slot.borrow().as_ref() {
-            m.close(id);
-        }
-    });
+    ws_close(id);
     Ok(JsValue::undefined())
 }
 

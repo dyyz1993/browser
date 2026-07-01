@@ -191,6 +191,11 @@ impl QuickJsEngine {
                     bridge::qjs_bridge::fetch_sync_method(url, method, body, ct)
                 }).unwrap());
 
+                // === WebSocket（复用 boa 的后台线程 WsManager）===
+                let _ = g.set("__wsCreate", Function::new(ctx.clone(), |url: String| bridge::ws_create(url) as f64).unwrap());
+                let _ = g.set("__wsSend", Function::new(ctx.clone(), |id: f64, data: String| bridge::ws_send(id as u32, data)).unwrap());
+                let _ = g.set("__wsClose", Function::new(ctx.clone(), |id: f64| bridge::ws_close(id as u32)).unwrap());
+
                 // === Storage ===
                 let _ = g.set("__storageGet", Function::new(ctx.clone(), |k: String| bridge::qjs_bridge::storage_get(k)).unwrap());
                 let _ = g.set("__storageSet", Function::new(ctx.clone(), |k: String, v: String| bridge::qjs_bridge::storage_set(k, v)).unwrap());
@@ -229,11 +234,6 @@ impl QuickJsEngine {
                 let _ = g.set("__xhrOpen", Function::new(ctx.clone(), |_: f64, _: String, _: String| {}).unwrap());
                 let _ = g.set("__xhrSend", Function::new(ctx.clone(), |_: f64| {}).unwrap());
                 let _ = g.set("__xhrGetResponseText", Function::new(ctx.clone(), |_: f64| Option::<String>::None).unwrap());
-
-                // === WebSocket（桩）===
-                let _ = g.set("__wsCreate", Function::new(ctx.clone(), |_: String| 0i32).unwrap());
-                let _ = g.set("__wsSend", Function::new(ctx.clone(), |_: f64, _: String| {}).unwrap());
-                let _ = g.set("__wsClose", Function::new(ctx.clone(), |_: f64| {}).unwrap());
 
                 // === HTML 解析（html5ever → 真实 DOM 子节点）===
                 let _ = g.set(
