@@ -29,6 +29,19 @@
 
 ## 最近变更（倒序）
 
+### M71.5 — smart fallback 同量纲比较，修复 CSR 误判（2026-07-01）✅
+
+**根因**：`fetch` 命令的「JS 搞坏页面」检测用「JS 后纯文本」vs「原始 HTML 字节」比较
+（`content_len < raw_len/5`）。**量纲不匹配**——HTML 标签开销占 80%+，正常 CSR 页面
+（JS 渲染出正文）也满足此条件，被误判为'JS broke the page'，回退静态壳丢失 CSR 内容。
+
+**修复**：同量纲比较——先提取 JS 前纯文本，再和 JS 后纯文本比。仅当 SSR 文本足够（>200B）
+且 JS 后不足其 1/3 才判定 JS 搞坏页面。
+
+**验证（三场景全过）**：正常 CSR 不再误判 / 真 JS 搞坏 fallback 仍生效 / 部分增强两者保留。
+
+---
+
 ### M71.1–M71.4 — boa→optional + Web API 差距修复（worktree 隔离，20 commits）（2026-07-01）✅
 
 **体积优化（M71.1）**：boa 从强制依赖降为 `--features boa` 可选。
