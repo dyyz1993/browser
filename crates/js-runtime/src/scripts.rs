@@ -2683,23 +2683,92 @@ XMLHttpRequest.prototype.addEventListener = function(type, cb) {
     this.__listeners[type].push(cb);
 };
 XMLHttpRequest.prototype.removeEventListener = function(type, cb) {};
-XMLHttpRequest.prototype.removeEventListener = function(type, cb) {};
+XMLHttpRequest.prototype.getResponseHeader = function(name) { return null; };
+XMLHttpRequest.prototype.getResponseText = function() { return this.responseText; };
+XMLHttpRequest.prototype.overrideMimeType = function(mime) {};
+XMLHttpRequest.prototype.upload = {};
+XMLHttpRequest.prototype.withCredentials = false;
+
+// WebSocket
+var __wsSeq = 0;
+function WebSocket(url, protocols) {
+    if (!url) throw new TypeError('Failed to construct "WebSocket": 1 argument required');
+    __wsSeq++;
+    this.__id = __wsSeq;
+    this.url = url;
+    this.readyState = 0; // CONNECTING
+    this.bufferedAmount = 0;
+    this.extensions = '';
+    this.protocol = '';
+    this.binaryType = 'blob';
+    var self = this;
+    // 异步触发 open
+    setTimeout(function() {
+        self.readyState = 1; // OPEN
+        self.protocol = protocols || '';
+        if (typeof self.onopen === 'function') {
+            try { self.onopen.call(self, { type: 'open' }); } catch(e) {}
+        }
+    }, 0);
+}
+WebSocket.CONNECTING = 0;
+WebSocket.OPEN = 1;
+WebSocket.CLOSING = 2;
+WebSocket.CLOSED = 3;
+WebSocket.prototype.send = function(data) {
+    if (typeof __log === 'function' && typeof data === 'string') {
+        __log('[ws] send: ' + data.substring(0, 100));
+    }
+};
+WebSocket.prototype.close = function() {
+    this.readyState = 3; // CLOSED
+    if (typeof this.onclose === 'function') {
+        try { this.onclose.call(this, { type: 'close', code: 1000, reason: '' }); } catch(e) {}
+    }
+};
+WebSocket.prototype.addEventListener = function(type, cb) {
+    if (!this.__listeners) this.__listeners = {};
+    if (!this.__listeners[type]) this.__listeners[type] = [];
+    this.__listeners[type].push(cb);
+};
+window.WebSocket = WebSocket;
 
 // fetch（Promise-based，内部同步 fetch）
 window.fetch = function(input, options) {
     var url = (typeof input === 'string') ? input : (input && input.url) || String(input);
+    options = options || {};
+    var method = options.method || 'GET';
+    var body = options.body || null;
+    var ct = options.headers ? (options.headers['Content-Type'] || options.headers['content-type'] || null) : null;
     return new Promise(function(resolve, reject) {
-        var raw = (typeof __fetchSync === 'function') ? __fetchSync(url) : null;
+        var raw = null;
+        var statusCode = 200;
+        // POST/PUT/DELETE → __fetchSyncMethod（支持 method/body，返回 "{status}\n{body}"）
+        // GET → __fetchSync（现有同步 fetch）
+        if (method !== 'GET' && typeof __fetchSyncMethod === 'function') {
+            raw = __fetchSyncMethod(url, method, body, ct);
+            if (raw && raw.indexOf('\n') > 0) {
+                statusCode = parseInt(raw.split('\n')[0], 10);
+                raw = raw.slice(raw.indexOf('\n') + 1);
+            }
+        } else if (typeof __fetchSync === 'function') {
+            raw = __fetchSync(url);
+        }
         if (raw === null || raw === undefined) {
             reject(new TypeError('Failed to fetch ' + url));
         } else {
             resolve({
-                ok: true, status: 200, statusText: 'OK',
+                ok: statusCode >= 200 && statusCode < 300,
+                status: statusCode,
+                statusText: statusCode === 200 ? 'OK' : String(statusCode),
                 url: url,
                 redirected: false,
                 text: function() { return Promise.resolve(raw); },
                 json: function() { return Promise.resolve(JSON.parse(raw)); },
-                headers: { get: function(k) { return null; } },
+                headers: {
+                    get: function(k) { return null; },
+                    forEach: function() {}
+                },
                 clone: function() { return this; }
             });
         }

@@ -2885,7 +2885,7 @@ pub mod qjs_bridge {
         let resolved = resolve_url(&url);
         super::fetch_sync_with_method(&resolved, &method, body.as_deref(), ct.as_deref())
             .ok()
-            .map(|(_, b)| b)
+            .map(|(status, b)| format!("{status}\n{b}"))
     }
 
     /// storageGet(key) -> Option<String>。
