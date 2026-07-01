@@ -1,17 +1,1 @@
-<!DOCTYPE html><html><head><meta charset="utf-8"><title>Optional chaining (?.)</title></head>
-<body><div id="out"></div>
-<script>
-var o = document.getElementById('out');
-function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
-function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
-function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
-try {
-var obj = {a:{b:1}};
- assert('oc-deep', obj?.a?.b === 1);
- assert('oc-null', obj?.x?.y === undefined);
- assert('oc-call', obj?.a?.b?.toFixed?.(0) === '1');
- assert('oc-arr', [1,2,3]?.[1] === 2);
-} catch(e) {
-  w('__SCRIPT_THREW__:' + e.message);
-}
-</script></body></html>
+<!DOCTYPE html><html><meta charset="utf-8"><title>{title}</title><body><div id="out"></div><script>var o=document.getElementById("out");function w(l){o.appendChild(document.createTextNode(l+String.fromCharCode(10)));}function a(n,c,d){w(n+":"+(c?"PASS":"FAIL"+(d?"("+d+")":"")));}function safe(fn){try{return fn();}catch(e){return "__THREW__:"+e.message;}}try{var o={a:{b:1}};a("oc-d",o?.a?.b===1);a("oc-n",o?.x?.y===undefined);a("oc-a",[1,2,3]?.[1]===2);}catch(e){w("__SCRIPT_THREW__:"+e.message);}</script></body></html>

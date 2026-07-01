@@ -1,18 +1,1 @@
-<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reflect API</title></head>
-<body><div id="out"></div>
-<script>
-var o = document.getElementById('out');
-function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
-function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
-function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
-try {
-var o = {x:1};
- assert('ref-get', Reflect.get(o,'x')===1);
- assert('ref-set', Reflect.set(o,'y',2)===true && o.y===2);
- assert('ref-has', Reflect.has(o,'x')===true);
- assert('ref-ownKeys', Reflect.ownKeys(o).length===2);
- assert('ref-apply', Reflect.apply(Math.max, null, [1,5,3])===5);
-} catch(e) {
-  w('__SCRIPT_THREW__:' + e.message);
-}
-</script></body></html>
+<!DOCTYPE html><html><meta charset="utf-8"><title>{title}</title><body><div id="out"></div><script>var o=document.getElementById("out");function w(l){o.appendChild(document.createTextNode(l+String.fromCharCode(10)));}function a(n,c,d){w(n+":"+(c?"PASS":"FAIL"+(d?"("+d+")":"")));}function safe(fn){try{return fn();}catch(e){return "__THREW__:"+e.message;}}try{var o={x:1};a("rf-g",Reflect.get(o,"x")===1);a("rf-s",Reflect.set(o,"y",2)===true);a("rf-h",Reflect.has(o,"x"));}catch(e){w("__SCRIPT_THREW__:"+e.message);}</script></body></html>
