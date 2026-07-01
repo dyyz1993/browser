@@ -10,14 +10,14 @@ TEMPLATE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>{title}</t
 <body><div id="out"></div>
 <script>
 var o = document.getElementById('out');
-function w(line){{ o.appendChild(document.createTextNode(line + '\\n')); }}
-function assert(name, cond, detail){{ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }}
-function safe(fn){{ try{{ return fn(); }}catch(e){{ return '__THREW__:' + e.message; }} }}
-try {{
+function w(line){ o.appendChild(document.createTextNode(line + '\\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
 {body}
-}} catch(e) {{
+} catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
-}}
+}
 </script></body></html>
 """
 
@@ -81,7 +81,7 @@ A_EXTRA = [
  function f2(a,...rest){ return rest[0]; }
  assert('rp-last', f2(10,20,30)===20);"""),
 ("A31-arrow-this", "箭头函数 this",
- """var obj={x:42, f:function(){ return (()=>this.x)(); }};
+ """var obj={x:42, f:function(){ return (()=>this.x)(); };
  assert('at-v', obj.f()===42);"""),
 ("A32-for-of", "for...of 迭代",
  """var s=''; for(var c of 'ab') s+=c; assert('fo-s', s==='ab');"""),
@@ -90,7 +90,7 @@ A_EXTRA = [
 ("A34-getter-setter", "getter/setter defineProperty",
  """var o={}; Object.defineProperty(o,'x',{get:function(){return 42;},configurable:true});
  assert('gs-get', o.x===42);
- Object.defineProperty(o,'x',{set:function(v){this._x=v;}}); o.x=100;
+ Object.defineProperty(o,'x',{set:function(v){this._x=v;}); o.x=100;
  // 只测试 getter/setter 定义不抛错
  assert('gs-ok', true);"""),
 ("A35-weakmap-weakset", "WeakMap/WeakSet",
@@ -224,7 +224,7 @@ E_EXTRA = [
 
 def write_tests(dir_path, tests):
     for tid, title, body in tests:
-        html = TEMPLATE.format(title=title, body=body)
+        html = TEMPLATE.replace("{title}",title).replace("{body}",body)
         with open(dir_path / f"{tid}.html", "w") as f:
             f.write(html)
 

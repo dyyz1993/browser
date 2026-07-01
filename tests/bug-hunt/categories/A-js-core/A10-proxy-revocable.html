@@ -6,12 +6,12 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-var o={{a:1}};
- var {{proxy, revoke}} = Proxy.revocable(o, {{}});
+var o={a:1};
+ var {proxy, revoke} = Proxy.revocable(o, {});
  assert('revoc-pre', proxy.a===1);
  revoke();
  var threw = false;
- try{{ proxy.a; }}catch(e){{ threw = true; }}
+ try{ proxy.a; }catch(e){ threw = true; }
  assert('revoc-post', threw);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);

@@ -7,10 +7,10 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 // 静态测：import.meta 引用不崩，import() 返回 Promise
- assert('im-ref', safe(function(){{ return typeof import.meta; }}).indexOf('__THREW__')<0);
+ assert('im-ref', safe(function(){ return typeof import.meta; }).indexOf('__THREW__')<0);
  var ip = import('./nonexistent.mjs');
  assert('im-promise', ip instanceof Promise);
- ip.catch(function(){{ assert('im-reject', true); }});
+ ip.catch(function(){ assert('im-reject', true); });
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
 }

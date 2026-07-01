@@ -14,14 +14,14 @@ TEMPLATE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>{title}</t
 <body><div id="out"></div>
 <script>
 var o = document.getElementById('out');
-function w(line){{ o.appendChild(document.createTextNode(line + '\\n')); }}
-function assert(name, cond, detail){{ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }}
-function safe(fn){{ try{{ return fn(); }}catch(e){{ return '__THREW__:' + e.message; }} }}
-try {{
+function w(line){ o.appendChild(document.createTextNode(line + '\\n')); }
+function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
+function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
+try {
 {body}
-}} catch(e) {{
+} catch(e) {
   w('__SCRIPT_THREW__:' + e.message);
-}}
+}
 </script></body></html>
 """
 
@@ -46,7 +46,7 @@ TESTS = [
  assert('bigint-toStr', (255n).toString(16)==='ff');
  assert('bigint-parse', BigInt('999')===999n);"""),
 ("A05-optional-chaining", "Optional chaining (?.)",
- """var obj = {{a:{{b:1}}}};
+ """var obj = {a:{b:1}};
  assert('oc-deep', obj?.a?.b === 1);
  assert('oc-null', obj?.x?.y === undefined);
  assert('oc-call', obj?.a?.b?.toFixed?.(0) === '1');
@@ -62,24 +62,24 @@ TESTS = [
  assert('gt-assign', __test72 === 42);
  assert('gt-window', globalThis.globalThis === globalThis);"""),
 ("A08-reflect", "Reflect API",
- """var o = {{x:1}};
+ """var o = {x:1};
  assert('ref-get', Reflect.get(o,'x')===1);
  assert('ref-set', Reflect.set(o,'y',2)===true && o.y===2);
  assert('ref-has', Reflect.has(o,'x')===true);
  assert('ref-ownKeys', Reflect.ownKeys(o).length===2);
  assert('ref-apply', Reflect.apply(Math.max, null, [1,5,3])===5);"""),
 ("A09-proxy-basic", "Proxy 基础",
- """var t = {{x:1}};
- var p = new Proxy(t, {{ get:function(t,k){{ return k in t ? t[k] : 'MISS'; }} }});
+ """var t = {x:1};
+ var p = new Proxy(t, { get:function(t,k){ return k in t ? t[k] : 'MISS'; } });
  assert('proxy-get', p.x===1);
  assert('proxy-miss', p.y==='MISS');"""),
 ("A10-proxy-revocable", "Proxy revoke",
- """var o={{a:1}};
- var {{proxy, revoke}} = Proxy.revocable(o, {{}});
+ """var o={a:1};
+ var {proxy, revoke} = Proxy.revocable(o, {});
  assert('revoc-pre', proxy.a===1);
  revoke();
  var threw = false;
- try{{ proxy.a; }}catch(e){{ threw = true; }}
+ try{ proxy.a; }catch(e){ threw = true; }
  assert('revoc-post', threw);"""),
 ("A11-symbol-iterator", "Symbol.iterator",
  """var arr = [1,2,3];
@@ -88,13 +88,13 @@ TESTS = [
  assert('sym-next2', it.next().value===2);
  assert('sym-done', it.next().done===false && it.next().done===true);"""),
 ("A12-symbol-toPrimitive", "Symbol.toPrimitive",
- """var o = {{ [Symbol.toPrimitive](hint){{ return hint==='number'?42:'s'; }} }};
+ """var o = { [Symbol.toPrimitive](hint){ return hint==='number'?42:'s'; } };
  assert('symtp-num', +o===42);
  assert('symtp-str', ''+o==='s');"""),
 ("A13-array-flat", "Array.flat/flatMap",
  """assert('flat-1', [1,[2,[3]]].flat().length===3);
  assert('flat-2', [1,[2,[3]]].flat(2).length===3);
- assert('flatMap', [1,2].flatMap(function(x){{ return [x,x*10]; }}).join(',')==='1,10,2,20');"""),
+ assert('flatMap', [1,2].flatMap(function(x){ return [x,x*10]; }).join(',')==='1,10,2,20');"""),
 ("A14-array-from-entries", "Array.from/keys/values",
  """assert('from', Array.from('ab').join()==='a,b');
  assert('from-set', Array.from(new Set([1,1,2])).join()==='1,2');
@@ -109,7 +109,7 @@ TESTS = [
  """assert('is-nan', Object.is(NaN, NaN));
  assert('is-0n', Object.is(-0, -0));
  assert('is-0p0n', !Object.is(-0, 0));
- var dst={{}}; Object.assign(dst, {{a:1}}, {{b:2}});
+ var dst={}; Object.assign(dst, {a:1}, {b:2});
  assert('assign', dst.a===1 && dst.b===2);"""),
 ("A17-string-pad-matchall", "String pad/matchAll/replaceAll",
  """assert('pad', 'x'.padStart(3,'ab')==='abx');
@@ -125,7 +125,7 @@ TESTS = [
  var ds = /a.b/s.test('a\\nb');
  assert('rg-dotAll', ds);"""),
 ("A19-destructuring", "解构嵌套/默认/rest/交换",
- """var {{a, b=5, ...r}} = {{a:1, c:3, d:4}};
+ """var {a, b=5, ...r} = {a:1, c:3, d:4};
  assert('dc-vals', a===1 && b===5);
  assert('dc-rest', r.c===3 && r.d===4);
  var [x, , z] = [1,2,3];
@@ -133,33 +133,33 @@ TESTS = [
  var [p,q] = [10,20]; [p,q]=[q,p];
  assert('dc-swap', p===20 && q===10);"""),
 ("A20-generator", "生成器/迭代器协议",
- """function* gen(){{ yield 1; yield 2; return 3; }}
+ """function* gen(){ yield 1; yield 2; return 3; }
  var g = gen();
  assert('gen-1', g.next().value===1);
  assert('gen-2', g.next().value===2);
  var last = g.next();
  assert('gen-done', last.done===true && last.value===3);
- function* range(n){{ for(var i=0;i<n;i++) yield i; }}
+ function* range(n){ for(var i=0;i<n;i++) yield i; }
  assert('gen-spread', [...range(3)].join()==='0,1,2');"""),
 ("A21-import-meta-dynamic", "动态 import（本地无模块文件，测语法不抛错）",
  """// 静态测：import.meta 引用不崩，import() 返回 Promise
- assert('im-ref', safe(function(){{ return typeof import.meta; }}).indexOf('__THREW__')<0);
+ assert('im-ref', safe(function(){ return typeof import.meta; }).indexOf('__THREW__')<0);
  var ip = import('./nonexistent.mjs');
  assert('im-promise', ip instanceof Promise);
- ip.catch(function(){{ assert('im-reject', true); }});"""),
+ ip.catch(function(){ assert('im-reject', true); });"""),
 ("A22-class-private-static", "类 private field / static / extends",
- """class Base{{ static x = 10; #v = 5; get v(){{ return this.#v; }} }}
- class Sub extends Base{{ #s = 1; get s(){{ return this.#s; }} }}
+ """class Base{ static x = 10; #v = 5; get v(){ return this.#v; } }
+ class Sub extends Base{ #s = 1; get s(){ return this.#s; } }
  var s = new Sub();
  assert('cls-static', Sub.x===10);
  assert('cls-priv', s.v===5);
  assert('cls-sub-priv', s.s===1);"""),
 ("A23-try-nobinding", "try/catch 无参数绑定",
  """var got = false;
- try {{ throw new Error('e'); }} catch {{ got = true; }}
+ try { throw new Error('e'); } catch { got = true; }
  assert('try-nobind', got);"""),
 ("A24-template-tagged", "模板字符串标签/raw",
- """function tag(strs, ...vals){{ return strs.raw.join('|') + '/' + vals.join(','); }}
+ """function tag(strs, ...vals){ return strs.raw.join('|') + '/' + vals.join(','); }
  assert('tpl-tag', tag`a${1}b${2}c`==='a|b|c/1,2');
  assert('tpl-multiline', `line1\\nline2`.includes('\\n'));"""),
 ("A25-map-set-iter", "Map/Set 迭代与构造",
@@ -175,7 +175,7 @@ TESTS = [
 
 def main():
     for tid, title, body in TESTS:
-        html = TEMPLATE.format(title=title, body=body)
+        html = TEMPLATE.replace("{title}",title).replace("{body}",body)
         path = OUT / f"{tid}.html"
         with open(path, "w") as f:
             f.write(html)

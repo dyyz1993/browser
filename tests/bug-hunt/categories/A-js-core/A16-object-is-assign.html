@@ -9,7 +9,7 @@ try {
 assert('is-nan', Object.is(NaN, NaN));
  assert('is-0n', Object.is(-0, -0));
  assert('is-0p0n', !Object.is(-0, 0));
- var dst={{}}; Object.assign(dst, {{a:1}}, {{b:2}});
+ var dst={}; Object.assign(dst, {a:1}, {b:2});
  assert('assign', dst.a===1 && dst.b===2);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);

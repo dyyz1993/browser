@@ -56,15 +56,18 @@
     },
     {
       "name": "A05-optional-chaining",
-      "passes": [],
+      "passes": [
+        "oc-deep",
+        "oc-null",
+        "oc-call",
+        "oc-arr"
+      ],
       "fails": [],
       "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "js_errors": [],
+      "content_preview": "oc-deep:PASS\noc-null:PASS\noc-call:PASS\noc-arr:PASS",
+      "has_error": false,
+      "has_content": true
     },
     {
       "name": "A06-nullish-coalescing",
@@ -97,39 +100,48 @@
     },
     {
       "name": "A08-reflect",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
+      "passes": [
+        "ref-get"
       ],
-      "content_preview": "(empty)",
+      "fails": [],
+      "script_throws": [
+        "not a function"
+      ],
+      "js_errors": [
+        "[js] [quickjs] Error: not a function"
+      ],
+      "content_preview": "ref-get:PASS\n__SCRIPT_THREW__:not a function",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
       "name": "A09-proxy-basic",
-      "passes": [],
+      "passes": [
+        "proxy-get",
+        "proxy-miss"
+      ],
       "fails": [],
       "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "js_errors": [],
+      "content_preview": "proxy-get:PASS\nproxy-miss:PASS",
+      "has_error": false,
+      "has_content": true
     },
     {
       "name": "A10-proxy-revocable",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
+      "passes": [
+        "revoc-pre"
       ],
-      "content_preview": "(empty)",
+      "fails": [],
+      "script_throws": [
+        "not a function"
+      ],
+      "js_errors": [
+        "[js] [quickjs] Error: not a function"
+      ],
+      "content_preview": "revoc-pre:PASS\n__SCRIPT_THREW__:not a function",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
       "name": "A11-symbol-iterator",
@@ -147,15 +159,19 @@
     },
     {
       "name": "A12-symbol-toPrimitive",
-      "passes": [],
-      "fails": [],
-      "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
+      "passes": [
+        "symtp-num"
       ],
-      "content_preview": "(empty)",
+      "fails": [],
+      "script_throws": [
+        "not a function"
+      ],
+      "js_errors": [
+        "[js] [quickjs] Error: not a function"
+      ],
+      "content_preview": "symtp-num:PASS\n__SCRIPT_THREW__:not a function",
       "has_error": true,
-      "has_content": false
+      "has_content": true
     },
     {
       "name": "A13-array-flat",
@@ -204,15 +220,18 @@
     },
     {
       "name": "A16-object-is-assign",
-      "passes": [],
+      "passes": [
+        "is-nan",
+        "is-0n",
+        "is-0p0n",
+        "assign"
+      ],
       "fails": [],
       "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "js_errors": [],
+      "content_preview": "is-nan:PASS\nis-0n:PASS\nis-0p0n:PASS\nassign:PASS",
+      "has_error": false,
+      "has_content": true
     },
     {
       "name": "A17-string-pad-matchall",
@@ -245,15 +264,18 @@
     },
     {
       "name": "A19-destructuring",
-      "passes": [],
+      "passes": [
+        "dc-vals",
+        "dc-rest",
+        "dc-arr",
+        "dc-swap"
+      ],
       "fails": [],
       "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "js_errors": [],
+      "content_preview": "dc-vals:PASS\ndc-rest:PASS\ndc-arr:PASS\ndc-swap:PASS",
+      "has_error": false,
+      "has_content": true
     },
     {
       "name": "A20-generator",
@@ -284,15 +306,17 @@
     },
     {
       "name": "A22-class-private-static",
-      "passes": [],
+      "passes": [
+        "cls-static",
+        "cls-priv",
+        "cls-sub-priv"
+      ],
       "fails": [],
       "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: invalid property name"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "js_errors": [],
+      "content_preview": "cls-static:PASS\ncls-priv:PASS\ncls-sub-priv:PASS",
+      "has_error": false,
+      "has_content": true
     },
     {
       "name": "A23-try-nobinding",
@@ -404,15 +428,15 @@
     },
     {
       "name": "A31-arrow-this",
-      "passes": [
-        "at-v"
-      ],
+      "passes": [],
       "fails": [],
       "script_throws": [],
-      "js_errors": [],
-      "content_preview": "at-v:PASS",
-      "has_error": false,
-      "has_content": true
+      "js_errors": [
+        "[js] [quickjs] Error: Unexpected token ';'"
+      ],
+      "content_preview": "(empty)",
+      "has_error": true,
+      "has_content": false
     },
     {
       "name": "A32-for-of",
@@ -440,19 +464,15 @@
     },
     {
       "name": "A34-getter-setter",
-      "passes": [
-        "gs-get"
-      ],
+      "passes": [],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
+      "script_throws": [],
       "js_errors": [
-        "[js] [quickjs] Error: not a function"
+        "[js] [quickjs] Error: Unexpected token ')'"
       ],
-      "content_preview": "gs-get:PASS\n__SCRIPT_THREW__:not a function",
+      "content_preview": "(empty)",
       "has_error": true,
-      "has_content": true
+      "has_content": false
     },
     {
       "name": "A35-weakmap-weakset",

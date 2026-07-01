@@ -7,7 +7,7 @@ function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (d
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
 var got = false;
- try {{ throw new Error('e'); }} catch {{ got = true; }}
+ try { throw new Error('e'); } catch { got = true; }
  assert('try-nobind', got);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);

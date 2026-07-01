@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-var o = {{ [Symbol.toPrimitive](hint){{ return hint==='number'?42:'s'; }} }};
+var o = { [Symbol.toPrimitive](hint){ return hint==='number'?42:'s'; } };
  assert('symtp-num', +o===42);
  assert('symtp-str', ''+o==='s');
 } catch(e) {

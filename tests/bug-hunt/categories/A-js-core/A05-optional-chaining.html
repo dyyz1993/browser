@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-var obj = {{a:{{b:1}}}};
+var obj = {a:{b:1}};
  assert('oc-deep', obj?.a?.b === 1);
  assert('oc-null', obj?.x?.y === undefined);
  assert('oc-call', obj?.a?.b?.toFixed?.(0) === '1');

@@ -6,8 +6,8 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-var t = {{x:1}};
- var p = new Proxy(t, {{ get:function(t,k){{ return k in t ? t[k] : 'MISS'; }} }});
+var t = {x:1};
+ var p = new Proxy(t, { get:function(t,k){ return k in t ? t[k] : 'MISS'; } });
  assert('proxy-get', p.x===1);
  assert('proxy-miss', p.y==='MISS');
 } catch(e) {

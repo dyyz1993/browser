@@ -6,8 +6,8 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-class Base{{ static x = 10; #v = 5; get v(){{ return this.#v; }} }}
- class Sub extends Base{{ #s = 1; get s(){{ return this.#s; }} }}
+class Base{ static x = 10; #v = 5; get v(){ return this.#v; } }
+ class Sub extends Base{ #s = 1; get s(){ return this.#s; } }
  var s = new Sub();
  assert('cls-static', Sub.x===10);
  assert('cls-priv', s.v===5);

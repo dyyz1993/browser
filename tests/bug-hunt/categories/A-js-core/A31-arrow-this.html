@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-var obj={x:42, f:function(){ return (()=>this.x)(); }};
+var obj={x:42, f:function(){ return (()=>this.x)(); };
  assert('at-v', obj.f()===42);
 } catch(e) {
   w('__SCRIPT_THREW__:' + e.message);

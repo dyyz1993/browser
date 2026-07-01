@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-var o = {{x:1}};
+var o = {x:1};
  assert('ref-get', Reflect.get(o,'x')===1);
  assert('ref-set', Reflect.set(o,'y',2)===true && o.y===2);
  assert('ref-has', Reflect.has(o,'x')===true);

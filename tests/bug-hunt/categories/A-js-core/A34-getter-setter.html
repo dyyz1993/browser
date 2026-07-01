@@ -8,7 +8,7 @@ function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message;
 try {
 var o={}; Object.defineProperty(o,'x',{get:function(){return 42;},configurable:true});
  assert('gs-get', o.x===42);
- Object.defineProperty(o,'x',{set:function(v){this._x=v;}}); o.x=100;
+ Object.defineProperty(o,'x',{set:function(v){this._x=v;}); o.x=100;
  // 只测试 getter/setter 定义不抛错
  assert('gs-ok', true);
 } catch(e) {

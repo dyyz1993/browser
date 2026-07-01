@@ -1,22 +1,18 @@
 # M72 Bug 狩猎报告
 
-生成时间: Wed Jul  1 13:14:43 2026
+生成时间: Wed Jul  1 13:57:05 2026
 
-总览: ✅ 143 passed / 🐛 109 bugs / 252 fixtures
+总览: ✅ 147 passed / 🐛 105 bugs / 252 fixtures
 
 | 类别 | 状态 | 详情 |
 |------|------|------|
-| A-js-core/A05-optional-chaining | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
-| A-js-core/A08-reflect | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
-| A-js-core/A09-proxy-basic | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
-| A-js-core/A10-proxy-revocable | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
-| A-js-core/A12-symbol-toPrimitive | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
+| A-js-core/A08-reflect | 💥 | SCRIPT_THREW: not a function |
+| A-js-core/A10-proxy-revocable | 💥 | SCRIPT_THREW: not a function |
+| A-js-core/A12-symbol-toPrimitive | 💥 | SCRIPT_THREW: not a function |
 | A-js-core/A15-object-fromEntries | 💥 | SCRIPT_THREW: not a function |
-| A-js-core/A16-object-is-assign | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
-| A-js-core/A19-destructuring | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
 | A-js-core/A21-import-meta-dynamic | ⚠️ | JS_ERR: [js] [quickjs] Error: import.meta only valid in module code |
-| A-js-core/A22-class-private-static | ⚠️ | JS_ERR: [js] [quickjs] Error: invalid property name |
-| A-js-core/A34-getter-setter | 💥 | SCRIPT_THREW: not a function |
+| A-js-core/A31-arrow-this | ⚠️ | JS_ERR: [js] [quickjs] Error: Unexpected token ';' |
+| A-js-core/A34-getter-setter | ⚠️ | JS_ERR: [js] [quickjs] Error: Unexpected token ')' |
 | A-js-core/A36-intl-json | 💥 | SCRIPT_THREW: not a function |
 | A-js-core/A42-setTimeout-order | 🐛 | FAIL: sto-ord |
 | A-js-core/A51-weakRef | 💥 | SCRIPT_THREW: a is not defined\n |

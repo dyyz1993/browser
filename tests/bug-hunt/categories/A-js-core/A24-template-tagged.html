@@ -6,7 +6,7 @@ function w(line){ o.appendChild(document.createTextNode(line + '\n')); }
 function assert(name, cond, detail){ w(name + ':' + (cond ? 'PASS' : 'FAIL' + (detail?('('+detail+')'):''))); }
 function safe(fn){ try{ return fn(); }catch(e){ return '__THREW__:' + e.message; } }
 try {
-function tag(strs, ...vals){{ return strs.raw.join('|') + '/' + vals.join(','); }}
+function tag(strs, ...vals){ return strs.raw.join('|') + '/' + vals.join(','); }
  assert('tpl-tag', tag`a${1}b${2}c`==='a|b|c/1,2');
  assert('tpl-multiline', `line1\nline2`.includes('\n'));
 } catch(e) {
