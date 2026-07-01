@@ -1179,9 +1179,12 @@ window.cancelAnimationFrame = function(id) {};
 window.__drainDueTimers = function() {
     var now = Date.now();
     var fired = 0;
-    for (var i = __pendingTimers.length - 1; i >= 0; i--) {
+    // 正序遍历（FIFO：先注册的先触发）。
+    // splice 会导致后续元素前移，所以用 while + 手动 i 控制。
+    var i = 0;
+    while (i < __pendingTimers.length) {
         var t = __pendingTimers[i];
-        if (!t || now < t.fireAt) continue;
+        if (!t || now < t.fireAt) { i++; continue; }
         if (t.type === 'interval') {
             t.count++;
             if (t.count > 100) { __pendingTimers.splice(i, 1); continue; }
@@ -1641,6 +1644,7 @@ window.URL = function(input, base) {
     this.pathname = '/' + afterHost.split('?')[0].split('#')[0];
     var q = input.split('?')[1];
     this.search = q ? '?' + q.split('#')[0] : '';
+    this.searchParams = new URLSearchParams(q || '');
     this.hash = input.indexOf('#') >= 0 ? '#' + input.split('#')[1] : '';
     this.origin = this.protocol + '//' + this.host;
     this.toString = function() { return this.href; };
@@ -1662,6 +1666,23 @@ window.URLSearchParams = function(init) {
     this.toString = function() {
         return Object.keys(params).map(function(k) { return k + '=' + params[k]; }).join('&');
     };
+};
+
+// FileReader（爬虫场景：文件上传前读内容）
+window.FileReader = function() {
+    this.result = null;
+    this.onload = null;
+    this.readAsText = function(blob, encoding) {
+        // 不真正读内容，几毫秒后触发 onload
+        var self = this;
+        setTimeout(function() {
+            self.result = '';
+            if (typeof self.onload === 'function') self.onload({ target: self, type: 'load' });
+        }, 1);
+    };
+    this.readAsArrayBuffer = function(blob) { this.readAsText(blob); };
+    this.readAsDataURL = function(blob) { this.result = 'data:,'; var self = this; setTimeout(function() { if (typeof self.onload === 'function') self.onload({ target: self, type: 'load' }); }, 1); };
+    this.abort = function() {};
 };
 
 // MutationObserver（框架用，存回调但不触发）
@@ -2542,9 +2563,27 @@ Object.defineProperty(document, 'title', {
     },
     enumerable: true, configurable: true
 });
+var __cookieJar = {};
 Object.defineProperty(document, 'cookie', {
-    get: function() { return ''; },
-    set: function(v) {},
+    get: function() {
+        var parts = [];
+        for (var k in __cookieJar) {
+            if (__cookieJar.hasOwnProperty(k)) {
+                parts.push(k + '=' + __cookieJar[k]);
+            }
+        }
+        return parts.join('; ');
+    },
+    set: function(v) {
+        if (typeof v === 'string') {
+            var eq = v.indexOf('=');
+            if (eq > 0) {
+                var name = v.substring(0, eq).trim();
+                var value = v.substring(eq + 1).split(';')[0];
+                __cookieJar[name] = value;
+            }
+        }
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'readyState', {
@@ -2586,15 +2625,17 @@ var __xhrSeq = 0;
 function XMLHttpRequest() {
     __xhrSeq++;
     this.__id = __xhrSeq;
+    this.__async = true;
     this.readyState = 0;
     this.status = 0;
     this.responseText = '';
     this.response = '';
     this.__listeners = {};
 }
-XMLHttpRequest.prototype.open = function(method, url) {
+XMLHttpRequest.prototype.open = function(method, url, async) {
     this.__url = url;
     this.__method = method || 'GET';
+    this.__async = (async !== false);
     this.readyState = 1;
 };
 XMLHttpRequest.prototype.setRequestHeader = function(key, val) {};
@@ -2602,10 +2643,9 @@ XMLHttpRequest.prototype.send = function(body) {
     var self = this;
     var url = this.__url;
     var method = this.__method || 'GET';
-    // M70.13: 异步触发 load 回调——docsify 的 X 函数在 send() 之后才
-    // 注册 addEventListener('load', cb)。如果 send 里同步触发 load，
-    // 回调会错过。用 setTimeout(0) 让注册先完成。
-    setTimeout(function() {
+    // 同步（open 传 false）立即完成；异步（true 或省略）setTimeout 触发
+    var sync = (this.__async === false);
+    function doSend() {
         var raw = (typeof __fetchSync === 'function') ? __fetchSync(url) : null;
         if (typeof __log === 'function') __log('[xhr] send ' + url + ' → ' + (raw ? raw.length + ' bytes' : 'null'));
         if (raw) {
@@ -2616,27 +2656,24 @@ XMLHttpRequest.prototype.send = function(body) {
             self.status = 0;
         }
         self.readyState = 4;
-        // 触发 onreadystatechange
         if (typeof self.onreadystatechange === 'function') {
             try { self.onreadystatechange.call(self); } catch(e) {
                 if (typeof __log === 'function') __log('[xhr] rsc threw: ' + e.message);
             }
         }
-        // 触发 load（addEventListener 注册的 + onload 属性）
         var ev = new Event('load');
         ev.target = self;
         ev.currentTarget = self;
         if (self.__listeners && self.__listeners['load']) {
             for (var i = 0; i < self.__listeners['load'].length; i++) {
-                try { self.__listeners['load'][i].call(self, ev); } catch(e) {
-                    if (typeof __log === 'function') __log('[xhr] onload threw: ' + e.message);
-                }
+                try { self.__listeners['load'][i].call(self, ev); } catch(e) {}
             }
         }
         if (typeof self.onload === 'function') {
             try { self.onload.call(self, ev); } catch(e) {}
         }
-    }, 0);
+    }
+    if (sync) { doSend(); } else { setTimeout(doSend, 1); }
 };
 XMLHttpRequest.prototype.abort = function() {};
 XMLHttpRequest.prototype.getResponseHeader = function(name) { return null; };
@@ -2659,6 +2696,7 @@ window.fetch = function(input, options) {
             resolve({
                 ok: true, status: 200, statusText: 'OK',
                 url: url,
+                redirected: false,
                 text: function() { return Promise.resolve(raw); },
                 json: function() { return Promise.resolve(JSON.parse(raw)); },
                 headers: { get: function(k) { return null; } },

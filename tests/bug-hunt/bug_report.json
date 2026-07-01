@@ -17,33 +17,29 @@
     {
       "name": "A05-optional-chaining",
       "passes": [
-        "oc-d"
+        "oc-d",
+        "oc-n",
+        "oc-a"
       ],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
-      "js_errors": [
-        "[js] [quickjs] Error: not a function"
-      ],
-      "content_preview": "oc-d:PASS\n__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "oc-d:PASS\noc-n:PASS\noc-a:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A08-reflect",
       "passes": [
-        "rf-g"
+        "rf-g",
+        "rf-s",
+        "rf-h"
       ],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
-      "js_errors": [
-        "[js] [quickjs] Error: not a function"
-      ],
-      "content_preview": "rf-g:PASS\n__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "rf-g:PASS\nrf-s:PASS\nrf-h:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -62,73 +58,66 @@
     {
       "name": "A10-proxy-revocable",
       "passes": [
-        "pr-a"
+        "pr-a",
+        "pr-r"
       ],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
-      "js_errors": [
-        "[js] [quickjs] Error: not a function"
-      ],
-      "content_preview": "pr-a:PASS\n__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "pr-a:PASS\npr-r:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A11-symbol-iterator",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "not a function"
+      "passes": [
+        "si-1",
+        "si-2"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "content_preview": "si-1:PASS\nsi-2:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A12-symbol-toPrimitive",
       "passes": [
-        "stp-n"
+        "stp-n",
+        "stp-s"
       ],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
-      "js_errors": [
-        "[js] [quickjs] Error: not a function"
-      ],
-      "content_preview": "stp-n:PASS\n__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "stp-n:PASS\nstp-s:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A15-object-fromEntries",
       "passes": [
-        "of-a"
+        "of-a",
+        "of-b",
+        "of-k"
       ],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
-      "js_errors": [
-        "[js] [quickjs] Error: not a function"
-      ],
-      "content_preview": "of-a:PASS\n__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "of-a:PASS\nof-b:PASS\nof-k:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
       "name": "A55-structuredClone",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "not a function"
+      "passes": [
+        "sc"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "content_preview": "sc:PASS",
+      "has_error": false,
       "has_content": true
     }
   ],
@@ -147,15 +136,15 @@
     },
     {
       "name": "B02-querySelector",
-      "passes": [],
+      "passes": [
+        "qs"
+      ],
       "fails": [],
       "script_throws": [],
-      "js_errors": [
-        "[js] [quickjs] Error: expecting ';'"
-      ],
-      "content_preview": "(empty)",
-      "has_error": true,
-      "has_content": false
+      "js_errors": [],
+      "content_preview": "hello\nqs:PASS",
+      "has_error": false,
+      "has_content": true
     },
     {
       "name": "B03-classList",
@@ -201,7 +190,7 @@
       "fails": [],
       "script_throws": [],
       "js_errors": [],
-      "content_preview": "ih:PASS\nbold",
+      "content_preview": "ih:PASS\n\nbold",
       "has_error": false,
       "has_content": true
     }
@@ -245,17 +234,14 @@
     },
     {
       "name": "C04-cookie-safe",
-      "passes": [],
-      "fails": [
-        {
-          "name": "ck",
-          "detail": ""
-        }
+      "passes": [
+        "ck"
       ],
+      "fails": [],
       "script_throws": [],
       "js_errors": [],
-      "content_preview": "ck:FAIL",
-      "has_error": true,
+      "content_preview": "ck:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -277,14 +263,10 @@
         "jp"
       ],
       "fails": [],
-      "script_throws": [
-        "not a function"
-      ],
-      "js_errors": [
-        "[js] [quickjs] Error: not a function"
-      ],
-      "content_preview": "jp:PASS\n__SCRIPT_THREW__:not a function",
-      "has_error": true,
+      "script_throws": [],
+      "js_errors": [],
+      "content_preview": "jp:PASS",
+      "has_error": false,
       "has_content": true
     }
   ],
@@ -303,18 +285,15 @@
     },
     {
       "name": "D02-XHR-basic",
-      "passes": [],
-      "fails": [
-        {
-          "name": "xhr",
-          "detail": ""
-        }
+      "passes": [
+        "xhr"
       ],
+      "fails": [],
       "script_throws": [],
       "js_errors": [
-        "[js] [xhr] send /categories/A-js-core/A01-promise-allSettled.html → 650 bytes"
+        "[js] [xhr] send /categories/A-js-core/A01-promise-allSettled.html → 673 bytes"
       ],
-      "content_preview": "xhr:FAIL",
+      "content_preview": "xhr:PASS",
       "has_error": true,
       "has_content": true
     },
@@ -354,17 +333,14 @@
     },
     {
       "name": "D06-fetch-redirect",
-      "passes": [],
-      "fails": [
-        {
-          "name": "fr",
-          "detail": "rejected"
-        }
+      "passes": [
+        "fr"
       ],
+      "fails": [],
       "script_throws": [],
       "js_errors": [],
-      "content_preview": "fr:FAIL(rejected)",
-      "has_error": true,
+      "content_preview": "fr:PASS",
+      "has_error": false,
       "has_content": true
     }
   ],
@@ -433,14 +409,14 @@
     },
     {
       "name": "F02-file-reader",
-      "passes": [],
-      "fails": [],
-      "script_throws": [
-        "FileReader is not defined"
+      "passes": [
+        "fr-ex"
       ],
+      "fails": [],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "__SCRIPT_THREW__:FileReader is not defined",
-      "has_error": true,
+      "content_preview": "fr-ex:PASS",
+      "has_error": false,
       "has_content": true
     },
     {
@@ -458,15 +434,14 @@
     {
       "name": "F04-url",
       "passes": [
-        "up"
+        "up",
+        "uq"
       ],
       "fails": [],
-      "script_throws": [
-        "cannot read property 'get' of undefined"
-      ],
+      "script_throws": [],
       "js_errors": [],
-      "content_preview": "up:PASS\n__SCRIPT_THREW__:cannot read property 'get' of undefined",
-      "has_error": true,
+      "content_preview": "up:PASS\nuq:PASS",
+      "has_error": false,
       "has_content": true
     }
   ]

@@ -32,7 +32,7 @@ assert_cmd.workspace = true
 tempfile = "3"
 
 [features]
-default = []
+default = ["quickjs"]
 # M66: QuickJS JS 引擎后端（rquickjs，默认引擎）
 quickjs = ["dep:rquickjs", "dep:rquickjs-core"]
 # M71.1: boa 引擎后端（备选，降为 optional。默认不编译，需 --features boa）。
