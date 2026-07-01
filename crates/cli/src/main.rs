@@ -632,20 +632,25 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             // M70.6: 启发式检测——JS 执行后输出比原始 HTML 还差（JS 搞坏了页面），
             // 自动回退到原始 HTML。
             if !no_js {
+                // M71.5: 同量纲比较——JS 后纯文本 vs JS 前纯文本，
+                // 而非 vs 原始 HTML 字节（HTML 标签开销通常占 80%+，
+                // 旧逻辑 content < raw/5 对正常页面也成立，会误判 JS 搞坏了页面）。
                 let content_len = result.content.trim().len();
-                let raw_len = html.trim().len();
-                if raw_len > 500 && content_len < raw_len / 5 {
+                let static_tree = parse_html(&html);
+                let static_res =
+                    browser_extractor::run_extract(&static_tree, base.as_deref(), &opts);
+                let static_len = static_res.as_ref().map(|r| r.content.trim().len()).unwrap_or(0);
+                // 仅当 JS 后内容明显比 JS 前还少（丢了已有文本）才判定 JS 搞坏页面。
+                // 阈值：static 文本足够（>200B）且 JS 后不足 static 的 1/3。
+                if static_len > 200 && content_len < static_len / 3 {
                     eprintln!(
-                        "[hint] JS output ({content_len}B) << raw HTML ({raw_len}B) \
+                        "[hint] JS output ({content_len}B) << pre-JS text ({static_len}B) \
                          — JS likely broke the page; falling back to original HTML"
                     );
-                    let static_tree = parse_html(&html);
-                    if let Ok(static_res) =
-                        browser_extractor::run_extract(&static_tree, base.as_deref(), &opts)
-                    {
-                        if static_res.content.trim().len() > content_len {
-                            result.content = static_res.content;
-                            result.title = static_res.title;
+                    if let Ok(static_r) = static_res {
+                        if static_r.content.trim().len() > content_len {
+                            result.content = static_r.content;
+                            result.title = static_r.title;
                             eprintln!(
                                 "[hint] JS output ({content_len}B) → static ({static}B)",
                                 static = result.content.trim().len()
