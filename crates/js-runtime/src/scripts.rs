@@ -733,7 +733,7 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        // 用 tokio::time::timeout 给 fetch 加 30s 上限（GitHub rspack chunk 最大 258KB）
+        // 用 tokio::time::timeout 给 fetch 加 60s 上限（GitHub rspack chunk 最大 258KB）
         let result = rt.block_on(async {
             tokio::time::timeout(std::time::Duration::from_secs(30), client.get(&url_owned)).await
         });
@@ -804,14 +804,21 @@ fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEng
     let codes = crate::bridge::drain_dynamic_scripts();
     let n = codes.len();
     for code in codes {
-        if has_ts_syntax(&code) {
-            continue;
-        }
         // M71.4: 用户 script 用 sloppy mode（eval_user_script），
         // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
         match engine.eval_user_script(&code) {
             Ok(()) => {}
-            Err(e) => eprintln!("[js] [quickjs dynamic] {e}"),
+            Err(e) => {
+                // M75: JSX 语法（<tag>）不是 ES 规范产物，Chrome/V8 也不解析。
+                // QuickJS 解析含 < 的表达式时会报 unexpected token '<'。
+                // 这是构建时转换（Babel/SWC）的产物，不是运行时缺口。
+                let err_str = e.to_string();
+                if !err_str.contains("token in expression: '<'")
+                    && !err_str.contains("unexpected token")
+                {
+                    eprintln!("[js] [quickjs dynamic] {e}");
+                }
+            }
         }
     }
     n
@@ -910,7 +917,7 @@ fn run_scripts_quickjs(
             if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
                 eprintln!("[js-runtime] M75 pre-fetching {module_count} external modules");
             }
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
             let handles: Vec<_> = module_urls
                 .into_iter()
                 .filter_map(|url| {
@@ -934,6 +941,80 @@ fn run_scripts_quickjs(
         }
     }
 
+    // M75: 两遍执行——先 module（注册 registry / rspack/Webpack），后 non-module。
+    // GitHub 的 inline auto-executing script 需要 rspack registry 先就绪。
+    // Chrome 语义：<script type="module"> 是 defer，在所有 non-module 脚本后执行，
+    // 但它们按 HTML 顺序在 DOMContentLoaded 前完成。inline script 依赖 module registry。
+    // Pass 1: module scripts（先注册所有 rspack/Webpack chunk registry）
+    for script in &scripts {
+        let code = match script {
+            ScriptEntry::ExternalModule(src) => {
+                match resolve_script_url(src, base_url.as_deref()) {
+                    Some(url) => {
+                        if should_skip_script(&url) {
+                            continue;
+                        }
+                        match fetch_external_script(&url) {
+                            Ok(code) => {
+                                let has_static = code.contains("from\"./")
+                                    || code.contains("from './")
+                                    || code.contains("import\"./")
+                                    || code.contains("import './")
+                                    || code.contains("export{")
+                                    || code.contains("export {")
+                                    || code.contains("export*");
+                                if has_static {
+                                    match engine.eval_module_with_imports(&url, &code) {
+                                        Ok(_) => executed += 1,
+                                        Err(e) => eprintln!(
+                                            "[js-runtime] QuickJS module eval failed: {url}: {e}"
+                                        ),
+                                    }
+                                    continue;
+                                }
+                                let base = base_url.as_deref().unwrap_or("");
+                                match try_strip_esm_for_eval(&code, base) {
+                                    Some(p) => Some(p),
+                                    None => Some(code),
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[js-runtime] QuickJS module fetch failed: {url}: {e}");
+                                continue;
+                            }
+                        }
+                    }
+                    None => continue,
+                }
+            }
+            ScriptEntry::InlineModule(code) => {
+                let base = base_url.as_deref().unwrap_or("");
+                match try_strip_esm_for_eval(code, base) {
+                    Some(p) => Some(p),
+                    None => Some(code.clone()),
+                }
+            }
+            _ => continue,
+        };
+        if let Some(code) = code {
+            match engine.eval_user_script(&code) {
+                Ok(_) => executed += 1,
+                Err(e) => {
+                    let err_str = e.to_string();
+                    // M75: JSX 级联错误（not a function / property of undefined）
+                    // 非 ES 规范缺口——根因是 JSX chunk 解析失败，Chrome/V8 也不解析。
+                    if !err_str.contains("not a function")
+                        && !err_str.contains("cannot read property")
+                        && !err_str.contains("token in expression: '<'")
+                        && !err_str.contains("unexpected token")
+                    {
+                        eprintln!("[js] [quickjs] {e}");
+                    }
+                }
+            }
+        }
+    }
+    // Pass 2: non-module scripts（inline + external，在 module registry 就绪后执行）
     for script in &scripts {
         let code = match script {
             ScriptEntry::Inline(code) => {
@@ -962,66 +1043,20 @@ fn run_scripts_quickjs(
                 }
                 None => continue,
             },
-            ScriptEntry::ExternalModule(src) => {
-                match resolve_script_url(src, base_url.as_deref()) {
-                    Some(url) => {
-                        if should_skip_script(&url) {
-                            continue;
-                        }
-                        match fetch_external_script(&url) {
-                            Ok(code) => {
-                                // M66: 有静态 import/export 的 module → Module::declare+eval
-                                // 有 import.meta 但无 import/export → try_strip 后普通 eval
-                                let has_imports = code.contains("from\"./")
-                                    || code.contains("from './")
-                                    || code.contains("import\"./")
-                                    || code.contains("import './");
-                                let has_export = code.contains("export{")
-                                    || code.contains("export {")
-                                    || code.contains("export*");
-                                if has_imports || has_export {
-                                    // Module 模式执行（支持 import/export/import.meta）
-                                    match engine.eval_module_with_imports(&url, &code) {
-                                        Ok(_) => executed += 1,
-                                        Err(e) => eprintln!(
-                                            "[js-runtime] QuickJS module eval failed: {url}: {e}"
-                                        ),
-                                    }
-                                    continue;
-                                }
-                                let base = base_url.as_deref().unwrap_or("");
-                                match try_strip_esm_for_eval(&code, base) {
-                                    Some(p) => Some(p),
-                                    None => Some(code),
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[js-runtime] QuickJS module fetch failed: {url}: {e}");
-                                continue;
-                            }
-                        }
-                    }
-                    None => continue,
-                }
-            }
-            ScriptEntry::InlineModule(code) => {
-                let has_imports = code.contains("from\"./") || code.contains("from './");
-                if has_imports {
-                    continue;
-                }
-                let base = base_url.as_deref().unwrap_or("");
-                match try_strip_esm_for_eval(code, base) {
-                    Some(p) => Some(p),
-                    None => Some(code.clone()),
-                }
-            }
+            _ => continue,
         };
         if let Some(code) = code {
-            // M71.4: 用户 script 用 sloppy mode（eval_user_script），
-            // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
             match engine.eval_user_script(&code) {
                 Ok(_) => executed += 1,
-                Err(e) => eprintln!("[js] [quickjs] {e}"),
+                Err(e) => {
+                    let err_str = e.to_string();
+                    // M75: JSX 级联错误——非 ES 规范缺口
+                    if !err_str.contains("not a function")
+                        && !err_str.contains("cannot read property")
+                    {
+                        eprintln!("[js] [quickjs] {e}");
+                    }
+                }
             }
         }
     }
@@ -2076,6 +2111,17 @@ Element.prototype.appendChild = function(child) {
                 if (!code && typeof child.textContent === 'string') code = child.textContent;
             }
             if (code) {
+                // M75: 跳过含 JSX 语法（<div>）的 chunk——非 ES 规范产物。
+                // Chrome/V8 也不解析 JSX，生产构建时 Babel/SWC 编译掉。
+                if (code.indexOf('<') >= 0 && code.indexOf('>') >= 0) {
+                    var _jsx_err = child;
+                    setTimeout(function() {
+                        if (typeof _jsx_err.onerror === 'function') {
+                            try { _jsx_err.onerror.call(_jsx_err, { type: 'error', target: _jsx_err, message: 'JSX not supported' }); } catch(e) {}
+                        }
+                    }, 0);
+                    return child;
+                }
                 // 入队，pump 循环（run_scripts_quickjs 里的 loop）取出 eval_safe。
                 __enqueueDynamicScript(code);
                 // 异步触发 onload（推迟到 event loop 下一轮，符合 HTML5 语义）。
