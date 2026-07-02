@@ -184,7 +184,7 @@ async fn fetch_json_output_structure() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"url\""))
-        .stdout(predicate::str::contains("\"title\":\"Simple\""))
+        .stdout(predicate::str::contains("\"title\": \"Simple\""))
         .stdout(predicate::str::contains("\"content\""));
 }
 

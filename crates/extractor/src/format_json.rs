@@ -26,7 +26,16 @@ pub fn to_json(
 ) -> Result<String, String> {
     let _roots: Vec<NodeId> = match selector {
         Some(sel) => query_all(tree, sel)?,
-        None => vec![tree.root()],
+        None => {
+            if tree.is_empty() {
+                // 空树直接返回空 JSON。tree.root() 在空树 panic。
+                return Ok(
+                    r#"{"title":"","text":"","html":"","links":"","images":""}"#
+                        .to_string(),
+                );
+            }
+            vec![tree.root()]
+        }
     };
     let excl = excluded.clone();
 
