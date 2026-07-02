@@ -1633,7 +1633,12 @@ window.performance = {
 // svelte 用 document.currentScript.parentElement
 window.parentElement = null;
 document.parentElement = null;
-document.currentScript = { parentElement: null, hasAttribute: function() { return false; }, getAttribute: function() { return null; } };
+Object.defineProperty(document, 'currentScript', {
+    get: function() {
+        return { tagName: "SCRIPT", parentElement: null, src: window.location.href, hasAttribute: function() { return false; }, getAttribute: function() { return null; } };
+    },
+    configurable: true
+});
 
 // localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
 var __localStorage = {};
@@ -1890,6 +1895,78 @@ window.Node.COMMENT_NODE = 8;
 window.Node.DOCUMENT_NODE = 9;
 window.Node.DOCUMENT_FRAGMENT_NODE = 11;
 window.Node.DOCUMENT_POSITION_CONTAINED_BY = 16;
+
+// AbortSignal（React/Next.js 在 GitHub 检查）
+if (typeof AbortSignal === 'undefined') {
+    window.AbortSignal = function() {};
+    window.AbortSignal.prototype = Object.create(Object.prototype);
+    AbortSignal.prototype.aborted = false;
+    AbortSignal.prototype.reason = undefined;
+    AbortSignal.prototype.throwIfAborted = function() {};
+    AbortSignal.prototype.addEventListener = function() {};
+    AbortSignal.prototype.removeEventListener = function() {};
+    AbortSignal.prototype.dispatchEvent = function() { return true; };
+}
+
+// EventTarget（Webpack chunk 加载器检查）
+if (typeof EventTarget === 'undefined') {
+    window.EventTarget = function() {
+        this.__listeners = {};
+    };
+    EventTarget.prototype.addEventListener = function(type, cb) {
+        if (!this.__listeners) this.__listeners = {};
+        if (!this.__listeners[type]) this.__listeners[type] = [];
+        this.__listeners[type].push(cb);
+    };
+    EventTarget.prototype.removeEventListener = function(type, cb) {};
+    EventTarget.prototype.dispatchEvent = function(ev) {
+        if (this.__listeners && this.__listeners[ev && ev.type]) {
+            var cbs = this.__listeners[ev.type];
+            for (var i = 0; i < cbs.length; i++) cbs[i].call(this, ev);
+        }
+        return true;
+    };
+}
+
+// Document（框架检查 instanceof Document）
+if (typeof Document === 'undefined') {
+    window.Document = function() {};
+    Document.prototype = Object.create(Object.prototype);
+    Document.prototype.body = null;
+    Document.prototype.documentElement = null;
+    Document.prototype.readyState = 'complete';
+    Document.prototype.addEventListener = function() {};
+    Document.prototype.removeEventListener = function() {};
+    Document.prototype.dispatchEvent = function() { return true; };
+    Document.prototype.createElement = function(tag) { return { tagName: tag.toUpperCase() }; };
+    Document.prototype.createTextNode = function(t) { return { nodeType: 3, textContent: t, data: t }; };
+}
+
+// DocumentFragment
+if (typeof DocumentFragment === 'undefined') {
+    window.DocumentFragment = function() {};
+    DocumentFragment.prototype = Object.create(Object.prototype);
+    DocumentFragment.prototype.nodeType = 11;
+    DocumentFragment.prototype.appendChild = function(child) { return child; };
+    DocumentFragment.prototype.querySelector = function() { return null; };
+    DocumentFragment.prototype.querySelectorAll = function() { return []; };
+}
+
+// HTMLTemplateElement
+if (typeof HTMLTemplateElement === 'undefined') {
+    window.HTMLTemplateElement = function() {};
+    HTMLTemplateElement.prototype = Object.create(Object.prototype);
+    HTMLTemplateElement.prototype.content = null;
+}
+
+// HTMLScriptElement（GitHub 类型检查）
+if (typeof HTMLScriptElement === 'undefined') {
+    window.HTMLScriptElement = function() {};
+    HTMLScriptElement.prototype = Object.create(Object.prototype);
+    HTMLScriptElement.prototype.src = '';
+    HTMLScriptElement.prototype.type = '';
+    HTMLScriptElement.prototype.defer = false;
+}
 
 undefined;
 "#;
