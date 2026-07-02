@@ -139,6 +139,23 @@ impl QuickJsEngine {
                     .unwrap(),
                 );
 
+                // === M74: 结构化采集桥 ===
+                let _ = g.set(
+                    "__captureConsoleEvent",
+                    Function::new(ctx.clone(), |level: String, text: String| {
+                        bridge::capture_console_event(&level, &text);
+                    })
+                    .unwrap(),
+                );
+                let _ = g.set(
+                    "__captureJsError",
+                    Function::new(ctx.clone(), |message: String, stack: String| {
+                        let s = if stack.is_empty() { None } else { Some(stack.as_str()) };
+                        bridge::capture_js_error(&message, s);
+                    })
+                    .unwrap(),
+                );
+
                 // === DOM bridge ===
                 let _ = g.set("__createEl", Function::new(ctx.clone(), |tag: String| bridge::qjs_bridge::create_el(tag)).unwrap());
                 let _ = g.set("__appendChild", Function::new(ctx.clone(), |p: f64, c: f64| bridge::qjs_bridge::append_child(p, c)).unwrap());

@@ -1349,16 +1349,39 @@ window.__makeElement = function(nodeId) {
     return undefined;
 };
 
-// console（QuickJS 有原生 console，确保兼容）
-if (typeof console === 'undefined') {
-    window.console = {
-        log: function(){}, error: function(){}, warn: function(){},
-        info: function(){}, debug: function(){}, dir: function(){},
-        table: function(){}, group: function(){}, groupEnd: function(){},
-        trace: function(){}, time: function(){}, timeEnd: function(){},
-        assert: function(){}, count: function(){}, clear: function(){}
-    };
-}
+// console — 覆盖原生（hook 到采集桥）
+window.console = {
+    log: function(){
+        var m=Array.prototype.join.call(arguments,' ');
+        try{__captureConsoleEvent('log',m);}catch(e){}
+    },
+    info: function(){
+        var m=Array.prototype.join.call(arguments,' ');
+        try{__captureConsoleEvent('info',m);}catch(e){}
+    },
+    warn: function(){
+        var m=Array.prototype.join.call(arguments,' ');
+        try{__captureConsoleEvent('warn',m);}catch(e){}
+    },
+    error: function(){
+        var m=Array.prototype.join.call(arguments,' ');
+        try{__captureConsoleEvent('error',m);}catch(e){}
+    },
+    debug: function(){
+        var m=Array.prototype.join.call(arguments,' ');
+        try{__captureConsoleEvent('debug',m);}catch(e){}
+    },
+    dir: function(){},
+    table: function(){},
+    group: function(){},
+    groupEnd: function(){},
+    trace: function(){},
+    time: function(){},
+    timeEnd: function(){},
+    assert: function(){},
+    count: function(){},
+    clear: function(){}
+};
 
 // window EventTarget 方法（很多框架在 window 上注册事件）
 // 用全局变量存监听器，避免 this 绑定问题

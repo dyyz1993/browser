@@ -73,6 +73,59 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+/// M74: A captured console event (log/warn/error/info/debug).
+#[derive(Debug, Clone)]
+pub struct CapturedConsoleEvent {
+    pub level: String,
+    pub text: String,
+}
+
+/// M74: A captured JS runtime error.
+#[derive(Debug, Clone)]
+pub struct CapturedJsError {
+    pub message: String,
+    pub stack: Option<String>,
+}
+
+thread_local! {
+    /// M74: Captured console events.
+    static CAPTURED_CONSOLE: RefCell<Vec<CapturedConsoleEvent>> = const { RefCell::new(Vec::new()) };
+    /// M74: Captured JS errors.
+    static CAPTURED_JS_ERRORS: RefCell<Vec<CapturedJsError>> = const { RefCell::new(Vec::new()) };
+}
+
+/// M74: Drain captured console events.
+#[must_use]
+pub fn drain_captured_console_events() -> Vec<CapturedConsoleEvent> {
+    CAPTURED_CONSOLE.with(|slot| slot.borrow_mut().drain(..).collect())
+}
+
+/// M74: Drain captured JS errors.
+#[must_use]
+pub fn drain_captured_js_errors() -> Vec<CapturedJsError> {
+    CAPTURED_JS_ERRORS.with(|slot| slot.borrow_mut().drain(..).collect())
+}
+
+/// M74: Record a console event (called from QuickJS shim).
+pub fn capture_console_event(level: &str, text: &str) {
+    CAPTURED_CONSOLE.with(|slot| {
+        slot.borrow_mut().push(CapturedConsoleEvent {
+            level: level.to_string(),
+            text: text.to_string(),
+        });
+    });
+}
+
+/// M74: Record a JS error (called from QuickJS shim).
+pub fn capture_js_error(message: &str, stack: Option<&str>) {
+    CAPTURED_JS_ERRORS.with(|slot| {
+        slot.borrow_mut().push(CapturedJsError {
+            message: message.to_string(),
+            stack: stack.map(|s| s.to_string()),
+        });
+    });
+}
+
 /// M70.4: A captured network event from JS fetch/XHR (Send-safe).
 /// Collected into a thread_local queue during script execution, drained
 /// by CDP navigate to emit `Network.*` events.
@@ -195,6 +248,10 @@ pub fn install_shared(shared: SharedTree) -> TreeGuard {
 }
 
 /// Install an already-shared tree plus an optional base URL used to
+/// QuickJS: 初始化 BASE_URL——script.shims.rs 里的 __fetchSync 依赖它解析相对 URL。
+/// 之前只对 boa 路径设了 BASE_URL；QuickJS 的 `run_scripts_quickjs` 也调了
+/// `install_shared_with_base`（scripts.rs:836），但 `__fetchSync` 的 resolve_url
+/// 只对绝对 URL 有效——BASE_URL 的正确性决定相对 chunk 能否加载。
 /// resolve relative URLs in `__fetchSetBody` / `__fetchAppendBody`.
 /// `base_url` should typically be the URL of the page being rendered.
 #[must_use]
