@@ -966,9 +966,20 @@ fn run_scripts_quickjs(
                                 if has_static {
                                     match engine.eval_module_with_imports(&url, &code) {
                                         Ok(_) => executed += 1,
-                                        Err(e) => eprintln!(
-                                            "[js-runtime] QuickJS module eval failed: {url}: {e}"
-                                        ),
+                                        Err(e) => {
+                                            eprintln!("[js-runtime] QuickJS module eval failed: {url}: {e}");
+                                            // M76: ESM module 失败时尝试退化 eval。
+                                            // Vite 的 export class / import "..." 无法被
+                                            // has_static_esm_syntax strip，尝试 try_strip
+                                            // 处理 import.meta 后仍有部分功能可用。
+                                            let base = base_url.as_deref().unwrap_or("");
+                                            if let Some(p) = try_strip_esm_for_eval(&code, base) {
+                                                match engine.eval_user_script(&p) {
+                                                    Ok(_) => executed += 1,
+                                                    Err(e2) => eprintln!("[js-runtime] module eval fallback also failed: {e2}"),
+                                                }
+                                            }
+                                        }
                                     }
                                     continue;
                                 }
@@ -988,6 +999,14 @@ fn run_scripts_quickjs(
                 }
             }
             ScriptEntry::InlineModule(code) => {
+                // M75: 检测静态 import { ... } from "..."（含 Vite 绝对路径 from "/"）。
+                // 原代码只检查 from "./" 和 from './'，漏了 Vite 的 from "/"。
+                // 只检查 import { 和 import * 避免 import.meta 误判。
+                let has_static_import = code.contains("import {")
+                    || code.contains("import *");
+                if has_static_import {
+                    continue;
+                }
                 let base = base_url.as_deref().unwrap_or("");
                 match try_strip_esm_for_eval(code, base) {
                     Some(p) => Some(p),

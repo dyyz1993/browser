@@ -307,7 +307,12 @@ impl QuickJsEngine {
                         Err(e) => Err(format!("module eval: {e:?}")),
                     }
                 }
-                Err(e) => Err(format!("module declare: {e:?}")),
+                Err(e) => {
+                    // M76: 加详细诊断信息
+                    let diag = format!("{e:?}");
+                    let snippet = &source[..std::cmp::min(200, source.len())];
+                    Err(format!("module declare: {diag} | name={name} | first_200_chars={snippet}"))
+                }
             }
         })
     }
