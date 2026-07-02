@@ -15,6 +15,7 @@ pub mod format_branding;
 pub mod format_highlights;
 pub mod format_html;
 pub mod format_images;
+pub mod format_json;
 pub mod format_links;
 pub mod format_md;
 pub mod format_text;
@@ -37,6 +38,8 @@ pub enum OutputFormat {
     Links,
     /// 图片地图（alt → URL）。
     Images,
+    /// JSON（嵌入 text/html/links/images）。
+    Json,
     /// 强调/高亮内容（[tag] text）。
     Highlights,
     /// 品牌/SEO 元数据（title/meta/og/icon）。
@@ -56,10 +59,11 @@ impl OutputFormat {
             "markdown" | "md" => Ok(Self::Markdown),
             "links" | "link" => Ok(Self::Links),
             "images" | "img" | "image" => Ok(Self::Images),
+            "json" => Ok(Self::Json),
             "highlights" | "highlight" => Ok(Self::Highlights),
             "branding" | "meta" => Ok(Self::Branding),
             other => Err(format!(
-                "unknown format '{other}' (expected: html|text|markdown|links|original-html|images|highlights|branding)"
+                "unknown format '{other}' (expected: html|text|markdown|links|original-html|images|json|highlights|branding)"
             )),
         }
     }
@@ -146,6 +150,7 @@ fn extract_with_clean(
             Ok(String::new())
         }
         OutputFormat::Images => format_images::to_images(tree, base_url, selector, &excluded),
+        OutputFormat::Json => format_json::to_json(tree, base_url, selector, &excluded),
         OutputFormat::Highlights => format_highlights::to_highlights(tree, selector, &excluded),
         OutputFormat::Branding => format_branding::to_branding(tree, base_url, selector, &excluded),
     }
