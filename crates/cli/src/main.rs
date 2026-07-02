@@ -22,7 +22,10 @@ use browser_cookie::{load_from_file_shared, save_jar_to_file};
 use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
-use browser_js_runtime::{current_cookie_jar, ensure_cookie_jar, try_csr_fallback};
+use browser_js_runtime::{
+    current_cookie_jar, drain_captured_console_events,
+    drain_captured_js_errors, drain_captured_network_events, ensure_cookie_jar, try_csr_fallback,
+};
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
 use browser_net::HttpClient;
 use browser_render::{render_ascii, render_ascii_colored};
@@ -668,11 +671,35 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 }
             }
             if json {
-                let title = json_escape(result.title.as_deref().unwrap_or(""));
-                let content_field = json_escape(&result.content);
-                println!(
-                    "{{\"url\":\"{url}\",\"title\":\"{title}\",\"content\":\"{content_field}\"}}"
-                );
+                // M74: Drain capture queues after JS execution.
+                let console_events = drain_captured_console_events();
+                let js_errors = drain_captured_js_errors();
+                let network_events = drain_captured_network_events();
+
+                // Build JSON using serde_json (available in cli deps).
+                let map = serde_json::json!({
+                    "url": url,
+                    "title": result.title,
+                    "content": {
+                        "text": result.content,
+                    },
+                    "console": console_events.iter().map(|e| serde_json::json!({
+                        "level": e.level,
+                        "text": e.text,
+                    })).collect::<Vec<_>>(),
+                    "errors": js_errors.iter().map(|e| serde_json::json!({
+                        "message": e.message,
+                        "stack": e.stack,
+                    })).collect::<Vec<_>>(),
+                    "network": network_events.iter().map(|e| serde_json::json!({
+                        "url": e.url,
+                        "method": e.method,
+                        "status": e.status,
+                        "mime_type": e.mime_type,
+                        "body_size": e.body_size,
+                    })).collect::<Vec<_>>(),
+                });
+                println!("{}", serde_json::to_string_pretty(&map).unwrap_or_default());
             } else {
                 print!("{}", result.content);
                 println!();
@@ -812,6 +839,7 @@ fn sandbox_child_render() -> Result<()> {
 /// 能继承会话（解决百度等登录态反爬）。
 /// M59: minimal JSON string escaping (avoids serde_json dependency).
 /// Escapes quotes, backslash, control chars. Good enough for --json output.
+#[allow(dead_code)]
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for ch in s.chars() {
