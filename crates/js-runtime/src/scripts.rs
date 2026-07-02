@@ -733,16 +733,16 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        // 用 tokio::time::timeout 给 fetch 加 8s 上限
+        // 用 tokio::time::timeout 给 fetch 加 30s 上限（GitHub rspack chunk 最大 258KB）
         let result = rt.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(8), client.get(&url_owned)).await
+            tokio::time::timeout(std::time::Duration::from_secs(30), client.get(&url_owned)).await
         });
         match result {
             Ok(Ok(bytes)) => {
                 String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
             }
             Ok(Err(e)) => Err(format!("{e:?}")),
-            Err(_) => Err(format!("fetch timeout (8s): {url_owned}")),
+            Err(_) => Err(format!("fetch timeout (30s): {url_owned}")),
         }
     });
     let code = handle
@@ -893,6 +893,46 @@ fn run_scripts_quickjs(
         extract_script_entries(&borrowed)
     };
     let __t_scripts_start = std::time::Instant::now();
+
+    // M75: 并行预取所有 external module 到 cache，避免串行 timeout。
+    // GitHub 152 个 rspack chunk 通过 globalThis 共享 registry，
+    // 并行 fetch 后 cache 命中 = 0ms，eval 时不会缺模块。
+    {
+        let module_urls: Vec<String> = scripts
+            .iter()
+            .filter_map(|s| match s {
+                ScriptEntry::ExternalModule(src) => resolve_script_url(src, base_url.as_deref()),
+                _ => None,
+            })
+            .collect();
+        if !module_urls.is_empty() {
+            let module_count = module_urls.len();
+            if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+                eprintln!("[js-runtime] M75 pre-fetching {module_count} external modules");
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            let handles: Vec<_> = module_urls
+                .into_iter()
+                .filter_map(|url| {
+                    if std::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                    Some(std::thread::spawn(move || {
+                        let _ = fetch_external_script(&url);
+                    }))
+                })
+                .collect();
+            for h in handles {
+                let _ = h.join();
+            }
+            if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+                eprintln!(
+                    "[js-runtime] M75 pre-fetch done ({:?})",
+                    __t_scripts_start.elapsed()
+                );
+            }
+        }
+    }
 
     for script in &scripts {
         let code = match script {
@@ -1495,6 +1535,14 @@ window.__webglStub = function(type) {
     };
     return gl;
 };
+// Intl（React/Intl.DateTimeFormat 等框架检测）
+if (typeof Intl === 'undefined') {
+    window.Intl = {
+        DateTimeFormat: function() { return { format: function(d) { return String(d); } }; },
+        NumberFormat: function() { return { format: function(n) { return String(n); } }; },
+        Collator: function() { return { compare: function(a,b) { return String(a).localeCompare(b); } }; }
+    };
+}
 if (typeof window.WebGLRenderingContext === 'undefined') {
     window.WebGLRenderingContext = function() {};
     window.WebGLRenderingContext.prototype = { VERSION: 0x1F02 };

@@ -304,9 +304,7 @@ impl QuickJsEngine {
                                 Err(e) => Err(format!("module promise: {e:?}")),
                             }
                         }
-                        Err(e) => {
-                            Err(format!("module eval: {e:?}"))
-                        }
+                        Err(e) => Err(format!("module eval: {e:?}")),
                     }
                 }
                 Err(e) => Err(format!("module declare: {e:?}")),

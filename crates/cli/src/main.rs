@@ -23,8 +23,8 @@ use browser_css_engine::{compute_styles, parse as parse_css};
 use browser_dom::pretty_print;
 use browser_html_parser::parse as parse_html;
 use browser_js_runtime::{
-    current_cookie_jar, drain_captured_console_events,
-    drain_captured_js_errors, drain_captured_network_events, ensure_cookie_jar, try_csr_fallback,
+    current_cookie_jar, drain_captured_console_events, drain_captured_js_errors,
+    drain_captured_network_events, ensure_cookie_jar, try_csr_fallback,
 };
 use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
 use browser_net::HttpClient;
@@ -642,7 +642,10 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 let static_tree = parse_html(&html);
                 let static_res =
                     browser_extractor::run_extract(&static_tree, base.as_deref(), &opts);
-                let static_len = static_res.as_ref().map(|r| r.content.trim().len()).unwrap_or(0);
+                let static_len = static_res
+                    .as_ref()
+                    .map(|r| r.content.trim().len())
+                    .unwrap_or(0);
                 // 仅当 JS 后内容明显比 JS 前还少（丢了已有文本）才判定 JS 搞坏页面。
                 // 阈值：static 文本足够（>200B）且 JS 后不足 static 的 1/3。
                 if static_len > 200 && content_len < static_len / 3 {

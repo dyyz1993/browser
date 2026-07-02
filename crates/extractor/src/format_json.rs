@@ -7,10 +7,7 @@
 use browser_dom::{NodeId, Tree};
 use std::collections::HashSet;
 
-use crate::{
-    format_html, format_images, format_links, format_text,
-    selector::query_all,
-};
+use crate::{format_html, format_images, format_links, format_text, selector::query_all};
 
 /// 以 JSON 格式输出 DOM 内容。
 ///
@@ -29,10 +26,7 @@ pub fn to_json(
         None => {
             if tree.is_empty() {
                 // 空树直接返回空 JSON。tree.root() 在空树 panic。
-                return Ok(
-                    r#"{"title":"","text":"","html":"","links":"","images":""}"#
-                        .to_string(),
-                );
+                return Ok(r#"{"title":"","text":"","html":"","links":"","images":""}"#.to_string());
             }
             vec![tree.root()]
         }
@@ -54,7 +48,11 @@ pub fn to_json(
 
     Ok(format!(
         r#"{{"title":"{t}","text":"{x}","html":"{h}","links":"{l}","images":"{i}"}}"#,
-        t = title_e, x = text_e, h = html_e, l = links_e, i = images_e,
+        t = title_e,
+        x = text_e,
+        h = html_e,
+        l = links_e,
+        i = images_e,
     ))
 }
 
