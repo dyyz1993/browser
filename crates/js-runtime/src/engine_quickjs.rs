@@ -26,9 +26,14 @@ impl rquickjs_core::loader::Resolver for HttpResolver {
         if name.starts_with("http://") || name.starts_with("https://") {
             return Ok(name.to_string());
         }
-        // M76: 绝对路径（以 / 开头）直接返回，不做 base_dir 拼接。
-        // Vite 浏览器端的 import "/@fs/..." 就是以 / 开头的绝对路径。
+        // M76: 绝对路径（以 / 开头）——用 base URL 的 origin 拼成完整 URL。
+        // Vite 的 import "/@fs/..." 和 "/@vite/client" 是以 / 开头的绝对路径。
         if name.starts_with('/') {
+            if let Ok(base_url) = url::Url::parse(base) {
+                if let Ok(full) = base_url.join(name) {
+                    return Ok(full.to_string());
+                }
+            }
             return Ok(name.to_string());
         }
         let base_dir = base.rfind('/').map(|i| &base[..i]).unwrap_or(base);
@@ -313,7 +318,11 @@ impl QuickJsEngine {
                             // 用 finish::<()>() 避免 JS Value 泄漏（GC assertion）。
                             match promise.finish::<()>() {
                                 Ok(()) => Ok(()),
-                                Err(e) => Err(format!("module promise: {e:?}")),
+                                Err(e) => {
+                                    // M76: 捕获实际的 JS 错误消息
+                                    let diag = format!("{e:?}");
+                                    Err(format!("module promise: {diag}"))
+                                }
                             }
                         }
                         Err(e) => Err(format!("module eval: {e:?}")),

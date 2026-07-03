@@ -956,13 +956,9 @@ fn run_scripts_quickjs(
                         }
                         match fetch_external_script(&url) {
                             Ok(code) => {
-                                let has_static = code.contains("from\"./")
-                                    || code.contains("from './")
-                                    || code.contains("import\"./")
-                                    || code.contains("import './")
-                                    || code.contains("export{")
-                                    || code.contains("export {")
-                                    || code.contains("export*");
+                                // M76: 用 has_static_esm_syntax（稳健正则）替代脆字符串检测。
+                                // Vite 用绝对路径 from "/@react-refresh"——from"./" 检测漏了。
+                                let has_static = has_static_esm_syntax(&code);
                                 if has_static {
                                     match engine.eval_module_with_imports(&url, &code) {
                                         Ok(_) => executed += 1,
@@ -999,10 +995,10 @@ fn run_scripts_quickjs(
                 }
             }
             ScriptEntry::InlineModule(code) => {
-                // M75: 检测静态 import { ... } from "..."（含 Vite 绝对路径 from "/"）。
-                // 原代码只检查 from "./" 和 from './'，漏了 Vite 的 from "/"。
-                // 只检查 import { 和 import * 避免 import.meta 误判。
-                let has_static_import = code.contains("import {") || code.contains("import *");
+                // M75+M76: 检测静态 import { / import{ / import *，Vite minified 无空格。
+                let has_static_import = code.contains("import {")
+                    || code.contains("import *")
+                    || code.contains("import{");
                 if has_static_import {
                     continue;
                 }
