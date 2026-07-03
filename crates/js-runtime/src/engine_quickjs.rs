@@ -106,7 +106,7 @@ impl rquickjs_core::loader::Loader for HttpLoader {
                 eprintln!("[loader] Module::declare FAILED: {name}: {e}");
             }
         }
-        declared.map_err(|e| e)
+        declared
     }
 }
 
