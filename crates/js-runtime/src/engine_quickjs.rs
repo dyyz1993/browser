@@ -63,13 +63,12 @@ impl rquickjs_core::loader::Loader for HttpLoader {
     ) -> rquickjs_core::Result<Module<'js, Declared>> {
         let trace = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
         eprintln!("[loader] fetch: {name}");
-        let source = crate::bridge::fetch_sync(name)
-            .map_err(|e| {
-                if trace {
-                    eprintln!("[loader] fetch_sync failed: {name}: {e}");
-                }
-                rquickjs_core::Error::new_loading(&format!("{name}: {e}"))
-            })?;
+        let source = crate::bridge::fetch_sync(name).map_err(|e| {
+            if trace {
+                eprintln!("[loader] fetch_sync failed: {name}: {e}");
+            }
+            rquickjs_core::Error::new_loading(&format!("{name}: {e}"))
+        })?;
         // M76: QuickJS 的 import.meta.env 不可赋（invalid assignment）。
         // 替换 import.meta.env → __vite_env__ 模块级变量 + 替换 import.meta.hot。
         let source = if source.contains("import.meta.env") {
@@ -100,7 +99,9 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         let declared = Module::declare(ctx.clone(), name, wrapped.as_bytes());
         match &declared {
             Ok(_) => {
-                if trace { eprintln!("[loader] declared OK: {name}"); }
+                if trace {
+                    eprintln!("[loader] declared OK: {name}");
+                }
             }
             Err(e) => {
                 eprintln!("[loader] Module::declare FAILED: {name}: {e}");

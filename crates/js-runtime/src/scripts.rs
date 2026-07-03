@@ -966,19 +966,29 @@ fn run_scripts_quickjs(
                                     let mut stripped = String::new();
                                     for line in raw_code.lines() {
                                         let t = line.trim_start();
-                                        if t.starts_with("import ") || t.starts_with("import{") || t.starts_with("import*")
-                                            || t.starts_with("export ") || t.starts_with("export{") || t.starts_with("export*")
+                                        if t.starts_with("import ")
+                                            || t.starts_with("import{")
+                                            || t.starts_with("import*")
+                                            || t.starts_with("export ")
+                                            || t.starts_with("export{")
+                                            || t.starts_with("export*")
                                         {
                                             // M76ter: __vite__cjsImport lines → var stub（避免后续引用 undefined）
                                             if t.contains("__vite__cjsImport") {
-                                                if let Some(var_name) = t.split_whitespace().nth(1) {
-                                                    stripped.push_str(&format!("var {var_name}=__react_stub();\n"));
+                                                if let Some(var_name) = t.split_whitespace().nth(1)
+                                                {
+                                                    stripped.push_str(&format!(
+                                                        "var {var_name}=__react_stub();\n"
+                                                    ));
                                                 }
                                             }
                                             continue;
                                         }
                                         let mut l = if t.contains("import.meta.url") {
-                                            line.replace("import.meta.url", "\"http://localhost:5173/\"")
+                                            line.replace(
+                                                "import.meta.url",
+                                                "\"http://localhost:5173/\"",
+                                            )
                                         } else if t.contains("import.meta.env") {
                                             line.replace("import.meta.env", "__vite_env__")
                                         } else if t.contains("import.meta.hot") {
@@ -991,10 +1001,17 @@ fn run_scripts_quickjs(
                                             if let Some(idx) = l.find("import __vite__cjsImport") {
                                                 // Extract var name
                                                 let rest = &l[idx..];
-                                                if let Some(var_start) = rest.split_whitespace().nth(1) {
-                                                    let var_name = var_start.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                                                if let Some(var_start) =
+                                                    rest.split_whitespace().nth(1)
+                                                {
+                                                    let var_name =
+                                                        var_start.trim_end_matches(|c: char| {
+                                                            !c.is_alphanumeric() && c != '_'
+                                                        });
                                                     let before = &l[..idx];
-                                                    l = format!("{before}var {var_name}=__react_stub();");
+                                                    l = format!(
+                                                        "{before}var {var_name}=__react_stub();"
+                                                    );
                                                 }
                                             }
                                         }
@@ -1041,10 +1058,12 @@ fn run_scripts_quickjs(
                     || code.contains("import{");
                 if has_static_import {
                     // M76bis: 不跳过——strip import 行 + injectIntoGlobalHook 后 eval（$RefreshReg$ 设置）
-                    let cleaned: Vec<&str> = code.lines()
+                    let cleaned: Vec<&str> = code
+                        .lines()
                         .filter(|l| {
                             let t = l.trim_start();
-                            !t.starts_with("import {") && !t.starts_with("import{")
+                            !t.starts_with("import {")
+                                && !t.starts_with("import{")
                                 && !t.contains("injectIntoGlobalHook")
                         })
                         .collect();
