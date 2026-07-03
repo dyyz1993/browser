@@ -1043,6 +1043,8 @@ fn run_scripts_quickjs(
                                         stripped.push_str(&l);
                                         stripped.push('\n');
                                     }
+                                    // M76fin3: strip inline export{...} (solidjs/nuxt)
+                                    let stripped = stripped.replace("export{", "/*skip*/");
                                     let eval_code = format!(
                                         "if(typeof __react_stub==='undefined')function __react_stub(){{var r={{}};['jsxDEV','jsxs','Fragment','StrictMode','createElement','createRoot','useState','useEffect','useRef','useMemo','useCallback','useContext','useReducer','forwardRef','lazy','memo','createRef','hydrateRoot','render','createPortal','unmountComponentAtNode'].forEach(function(k){{r[k]=function(){{return null}}}});r['createRoot']=function(root){{return{{render:function(e){{}}}}}};return r;}}
                                          window.__vite_plugin_react_preamble_installed__=true;
