@@ -956,11 +956,23 @@ fn run_scripts_quickjs(
                         }
                         match fetch_external_script(&url) {
                             Ok(code) => {
+                                // M76: 备份原 code（eval_module_with_imports 可能包装 code）
+                                let raw_code = code;
                                 // M76: 用 has_static_esm_syntax（稳健正则）替代脆字符串检测。
                                 // Vite 用绝对路径 from "/@react-refresh"——from"./" 检测漏了。
-                                let has_static = has_static_esm_syntax(&code);
+                                let has_static = has_static_esm_syntax(&raw_code);
                                 if has_static {
-                                    match engine.eval_module_with_imports(&url, &code) {
+                                    // M76: QuickJS 不支持 import.meta.env = {}
+                                    // 替换 import.meta.env → __vite_env__ 模块级变量。
+                                    let module_code = if raw_code.contains("import.meta.env") {
+                                        format!(
+                                            "if(typeof __vite_env__==='undefined')var __vite_env__={{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}};\n{}",
+                                            raw_code.replace("import.meta.env", "__vite_env__")
+                                        )
+                                    } else {
+                                        raw_code
+                                    };
+                                    match engine.eval_module_with_imports(&url, &module_code) {
                                         Ok(_) => executed += 1,
                                         Err(e) => {
                                             eprintln!("[js-runtime] QuickJS module eval failed: {url}: {e}");
@@ -969,10 +981,30 @@ fn run_scripts_quickjs(
                                             // has_static_esm_syntax strip，尝试 try_strip
                                             // 处理 import.meta 后仍有部分功能可用。
                                             let base = base_url.as_deref().unwrap_or("");
-                                            if let Some(p) = try_strip_esm_for_eval(&code, base) {
-                                                match engine.eval_user_script(&p) {
-                                                    Ok(_) => executed += 1,
-                                                    Err(e2) => eprintln!("[js-runtime] module eval fallback also failed: {e2}"),
+                                            // M76: 用 module_code 而非已被所有权的 code（已在 else 分支 move）
+                                            let (has_static_syntax, _code) = (has_static_esm_syntax(&module_code), module_code);
+                                            if !has_static_syntax {
+                                                if let Some(p) = try_strip_esm_for_eval(&_code, base) {
+                                                    match engine.eval_user_script(&p) {
+                                                        Ok(_) => executed += 1,
+                                                        Err(e2) => eprintln!("[js-runtime] module eval fallback also failed: {e2}"),
+                                                    }
+                                                }
+                                            } else {
+                                                // M76: 终极 fallback
+                                                if !_code.is_empty() {
+                                                    eprintln!("[js-runtime] force-strip {} module bytes", _code.len());
+                                                }
+                                                let stripped: Vec<&str> = _code.lines().filter(|l| {
+                                                    let t = l.trim_start();
+                                                    !t.starts_with("import ") && !t.starts_with("import{") && !t.starts_with("import*")
+                                                }).collect();
+                                                if !stripped.is_empty() {
+                                                    let rest = stripped.join("\n");
+                                                    match engine.eval_user_script(&rest) {
+                                                        Ok(_) => executed += 1,
+                                                        Err(_) => {}
+                                                    }
                                                 }
                                             }
                                         }
@@ -980,9 +1012,9 @@ fn run_scripts_quickjs(
                                     continue;
                                 }
                                 let base = base_url.as_deref().unwrap_or("");
-                                match try_strip_esm_for_eval(&code, base) {
+                                match try_strip_esm_for_eval(&raw_code, base) {
                                     Some(p) => Some(p),
-                                    None => Some(code),
+                                    None => Some(raw_code),
                                 }
                             }
                             Err(e) => {

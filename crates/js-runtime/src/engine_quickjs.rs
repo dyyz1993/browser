@@ -61,8 +61,30 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         name: &str,
         _attributes: Option<rquickjs_core::loader::ImportAttributes<'js>>,
     ) -> rquickjs_core::Result<Module<'js, Declared>> {
+        let trace = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
         let source = crate::bridge::fetch_sync(name)
-            .map_err(|e| rquickjs_core::Error::new_loading(&format!("{name}: {e}")))?;
+            .map_err(|e| {
+                if trace {
+                    eprintln!("[loader] fetch_sync failed: {name}: {e}");
+                }
+                rquickjs_core::Error::new_loading(&format!("{name}: {e}"))
+            })?;
+        // M76: QuickJS 的 import.meta.env 不可赋（invalid assignment）。
+        // 替换 import.meta.env → __vite_env__ 模块级变量 + 替换 import.meta.hot。
+        let source = if source.contains("import.meta.env") {
+            let patched = source.replace("import.meta.env", "__vite_env__");
+            format!(
+                "if(typeof __vite_env__==='undefined')var __vite_env__={{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}};
+{patched}"
+            )
+        } else if source.contains("import.meta.hot") {
+            format!(
+                "if(typeof import.meta.hot==='undefined')import.meta.hot={{accept:function(){{}},dispose:function(){{}},on:function(){{}},decline:function(){{}},invalidate:function(){{}},data:{{}}}};
+{source}"
+            )
+        } else {
+            source
+        };
         // M76: UMD/CJS 模块（如 React/vendor）没有 export 语句 → Module::declare 创建空导出。
         // 加 export{}; 使其成为合法 ESM 模块（不导出任何东西，代码原地执行）。
         let wrapped = if !source.contains("export") && !source.contains("import") {
@@ -70,7 +92,12 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         } else {
             source
         };
-        Module::declare(ctx.clone(), name, wrapped.as_bytes())
+        Module::declare(ctx.clone(), name, wrapped.as_bytes()).map_err(|e| {
+            if trace {
+                eprintln!("[loader] Module::declare failed: {name}: {e}");
+            }
+            e
+        })
     }
 }
 
@@ -319,9 +346,15 @@ impl QuickJsEngine {
                             match promise.finish::<()>() {
                                 Ok(()) => Ok(()),
                                 Err(e) => {
-                                    // M76: 捕获实际的 JS 错误消息
-                                    let diag = format!("{e:?}");
-                                    Err(format!("module promise: {diag}"))
+                                    // M76: 尝试提取具体异常消息
+                                    let msg = match e {
+                                        rquickjs::Error::Exception => {
+                                            // 异常可能已被 promise.finish 消费；用 display
+                                            format!("{:#}", e)
+                                        }
+                                        _ => format!("{e:#}"),
+                                    };
+                                    Err(format!("module promise: {msg}"))
                                 }
                             }
                         }
