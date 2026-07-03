@@ -964,13 +964,17 @@ fn run_scripts_quickjs(
                                 if has_static {
                                     // M76: QuickJS 不支持 import.meta.env = {}
                                     // 替换 import.meta.env → __vite_env__ 模块级变量。
-                                    let module_code = if raw_code.contains("import.meta.env") {
-                                        format!(
-                                            "if(typeof __vite_env__==='undefined')var __vite_env__={{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}};\n{}",
-                                            raw_code.replace("import.meta.env", "__vite_env__")
-                                        )
-                                    } else {
-                                        raw_code
+                                    let module_code = {
+                                        let base = if raw_code.contains("import.meta.env") {
+                                            format!(
+                                                "if(typeof __vite_env__==='undefined')var __vite_env__={{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}};\n{}",
+                                                raw_code.replace("import.meta.env", "__vite_env__")
+                                            )
+                                        } else {
+                                            raw_code
+                                        };
+                                        // M76bis: 每个 ExternalModule 注入 React preamble 桩
+                                        format!("window.__vite_plugin_react_preamble_installed__=true;\n{base}")
                                     };
                                     match engine.eval_module_with_imports(&url, &module_code) {
                                         Ok(_) => executed += 1,
@@ -1032,12 +1036,25 @@ fn run_scripts_quickjs(
                     || code.contains("import *")
                     || code.contains("import{");
                 if has_static_import {
-                    continue;
-                }
-                let base = base_url.as_deref().unwrap_or("");
-                match try_strip_esm_for_eval(code, base) {
-                    Some(p) => Some(p),
-                    None => Some(code.clone()),
+                    // M76bis: 不跳过——strip import 行 + injectIntoGlobalHook 后 eval（$RefreshReg$ 设置）
+                    let cleaned: Vec<&str> = code.lines()
+                        .filter(|l| {
+                            let t = l.trim_start();
+                            !t.starts_with("import {") && !t.starts_with("import{")
+                                && !t.contains("injectIntoGlobalHook")
+                        })
+                        .collect();
+                    if cleaned.is_empty() {
+                        continue;
+                    }
+                    let refined = cleaned.join("\n");
+                    Some(refined)
+                } else {
+                    let base = base_url.as_deref().unwrap_or("");
+                    match try_strip_esm_for_eval(code, base) {
+                        Some(p) => Some(p),
+                        None => Some(code.clone()),
+                    }
                 }
             }
             _ => continue,

@@ -62,6 +62,7 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         _attributes: Option<rquickjs_core::loader::ImportAttributes<'js>>,
     ) -> rquickjs_core::Result<Module<'js, Declared>> {
         let trace = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
+        eprintln!("[loader] fetch: {name}");
         let source = crate::bridge::fetch_sync(name)
             .map_err(|e| {
                 if trace {
@@ -85,6 +86,10 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         } else {
             source
         };
+        // M76bis: Vite React preamble 桩——模块级注入
+        // @vitejs/plugin-react 注入的检测代码若找不到此 flag 则抛错
+        let preamble_stub = "window.__vite_plugin_react_preamble_installed__=true;";
+        let source = format!("{preamble_stub}{source}");
         // M76: UMD/CJS 模块（如 React/vendor）没有 export 语句 → Module::declare 创建空导出。
         // 加 export{}; 使其成为合法 ESM 模块（不导出任何东西，代码原地执行）。
         let wrapped = if !source.contains("export") && !source.contains("import") {
@@ -92,12 +97,16 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         } else {
             source
         };
-        Module::declare(ctx.clone(), name, wrapped.as_bytes()).map_err(|e| {
-            if trace {
-                eprintln!("[loader] Module::declare failed: {name}: {e}");
+        let declared = Module::declare(ctx.clone(), name, wrapped.as_bytes());
+        match &declared {
+            Ok(_) => {
+                if trace { eprintln!("[loader] declared OK: {name}"); }
             }
-            e
-        })
+            Err(e) => {
+                eprintln!("[loader] Module::declare FAILED: {name}: {e}");
+            }
+        }
+        declared.map_err(|e| e)
     }
 }
 
@@ -342,18 +351,16 @@ impl QuickJsEngine {
                 Ok(module) => {
                     match module.eval() {
                         Ok((_m, promise)) => {
-                            // 用 finish::<()>() 避免 JS Value 泄漏（GC assertion）。
+                            // M76bis: finish 模块 eval，捕获异常不崩
                             match promise.finish::<()>() {
                                 Ok(()) => Ok(()),
                                 Err(e) => {
-                                    // M76: 尝试提取具体异常消息
-                                    let msg = match e {
-                                        rquickjs::Error::Exception => {
-                                            // 异常可能已被 promise.finish 消费；用 display
-                                            format!("{:#}", e)
-                                        }
-                                        _ => format!("{e:#}"),
-                                    };
+                                    let caught = ctx.catch();
+                                    // Extract .message from caught Error object
+                                    let msg = rquickjs::Object::from_value(caught)
+                                        .ok()
+                                        .and_then(|obj| obj.get::<_, String>("message").ok())
+                                        .unwrap_or_else(|| format!("{e:#}"));
                                     Err(format!("module promise: {msg}"))
                                 }
                             }
@@ -362,11 +369,10 @@ impl QuickJsEngine {
                     }
                 }
                 Err(e) => {
-                    // M76: 加详细诊断信息
                     let diag = format!("{e:?}");
-                    let snippet = &source[..std::cmp::min(200, source.len())];
                     Err(format!(
-                        "module declare: {diag} | name={name} | first_200_chars={snippet}"
+                        "module declare: {diag} | name={name} | first_200={snippet}",
+                        snippet = &source[..source.len().min(200)]
                     ))
                 }
             }
