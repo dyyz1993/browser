@@ -972,7 +972,7 @@ fn run_scripts_quickjs(
                                             // M76ter: __vite__cjsImport lines → var stub（避免后续引用 undefined）
                                             if t.contains("__vite__cjsImport") {
                                                 if let Some(var_name) = t.split_whitespace().nth(1) {
-                                                    stripped.push_str(&format!("var {var_name}={{}};\n"));
+                                                    stripped.push_str(&format!("var {var_name}=__react_stub();\n"));
                                                 }
                                             }
                                             continue;
@@ -994,7 +994,7 @@ fn run_scripts_quickjs(
                                                 if let Some(var_start) = rest.split_whitespace().nth(1) {
                                                     let var_name = var_start.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
                                                     let before = &l[..idx];
-                                                    l = format!("{before}var {var_name}={{}};");
+                                                    l = format!("{before}var {var_name}=__react_stub();");
                                                 }
                                             }
                                         }
@@ -1002,7 +1002,8 @@ fn run_scripts_quickjs(
                                         stripped.push('\n');
                                     }
                                     let eval_code = format!(
-                                        "window.__vite_plugin_react_preamble_installed__=true;
+                                        "if(typeof __react_stub==='undefined')function __react_stub(){{var r={{}};['jsxDEV','jsxs','Fragment','StrictMode','createElement','createRoot','useState','useEffect','useRef','useMemo','useCallback','useContext','useReducer','forwardRef','lazy','memo','createRef','hydrateRoot','render','createPortal','unmountComponentAtNode'].forEach(function(k){{r[k]=function(){{return null}}}});r['createRoot']=function(root){{return{{render:function(e){{}}}}}};return r;}}
+                                         window.__vite_plugin_react_preamble_installed__=true;
 \
                                          if(typeof __vite_env__===\'undefined\')var __vite_env__={{}};
 \
@@ -1014,7 +1015,7 @@ fn run_scripts_quickjs(
                                     );
                                     match engine.eval_user_script(&eval_code) {
                                         Ok(_) => executed += 1,
-                                        Err(e2) => eprintln!("[js-runtime] module eval (strip) failed: {url}: {e2}"),
+                                        Err(e2) => eprintln!("[js-runtime] module eval (strip) failed: {url}: {e2:#}"),
                                     }
                                     continue;
                                 }
