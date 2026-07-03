@@ -26,6 +26,11 @@ impl rquickjs_core::loader::Resolver for HttpResolver {
         if name.starts_with("http://") || name.starts_with("https://") {
             return Ok(name.to_string());
         }
+        // M76: 绝对路径（以 / 开头）直接返回，不做 base_dir 拼接。
+        // Vite 浏览器端的 import "/@fs/..." 就是以 / 开头的绝对路径。
+        if name.starts_with('/') {
+            return Ok(name.to_string());
+        }
         let base_dir = base.rfind('/').map(|i| &base[..i]).unwrap_or(base);
         if let Some(stripped) = name.strip_prefix("./") {
             Ok(format!("{base_dir}/{stripped}"))
@@ -53,7 +58,14 @@ impl rquickjs_core::loader::Loader for HttpLoader {
     ) -> rquickjs_core::Result<Module<'js, Declared>> {
         let source = crate::bridge::fetch_sync(name)
             .map_err(|e| rquickjs_core::Error::new_loading(&format!("{name}: {e}")))?;
-        Module::declare(ctx.clone(), name, source.as_bytes())
+        // M76: UMD/CJS 模块（如 React/vendor）没有 export 语句 → Module::declare 创建空导出。
+        // 加 export{}; 使其成为合法 ESM 模块（不导出任何东西，代码原地执行）。
+        let wrapped = if !source.contains("export") && !source.contains("import") {
+            format!("{source}\nexport{{}};")
+        } else {
+            source
+        };
+        Module::declare(ctx.clone(), name, wrapped.as_bytes())
     }
 }
 
@@ -311,7 +323,9 @@ impl QuickJsEngine {
                     // M76: 加详细诊断信息
                     let diag = format!("{e:?}");
                     let snippet = &source[..std::cmp::min(200, source.len())];
-                    Err(format!("module declare: {diag} | name={name} | first_200_chars={snippet}"))
+                    Err(format!(
+                        "module declare: {diag} | name={name} | first_200_chars={snippet}"
+                    ))
                 }
             }
         })

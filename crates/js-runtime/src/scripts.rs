@@ -1002,8 +1002,7 @@ fn run_scripts_quickjs(
                 // M75: 检测静态 import { ... } from "..."（含 Vite 绝对路径 from "/"）。
                 // 原代码只检查 from "./" 和 from './'，漏了 Vite 的 from "/"。
                 // 只检查 import { 和 import * 避免 import.meta 误判。
-                let has_static_import = code.contains("import {")
-                    || code.contains("import *");
+                let has_static_import = code.contains("import {") || code.contains("import *");
                 if has_static_import {
                     continue;
                 }
