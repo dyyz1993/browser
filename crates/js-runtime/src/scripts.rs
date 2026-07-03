@@ -962,56 +962,59 @@ fn run_scripts_quickjs(
                                 // Vite 用绝对路径 from "/@react-refresh"——from"./" 检测漏了。
                                 let has_static = has_static_esm_syntax(&raw_code);
                                 if has_static {
-                                    // M76: QuickJS 不支持 import.meta.env = {}
-                                    // 替换 import.meta.env → __vite_env__ 模块级变量。
-                                    let module_code = {
-                                        let base = if raw_code.contains("import.meta.env") {
-                                            format!(
-                                                "if(typeof __vite_env__==='undefined')var __vite_env__={{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}};\n{}",
-                                                raw_code.replace("import.meta.env", "__vite_env__")
-                                            )
+                                    // M76ter: strip import/export 后 eval 为普通 script
+                                    let mut stripped = String::new();
+                                    for line in raw_code.lines() {
+                                        let t = line.trim_start();
+                                        if t.starts_with("import ") || t.starts_with("import{") || t.starts_with("import*")
+                                            || t.starts_with("export ") || t.starts_with("export{") || t.starts_with("export*")
+                                        {
+                                            // M76ter: __vite__cjsImport lines → var stub（避免后续引用 undefined）
+                                            if t.contains("__vite__cjsImport") {
+                                                if let Some(var_name) = t.split_whitespace().nth(1) {
+                                                    stripped.push_str(&format!("var {var_name}={{}};\n"));
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        let mut l = if t.contains("import.meta.url") {
+                                            line.replace("import.meta.url", "\"http://localhost:5173/\"")
+                                        } else if t.contains("import.meta.env") {
+                                            line.replace("import.meta.env", "__vite_env__")
+                                        } else if t.contains("import.meta.hot") {
+                                            line.replace("import.meta.hot", "__vite_hot_stub__")
                                         } else {
-                                            raw_code
+                                            line.to_string()
                                         };
-                                        // M76bis: 每个 ExternalModule 注入 React preamble 桩
-                                        format!("window.__vite_plugin_react_preamble_installed__=true;\n{base}")
-                                    };
-                                    match engine.eval_module_with_imports(&url, &module_code) {
-                                        Ok(_) => executed += 1,
-                                        Err(e) => {
-                                            eprintln!("[js-runtime] QuickJS module eval failed: {url}: {e}");
-                                            // M76: ESM module 失败时尝试退化 eval。
-                                            // Vite 的 export class / import "..." 无法被
-                                            // has_static_esm_syntax strip，尝试 try_strip
-                                            // 处理 import.meta 后仍有部分功能可用。
-                                            let base = base_url.as_deref().unwrap_or("");
-                                            // M76: 用 module_code 而非已被所有权的 code（已在 else 分支 move）
-                                            let (has_static_syntax, _code) = (has_static_esm_syntax(&module_code), module_code);
-                                            if !has_static_syntax {
-                                                if let Some(p) = try_strip_esm_for_eval(&_code, base) {
-                                                    match engine.eval_user_script(&p) {
-                                                        Ok(_) => executed += 1,
-                                                        Err(e2) => eprintln!("[js-runtime] module eval fallback also failed: {e2}"),
-                                                    }
-                                                }
-                                            } else {
-                                                // M76: 终极 fallback
-                                                if !_code.is_empty() {
-                                                    eprintln!("[js-runtime] force-strip {} module bytes", _code.len());
-                                                }
-                                                let stripped: Vec<&str> = _code.lines().filter(|l| {
-                                                    let t = l.trim_start();
-                                                    !t.starts_with("import ") && !t.starts_with("import{") && !t.starts_with("import*")
-                                                }).collect();
-                                                if !stripped.is_empty() {
-                                                    let rest = stripped.join("\n");
-                                                    match engine.eval_user_script(&rest) {
-                                                        Ok(_) => executed += 1,
-                                                        Err(_) => {}
-                                                    }
+                                        // M76ter: 处理行中 inline import（如 "import.meta.env={};import __vite__cjsImport0..."）
+                                        if l.contains("import __vite__cjsImport") {
+                                            if let Some(idx) = l.find("import __vite__cjsImport") {
+                                                // Extract var name
+                                                let rest = &l[idx..];
+                                                if let Some(var_start) = rest.split_whitespace().nth(1) {
+                                                    let var_name = var_start.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                                                    let before = &l[..idx];
+                                                    l = format!("{before}var {var_name}={{}};");
                                                 }
                                             }
                                         }
+                                        stripped.push_str(&l);
+                                        stripped.push('\n');
+                                    }
+                                    let eval_code = format!(
+                                        "window.__vite_plugin_react_preamble_installed__=true;
+\
+                                         if(typeof __vite_env__===\'undefined\')var __vite_env__={{}};
+\
+                                         if(typeof __vite_hot_stub__===\'undefined\')var __vite_hot_stub__={{}};
+\
+                                         if(typeof createRoot===\'undefined\')var createRoot=function(r){{return{{render:function(e){{r.textContent=\'[React stub]\'}}}}}};
+\
+                                         {stripped}"
+                                    );
+                                    match engine.eval_user_script(&eval_code) {
+                                        Ok(_) => executed += 1,
+                                        Err(e2) => eprintln!("[js-runtime] module eval (strip) failed: {url}: {e2}"),
                                     }
                                     continue;
                                 }
