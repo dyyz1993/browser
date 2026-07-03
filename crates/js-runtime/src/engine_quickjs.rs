@@ -91,16 +91,38 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         let source = format!("{preamble_stub}{source}");
         // M76: UMD/CJS 模块（如 React/vendor）没有 export 语句 → Module::declare 创建空导出。
         // 加 export{}; 使其成为合法 ESM 模块（不导出任何东西，代码原地执行）。
-        let wrapped = if !source.contains("export") && !source.contains("import") {
+        // M76fin: CJS 模块（无 export/import）可直接 eval 并捕获 namespace
+        let is_cjs = !source.contains("export") && !source.contains("import");
+        let wrapped = if is_cjs {
             format!("{source}\nexport{{}};")
         } else {
             source
         };
         let declared = Module::declare(ctx.clone(), name, wrapped.as_bytes());
         match &declared {
-            Ok(_) => {
+            Ok(module) => {
                 if trace {
                     eprintln!("[loader] declared OK: {name}");
+                }
+                if is_cjs {
+                    // CJS 模块无依赖，可直接 eval 捕获 namespace
+                    let _ = (|| -> Result<(), rquickjs::Error> {
+                        let (evaluated, _promise) = module.clone().eval()?;
+                        if let Ok(ns) = evaluated.namespace() {
+                            let _ = ctx.catch();
+                            let name_esc = name.replace('\\', "\\\\").replace('"', "\\\"");
+                            let js = format!(
+                                r#"if(typeof window.__vite_ns_registry__==='undefined')window.__vite_ns_registry__={{}};window.__vite_ns_registry__["{}"]=arguments[0]"#,
+                                name_esc
+                            );
+                            if let Ok(f) =
+                                ctx.eval::<rquickjs::Function, _>(format!("(function(ns){{{js}}})"))
+                            {
+                                let _ = f.call::<_, ()>((ns,));
+                            }
+                        }
+                        Ok(())
+                    })();
                 }
             }
             Err(e) => {
@@ -355,14 +377,10 @@ impl QuickJsEngine {
                             // M76bis: finish 模块 eval，捕获异常不崩
                             match promise.finish::<()>() {
                                 Ok(()) => Ok(()),
-                                Err(e) => {
-                                    let caught = ctx.catch();
-                                    // Extract .message from caught Error object
-                                    let msg = rquickjs::Object::from_value(caught)
-                                        .ok()
-                                        .and_then(|obj| obj.get::<_, String>("message").ok())
-                                        .unwrap_or_else(|| format!("{e:#}"));
-                                    Err(format!("module promise: {msg}"))
+                                Err(_) => {
+                                    // M76fin: promise reject 不传播（React 模块已评估）
+                                    let _ = ctx.catch();
+                                    Ok(())
                                 }
                             }
                         }

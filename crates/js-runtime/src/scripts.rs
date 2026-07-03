@@ -962,6 +962,12 @@ fn run_scripts_quickjs(
                                 // Vite 用绝对路径 from "/@react-refresh"——from"./" 检测漏了。
                                 let has_static = has_static_esm_syntax(&raw_code);
                                 if has_static {
+                                    // M76fin: 先尝试 Module::eval（触发 Loader → namespace registry）
+                                    // 即使 main.tsx runtime 失败，React namespace 已被 Loader 捕获
+                                    if let Err(e) = engine.eval_module_with_imports(&url, &raw_code)
+                                    {
+                                        eprintln!("[js-runtime] pre-eval (will strip): {e}");
+                                    }
                                     // M76ter: strip import/export 后 eval 为普通 script
                                     let mut stripped = String::new();
                                     for line in raw_code.lines() {
@@ -973,12 +979,23 @@ fn run_scripts_quickjs(
                                             || t.starts_with("export{")
                                             || t.starts_with("export*")
                                         {
-                                            // M76ter: __vite__cjsImport lines → var stub（避免后续引用 undefined）
+                                            // M76fin: __vite__cjsImport → registry lookup
                                             if t.contains("__vite__cjsImport") {
                                                 if let Some(var_name) = t.split_whitespace().nth(1)
                                                 {
+                                                    // Extract URL from from "..."
+                                                    let val = if let Some(q) = t.find("from \"") {
+                                                        let u = &t[q + 6..];
+                                                        let e = u.find('\"').unwrap_or(0);
+                                                        let url = &u[..e];
+                                                        format!(
+                                                            "window.__vite_ns_registry__?.[\"http://localhost:5173{url}\"]||__react_stub()"
+                                                        )
+                                                    } else {
+                                                        "__react_stub()".to_string()
+                                                    };
                                                     stripped.push_str(&format!(
-                                                        "var {var_name}=__react_stub();\n"
+                                                        "var {var_name}={val};\n"
                                                     ));
                                                 }
                                             }
@@ -996,10 +1013,9 @@ fn run_scripts_quickjs(
                                         } else {
                                             line.to_string()
                                         };
-                                        // M76ter: 处理行中 inline import（如 "import.meta.env={};import __vite__cjsImport0..."）
+                                        // M76fin: inline import → registry lookup
                                         if l.contains("import __vite__cjsImport") {
                                             if let Some(idx) = l.find("import __vite__cjsImport") {
-                                                // Extract var name
                                                 let rest = &l[idx..];
                                                 if let Some(var_start) =
                                                     rest.split_whitespace().nth(1)
@@ -1009,9 +1025,18 @@ fn run_scripts_quickjs(
                                                             !c.is_alphanumeric() && c != '_'
                                                         });
                                                     let before = &l[..idx];
-                                                    l = format!(
-                                                        "{before}var {var_name}=__react_stub();"
-                                                    );
+                                                    let val = if let Some(q) = rest.find("from \"")
+                                                    {
+                                                        let u = &rest[q + 6..];
+                                                        let e = u.find('\"').unwrap_or(0);
+                                                        let url = &u[..e];
+                                                        format!(
+                                                            "window.__vite_ns_registry__?.[\"http://localhost:5173{url}\"]||__react_stub()"
+                                                        )
+                                                    } else {
+                                                        "__react_stub()".to_string()
+                                                    };
+                                                    l = format!("{before}var {var_name}={val};");
                                                 }
                                             }
                                         }
