@@ -1,7 +1,6 @@
 # JS 能力覆盖矩阵（单一事实来源）
 
-> 本文档是 JS 渲染能力的**权威清单**。每项标注实测状态，照此补齐测试。
-> 边补边观察二进制大小/内存变化（更多桥代码 = 体积增长，需监控）。
+> **本文档是 JS 渲染能力的权威清单**。每项标注实测状态 + 实现模块。
 > 冲突时以此文档为准，并顺手修正 FEATURES.md。
 
 ## 测量方法
@@ -11,6 +10,18 @@
 - ❌ = 报错/panic/空输出
 - ⚠️ = 部分工作（降级/no-op/语义偏差）
 - ❓ = 未测
+
+## 模块映射速查
+
+| 模块/文件 | 职责 | 对应 API |
+|:----------|:-----|:---------|
+| `scripts.rs` QUICKJS_GLOBAL_SHIM | 全局对象/构造器 | Event/Blob/TextEncoder/Proxy/URL/console/crypto |
+| `scripts.rs` QUICKJS_ELEMENT_SHIM | Element 原型 | appendChild/querySelector/classList/dataset/cloneNode |
+| `scripts.rs` QUICKJS_DOCUMENT_SHIM | document 对象 | getElementById/createElement/body/head |
+| `scripts.rs` QUICKJS_XHR_SHIM | XMLHttpRequest | XHR send/abort/onload |
+| `bridge.rs` (qjs_bridge) | Rust ↔ JS 桥函数 | DOM 读写/fetch 同步/选择器/WS/存储 |
+| `engine_quickjs.rs` | QuickJS 引擎 + Loader | eval/module declare/resolve/namespace capture |
+| `scripts.rs` (管线编排) | 脚本执行逻辑 | run_scripts_quickjs/pass1/pass2/event_loop |
 
 ## 基线指标（边补边对比）
 
@@ -76,77 +87,77 @@
 ## 二、Web API（手写 shim 层）
 
 ### DOM document
-| API | 状态 | 测试 |
-|------|------|------|
-| getElementById | ✅ | 多处 |
-| querySelector | ✅ | 多处 |
-| querySelectorAll | ✅ 全部（M62） | |
-| createElement | ✅ | lazy-load fixture |
-| createTextNode | ✅ | |
-| getElementsByTagName | ✅ 全部（M62） | integration_js_features |
-| addEventListener | ✅ 存回调 | integration_js_features |
-| removeEventListener | ✅ | integration_js_features |
-| write | ⚠️ no-op | 低频，现代 SPA 不用 | |
-| body/head/title 等 getter | ✅ | |
+| API | 状态 | 测试 | 模块 |
+|------|------|------|:----:|
+| getElementById | ✅ | 多处 | QUICKJS_DOCUMENT_SHIM |
+| querySelector | ✅ | 多处 | bridge.rs qs |
+| querySelectorAll | ✅ 全部（M62） | | bridge.rs qs_all |
+| createElement | ✅ | lazy-load fixture | QUICKJS_DOCUMENT_SHIM |
+| createTextNode | ✅ | | QUICKJS_DOCUMENT_SHIM |
+| getElementsByTagName | ✅ 全部（M62） | integration_js_features | QUICKJS_DOCUMENT_SHIM |
+| addEventListener | ✅ 存回调 | integration_js_features | QUICKJS_DOCUMENT_SHIM |
+| removeEventListener | ✅ | integration_js_features | QUICKJS_DOCUMENT_SHIM |
+| write | ⚠️ no-op | 低频，现代 SPA 不用 | QUICKJS_DOCUMENT_SHIM |
+| body/head/title 等 getter | ✅ | | QUICKJS_DOCUMENT_SHIM |
 
 ### DOM element
-| API | 状态 | 测试 |
-|------|------|------|
-| appendChild | ✅ M69（script 标签触发动态加载：fetch+eval+onload） | integration_dynamic_script |
-| **append / prepend (ParentNode)** | ✅ M63（svelte.dev `document.body.append(div)`，接受多参数+字符串） | integration_js_features |
-| insertBefore | ✅ | |
-| removeChild | ✅ | |
-| setAttribute/getAttribute | ✅ | |
-| textContent | ✅ | |
-| innerHTML | ✅ M62（html5ever 解析为真实 DOM 节点，支持 querySelector 后续查找） | bark.day.app |
-| outerHTML | ✅ M62（简化实现 = innerHTML，docsify initRender 用） | bark.day.app |
-| **querySelector (Element)** | ✅ M62（Vue/React createElement 后查找子元素） | integration_js_features |
-| **querySelectorAll (Element)** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features |
-| cloneNode | ✅ | |
-| classList | ✅ M62（真实现 add/remove/contains/toggle） | |
-| dataset | ✅ M62（动态遍历常见 key + 驼峰转 kebab） | |
-| **反射 IDL 属性 (href/src/value 等)** | ✅ M63（docsify sidebar sort 读 a.href.length；24 个常用属性） | integration_js_features |
-| style | ⚠️ 部分 | getPropertyValue/setProperty 有，CSS 不影响渲染 | |
-| **getBoundingClientRect** | ✅ M63（返回零值 DOMRect，docsify K() scroll handler 读 rect.height） | integration_js_features |
-| getClientRects | ⚠️ 返回 [] | 布局尺寸，爬虫不需要 | |
-| addEventListener | ✅ 存回调 | integration_js_features |
-| dispatchEvent | ✅ M62 | window_shim 测试 |
-| removeEventListener | ✅ M62 | window_shim 测试 |
+| API | 状态 | 测试 | 模块 |
+|------|------|------|:----:|
+| appendChild | ✅ M69（script 标签触发动态加载：fetch+eval+onload） | integration_dynamic_script | QUICKJS_ELEMENT_SHIM |
+| **append / prepend (ParentNode)** | ✅ M63（svelte.dev `document.body.append(div)`，接受多参数+字符串） | integration_js_features | QUICKJS_ELEMENT_SHIM |
+| insertBefore | ✅ | | QUICKJS_ELEMENT_SHIM |
+| removeChild | ✅ | | QUICKJS_ELEMENT_SHIM |
+| setAttribute/getAttribute | ✅ | | bridge.rs __setAttr/__getAttr |
+| textContent | ✅ | | QUICKJS_ELEMENT_SHIM |
+| innerHTML | ✅ M62（html5ever 解析为真实 DOM 节点，支持 querySelector 后续查找） | bark.day.app | bridge.rs set_inner_html |
+| outerHTML | ✅ M62（简化实现 = innerHTML，docsify initRender 用） | bark.day.app | QUICKJS_ELEMENT_SHIM |
+| **querySelector (Element)** | ✅ M62（Vue/React createElement 后查找子元素） | integration_js_features | bridge.rs qs |
+| **querySelectorAll (Element)** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features | bridge.rs qs_all |
+| cloneNode | ✅ | | QUICKJS_ELEMENT_SHIM |
+| classList | ✅ M62（真实现 add/remove/contains/toggle） | | QUICKJS_ELEMENT_SHIM |
+| dataset | ✅ M62（动态遍历常见 key + 驼峰转 kebab） | | QUICKJS_ELEMENT_SHIM |
+| **反射 IDL 属性 (href/src/value 等)** | ✅ M63（docsify sidebar sort 读 a.href.length；24 个常用属性） | integration_js_features | QUICKJS_ELEMENT_SHIM |
+| style | ⚠️ 部分 | getPropertyValue/setProperty 有，CSS 不影响渲染 | QUICKJS_ELEMENT_SHIM |
+| **getBoundingClientRect** | ✅ M63（返回零值 DOMRect，docsify K() scroll handler 读 rect.height） | integration_js_features | QUICKJS_ELEMENT_SHIM |
+| getClientRects | ⚠️ 返回 [] | 布局尺寸，爬虫不需要 | QUICKJS_ELEMENT_SHIM |
+| addEventListener | ✅ 存回调 | integration_js_features | QUICKJS_ELEMENT_SHIM |
+| dispatchEvent | ✅ M62 | window_shim 测试 | QUICKJS_ELEMENT_SHIM |
+| removeEventListener | ✅ M62 | window_shim 测试 | QUICKJS_ELEMENT_SHIM |
 
 ### 网络
-| API | 状态 | 测试 |
-|------|------|------|
-| fetch（Promise） | ✅ | integration_fetch |
-| XMLHttpRequest | ✅ | integration_xhr |
-| XMLHttpRequest.addEventListener | ✅ M62（docsify X().then 用 addEventListener('load', cb)） | bark.day.app |
-| XMLHttpRequest.addEventListener this 绑定 | ✅ M63（回调内 this 绑定 XHR 实例，否则 this.status === undefined） | integration_js_features |
-| XMLHttpRequest.response | ✅ M62（docsify onload 读 xhr.response） | bark.day.app |
-| XMLHttpRequest.getResponseHeader | ✅ M62（返回 null，docsify 读 last-modified 做 cache） | bark.day.app |
-| XMLHttpRequest.getAllResponseHeaders | ✅ M62（返回 ''） | bark.day.app |
-| WebSocket | ✅ | integration_ws |
-| setRequestHeader(XHR) | ⚠️ no-op | 爬虫场景 headers 不关键 | |
+| API | 状态 | 测试 | 模块 |
+|------|------|------|:----:|
+| fetch（Promise） | ✅ | integration_fetch | bridge.rs __fetchSync + JS Promise wrap |
+| XMLHttpRequest | ✅ | integration_xhr | QUICKJS_XHR_SHIM |
+| XMLHttpRequest.addEventListener | ✅ M62（docsify X().then 用 addEventListener('load', cb)） | bark.day.app | QUICKJS_XHR_SHIM |
+| XMLHttpRequest.addEventListener this 绑定 | ✅ M63（回调内 this 绑定 XHR 实例，否则 this.status === undefined） | integration_js_features | QUICKJS_XHR_SHIM |
+| XMLHttpRequest.response | ✅ M62（docsify onload 读 xhr.response） | bark.day.app | QUICKJS_XHR_SHIM |
+| XMLHttpRequest.getResponseHeader | ✅ M62（返回 null，docsify 读 last-modified 做 cache） | bark.day.app | QUICKJS_XHR_SHIM |
+| XMLHttpRequest.getAllResponseHeaders | ✅ M62（返回 ''） | bark.day.app | QUICKJS_XHR_SHIM |
+| WebSocket | ✅ | integration_ws | bridge.rs ws_* + engine_quickjs event loop |
+| setRequestHeader(XHR) | ⚠️ no-op | 爬虫场景 headers 不关键 | QUICKJS_XHR_SHIM |
 
 ### 全局函数/构造器
-| API | 状态 | 测试 |
-|------|------|------|
-| **escape/unescape** | ✅ M62（deprecated 但 builder.io 等第三方依赖） | integration_js_features |
-| **URL（接受 location/对象作 base）** | ✅ M63（svelte SvelteKit `new URL(".", location)`；修复 href getter 无限递归） | integration_js_features |
-| **TextEncoderStream/TextDecoderStream** | ✅ M62（Stream API，构造器存在即可） | integration_js_features |
-| **document.createElementNS** | ✅ M62（Vue/React SVG/MathML，忽略 namespace） | integration_js_features |
-| TextEncoder/TextDecoder | ✅ M62 | integration_js_features |
-| atob/btoa | ✅ M62（真 Base64 实现） | |
-| encodeURI/decodeURI | ✅ boa 原生 | |
+| API | 状态 | 测试 | 模块 |
+|------|------|------|:----:|
+| **escape/unescape** | ✅ M62（deprecated 但 builder.io 等第三方依赖） | integration_js_features | QUICKJS_GLOBAL_SHIM |
+| **URL（接受 location/对象作 base）** | ✅ M63（svelte SvelteKit `new URL(".", location)`；修复 href getter 无限递归） | integration_js_features | QUICKJS_GLOBAL_SHIM |
+| **TextEncoderStream/TextDecoderStream** | ✅ M62（Stream API，构造器存在即可） | integration_js_features | QUICKJS_GLOBAL_SHIM |
+| **document.createElementNS** | ✅ M62（Vue/React SVG/MathML，忽略 namespace） | integration_js_features | QUICKJS_DOCUMENT_SHIM |
+| TextEncoder/TextDecoder | ✅ M62 | integration_js_features | QUICKJS_GLOBAL_SHIM |
+| atob/btoa | ✅ M62（真 Base64 实现） | | QUICKJS_GLOBAL_SHIM |
+| encodeURI/decodeURI | ✅ boa 原生 | | engine (boa) / QUICKJS_GLOBAL_SHIM (QuickJS) |
 
 ### 存储/导航/定时器
-| API | 状态 | 测试 |
-|------|------|------|
-| localStorage | ✅ | storage_shim 测试 |
-| sessionStorage | ✅ | 共享后端 |
-| history.* | ✅ | navigation_shim 测试 |
-| location.* | ✅ | |
-| setTimeout/clearTimeout | ✅ | integration_settimeout (6) |
-| **setInterval/clearInterval** | ✅ | 手测（100 次硬上限防死循环） |
-| Image | ✅ | image_shim 测试 |
+| API | 状态 | 测试 | 模块 |
+|------|------|------|:----:|
+| localStorage | ✅ | storage_shim 测试 | bridge.rs __getCookie/__setCookie + JS wrap |
+| sessionStorage | ✅ | 共享后端 | bridge.rs (same backend) |
+| history.* | ✅ | navigation_shim 测试 | QUICKJS_GLOBAL_SHIM |
+| location.* | ✅ | | QUICKJS_GLOBAL_SHIM |
+| setTimeout/clearTimeout | ✅ | integration_settimeout (6) | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
+| **setInterval/clearInterval** | ✅ | 手测（100 次硬上限防死循环） | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
+| Image | ✅ | image_shim 测试 | QUICKJS_GLOBAL_SHIM |
 
 ### 事件系统
 | API | 状态 | 备注 |
