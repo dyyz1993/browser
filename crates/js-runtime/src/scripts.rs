@@ -1043,8 +1043,38 @@ fn run_scripts_quickjs(
                                         stripped.push_str(&l);
                                         stripped.push('\n');
                                     }
-                                    // M76fin3: strip inline export{...} (solidjs/nuxt)
-                                    let stripped = stripped.replace("export{", "/*skip*/");
+                                    // M76fin4: 移除 export{...}（solidjs 行尾 ESM export）
+                                    let stripped = {
+                                        let mut s = String::with_capacity(stripped.len());
+                                        let b = stripped.as_bytes();
+                                        let mut i = 0;
+                                        while i < b.len() {
+                                            if i + 7 <= b.len() && &b[i..i+7] == b"export{"
+                                                || (i + 9 <= b.len() && &b[i..i+9] == b"}export{")
+                                            {
+                                                let start = if &b[i..i+7] == b"export{" { i+7 } else { i+9 };
+                                                // skip everything between export{ and matching }
+                                                let mut depth = 1;
+                                                let mut j = start;
+                                                while j < b.len() && depth > 0 {
+                                                    if b[j] == b'{' { depth += 1; }
+                                                    else if b[j] == b'}' { depth -= 1; }
+                                                    j += 1;
+                                                }
+                                                // skip trailing ;
+                                                while j < b.len() && b[j] == b';' { j += 1; }
+                                                // If the export{ was at start of segment (after }), only skip the export{ part
+                                                if start == i+9 {
+                                                    s.push('}');
+                                                }
+                                                i = j;
+                                            } else {
+                                                s.push(b[i] as char);
+                                                i += 1;
+                                            }
+                                        }
+                                        s
+                                    };
                                     let eval_code = format!(
                                         "if(typeof __react_stub==='undefined')function __react_stub(){{var r={{}};['jsxDEV','jsxs','Fragment','StrictMode','createElement','createRoot','useState','useEffect','useRef','useMemo','useCallback','useContext','useReducer','forwardRef','lazy','memo','createRef','hydrateRoot','render','createPortal','unmountComponentAtNode'].forEach(function(k){{r[k]=function(){{return null}}}});r['createRoot']=function(root){{return{{render:function(e){{}}}}}};return r;}}
                                          window.__vite_plugin_react_preamble_installed__=true;
