@@ -64,3 +64,11 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --all-targets
+
+      - name: JS bug-hunt fixtures
+        run: |
+          python3 tests/run_js_tests.py
+        shell: bash
+        env:
+          # Use release binary (built above)
+          BROWSER_BIN: target/release/browser
