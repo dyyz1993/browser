@@ -5,7 +5,7 @@
 
 <body>
   <div id="out"></div>
-  <script>var outEl=document.getElementById("out"); function w(l) {outEl.appendChild(document.createTextNode(l+String.fromCharCode(10)));} function a(n,c,d) {w(n+":"+(c? "PASS":"FAIL"+(d? "("+d+")":"")));} function safe(fn) {try {return fn();} catch(e) {return "__THREW__:"+e.message;} } try {fetch("/redirect-me").then(function(r) {a("fr",r.status===200);},function() {a("fr",false,"rejected");});} catch(e) {w("__SCRIPT_THREW__:"+e.message);}</script>
+  <script>var outEl=document.getElementById("out"); function w(l) {outEl.appendChild(document.createTextNode(l+String.fromCharCode(10)));} function a(n,c,d) {w(n+":"+(c? "PASS":"FAIL"+(d? "("+d+")":"")));} function safe(fn) {try {return fn();} catch(e) {return "__THREW__:"+e.message;} } try {fetch("./D01-fetch-json.html").then(function(r) {a("fr",r.status===200);},function() {a("fr",false,"rejected");});} catch(e) {w("__SCRIPT_THREW__:"+e.message);}</script>
 </body>
 
 </html>

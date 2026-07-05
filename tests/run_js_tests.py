@@ -40,7 +40,10 @@ def scan_html_file(path, server_port):
     stdout, stderr, rc = run_cmd([BINARY, "fetch", url, "--format", "text"], TIMEOUT)
 
     # Count JS errors in stderr
-    js_errors = [l.strip() for l in stderr.splitlines() if "[quickjs]" in l or "[js]" in l]
+    # Filter stderr: [js] [quickjs] Error lines are real JS errors
+    # but [js] [xhr] log lines are just XHR debug logs, not errors
+    js_errors = [l.strip() for l in stderr.splitlines()
+                 if ("[quickjs]" in l or "[js]" in l) and "Error" in l]
 
     # Extract content (non-debug lines from stdout)
     content = "\n".join(l for l in stdout.splitlines()
@@ -103,6 +106,7 @@ def main():
         def log_message(self, format, *args):
             pass
 
+    socketserver.TCPServer.allow_reuse_address = True
     httpd = socketserver.TCPServer(("", server_port), QuietHandler)
     httpd.timeout = 0.5
     server_thread = __import__("threading").Thread(target=httpd.serve_forever, daemon=True)
