@@ -640,8 +640,14 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 );
             }
             let extract_start = std::time::Instant::now();
-            let out_format = browser_extractor::OutputFormat::parse(&format)
-                .map_err(|e| anyhow!("invalid --format: {e}"))?;
+            let out_format = if json {
+                // --json 输出自身就是结构化格式，用 Text 格式提取内容
+                // 避免 extractor JSON 在 CLI JSON 内被双重编码。
+                browser_extractor::OutputFormat::Text
+            } else {
+                browser_extractor::OutputFormat::parse(&format)
+                    .map_err(|e| anyhow!("invalid --format: {e}"))?
+            };
             let opts = browser_extractor::FetchOptions {
                 format: out_format,
                 selector: selector.clone(),
