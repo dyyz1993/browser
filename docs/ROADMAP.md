@@ -23,7 +23,7 @@
 | M11 | ✅ | Bug 修复（vh/vw/rem/pt） | 217 |
 | M12 | ✅ | 截图 + 图像 ASCII（--screenshot / image-ascii） | 225 |
 | M13 | ✅ | Web Storage（localStorage/sessionStorage） | 241 |
-| M14 | 🟡 | Navigation（history/location） | 260（M14.1-3 完成） |
+| M14 | ✅ | Navigation（history/location） | 260（M14.1-3 完成） |
 | M15 | ✅ | Cookie jar（跨请求会话保持） | 291 |
 | M16 | ✅ | 异步 JS（setTimeout + Promise，boa 自研） | 318 |
 | M17 | ✅ | XMLHttpRequest（老 SPA 依赖） | 325 |
@@ -48,7 +48,28 @@
 | M36 | ✅ | 中文字体渲染（双字体回退，NotoSansSC GB2312 1.6MB） | 538 |
 | M37 | ✅ | render-file 异步 JS + 完整 Element 对象 | 538 |
 | M38 | ✅ | XHR status/readyState/onreadystatechange 补齐 | 538 |
-| M39+ | ⚪ | 前瞻（性能优化 / 更多 CSS 属性） | — |
+| M39 | ✅ | border + background-color ASCII 渲染 | 546 |
+| M40 | ✅ | 真实 SPA 站点评估 + timeout 修复 | 554 |
+| M41 | ✅ | Image 构造器 shim | 576 |
+| M42 | ✅ | CDP WebSocket server + JSON-RPC framework | 576 |
+| M43 | ✅ | CDP HTTP discovery endpoints | 587 |
+| M44 | ✅ | CDP Page domain（navigate + captureScreenshot） | 593 |
+| M45 | ✅ | CDP Runtime domain（evaluate） | 600+ |
+| M46 | ✅ | CDP DOM domain（querySelector + getOuterHTML） | 608 |
+| M47 | ✅ | CDP Network domain（getResponseBody） | 615+ |
+| M48 | ✅ | Puppeteer e2e 全链路打通（6 CDP fixes + eval_in_tree） | 625+ |
+| M49-M56 | ✅ | 真实 SPA 爬虫 / 事件补齐 / flatten session / FrameTree / lifecycleEvent | 625+ |
+| M57 | ✅ | CLI 命令 + 文档更新（GOALS/FEATURES/ROADMAP/ARCHITECTURE） | — |
+| M58 | ✅ | brotli/gzip 解码 + Interceptor trait | — |
+| **M59** | ✅ | **`browser fetch` CLI 爬虫命令 + extractor crate（4 格式）** | 776+ |
+| M60 | ✅ | boa 0.20→0.21 升级（async/await） | 776+ |
+| M61 | ✅ | fetch --smart 模式（先 SSR 后 JS） | — |
+| M62 | ✅ | JS 覆盖矩阵补齐（28 项 ES6+ 入库测试） | 776+ |
+| M65 | ✅ | Profile 模式（RSS + 耗时监控） | — |
+| M66 | ✅ | QuickJS 引擎（默认） + 双引擎 CLI 切换 | — |
+| M67 | ✅ | CDP QuickJS + 内容完整性度量（4 指标） | — |
+| M70 | ✅ | HTTP API serve 命令 + 并发进程护栏 | — |
+| M71 | ✅ | boa 降为 optional feature | — |
 
 ---
 

@@ -4,7 +4,7 @@
 
 ---
 
-## Crate 依赖图（M56 真实状态）
+## Crate 依赖图（M71 真实状态）
 
 ```
                               ┌─────────────┐
@@ -55,11 +55,13 @@
                  └──────────────┘
 ```
 
-**新增 crate（M16-M56）**：
+**新增 crate（M16-M71）**：
 - `browser-cdp` — Chrome DevTools Protocol server（WebSocket + HTTP discovery）
 - `browser-ws` — WebSocket client + TLS（native-tls）
 - `browser-cookie` — Cookie jar（RFC 6265 子集）
 - `browser-eventloop` — 异步事件循环（Timer/WS/Network）
+- `browser-extractor` — 后置内容提取器（markdown/html/text/links 格式）
+- `dom::html_ser` — DOM 子树 → HTML 字符串序列化（M57）
 
 ---
 
@@ -132,14 +134,14 @@ page::Page::new()  →  net::get(url)  →  HTML bytes
 | `render` | 246 | 布局树 → ASCII 文本 | GUI 窗口、PNG |
 | `js-runtime` | 2295 | boa 嵌入、JS↔DOM/storage/nav/WS/XHR/fetch/Image/Timer 桥 | JS 引擎本身 |
 | `page` | 17 | Page/Frame 编排（stub，待完善） | 具体子能力 |
-| `cli` | 1686 | 子命令分发、screenshot、image-ascii、CDP client | 业务逻辑 |
+| `cli` | 1947+ | 子命令分发、screenshot、image-ascii、CDP client、fetch 爬虫、serve API | 业务逻辑 |
 | `gui` | 528 | winit + softbuffer 窗口、URL 栏、滚动、字体 | 渲染算法 |
 | `storage` | 138 | localStorage/sessionStorage 后端（HashMap） | JS 桥 |
 | `navigation` | 297 | history/location 后端（HistoryStack） | JS 桥 |
 | **`ws`** | **474** | **WebSocket client + TLS（native-tls）** | **HTTP** |
 | **`cookie`** | **355** | **Cookie jar（RFC 6265 子集）** | **网络** |
 | **`eventloop`** | **497** | **Timer/WS/Network 事件循环** | **JS 逻辑** |
-| **`cdp`** | **1300+** | **CDP server（WebSocket + HTTP discovery + 11 domains）** | **前端渲染** |
+| **`cdp`** | **1500+** | **CDP server（WebSocket + HTTP discovery + 19 domains）** | **前端渲染** |
 
 ---
 

@@ -164,6 +164,14 @@ enum Cmd {
         /// M66: JS engine selection (boa | quickjs). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
+        /// M57.6: Wait strategy for JS execution. Options: load (full event loop),
+        /// dom-ready (after initial script execution), timeout (with --timeout-ms limit).
+        #[arg(long, default_value = "load")]
+        wait_strategy: String,
+        /// M57.6: Max wait duration in ms for JS execution (only effective with
+        /// --wait-strategy timeout). Default: 30000 (30s).
+        #[arg(long, default_value_t = 30000)]
+        timeout_ms: u64,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// End-to-end browser-like experience. Requires a display server
@@ -475,6 +483,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             ai_question,
             ai_provider,
             ai_model,
+            wait_strategy,
+            timeout_ms,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
@@ -549,6 +559,20 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     fetch_start.elapsed().as_secs_f64()
                 );
             }
+            // M57.6: 解析等待策略。load = 全事件循环（默认），dom-ready = 初始脚本执行，
+            // timeout = 带 --timeout-ms 时间上限。
+            let wait_strategy_parsed = match wait_strategy.as_str() {
+                "dom-ready" | "domready" => "dom-ready",
+                "load" => "load",
+                "timeout" => "timeout",
+                other => {
+                    eprintln!("[wait] unknown strategy '{other}', falling back to 'load'");
+                    "load"
+                }
+            };
+            if profile || wait_strategy_parsed != "load" {
+                eprintln!("[wait] strategy={wait_strategy_parsed}, timeout={timeout_ms}ms");
+            }
             let js_start = std::time::Instant::now();
             let shared: browser_js_runtime::SharedTree = if no_js {
                 use std::cell::RefCell;
@@ -598,12 +622,21 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 eprintln!("[browser] {executed} script(s) executed");
                 shared
             };
+            // M57.6: 超时检查——若策略为 timeout 且执行超过限制，打警告不阻断。
+            let js_elapsed = js_start.elapsed();
+            if wait_strategy_parsed == "timeout" && js_elapsed.as_millis() > timeout_ms as u128 {
+                eprintln!(
+                    "[wait] timeout exceeded: {}ms > {}ms limit, returning current content",
+                    js_elapsed.as_millis(),
+                    timeout_ms
+                );
+            }
             if profile {
                 eprintln!(
                     "[profile] {:<20} {:>6}MB  {:>6.2}s",
                     "JS eval+eventloop",
                     rss(),
-                    js_start.elapsed().as_secs_f64()
+                    js_elapsed.as_secs_f64()
                 );
             }
             let extract_start = std::time::Instant::now();

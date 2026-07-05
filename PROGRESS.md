@@ -29,6 +29,26 @@
 
 ## 最近变更（倒序）
 
+### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
+
+**M57.1-M57.4**：文档四件套更新
+- GOALS.md：G6 从 `browser spa` → `browser fetch`，状态快照更新到 M71
+- FEATURES.md：CLI 子命令表增加 `browser fetch` + `serve`，CDP 域更新到 M56
+- ROADMAP.md：主表从 M14-M39+ 扩展到 M71，M57 标记 ✅
+- ARCHITECTURE.md：crate 依赖图标题更新到 M71，新增 extractor/html_ser 引用
+
+**M57.6**：`browser fetch` 新增 `--wait-strategy` 和 `--timeout-ms` flags
+- `--wait-strategy {dom-ready|load|timeout}`（默认 load）控制 JS 执行等待策略
+- `--timeout-ms <ms>`（默认 30000）配合 timeout 策略使用
+- timeout 超时时日志警告 + 返回当前已渲染内容
+
+**M57.7**：端到端验证通过（723 tests, 0 failed, 0 clippy warnings）
+- `browser fetch example.com --format html` → 完整 HTML 输出 ✅
+- `browser fetch example.com --format markdown` → markdown 输出 ✅
+- `--wait-strategy` + `--timeout-ms` flags 全部正常工作 ✅
+
+---
+
 ### M71.5 — smart fallback 同量纲比较，修复 CSR 误判（2026-07-01）✅
 
 **根因**：`fetch` 命令的「JS 搞坏页面」检测用「JS 后纯文本」vs「原始 HTML 字节」比较

@@ -5,7 +5,7 @@
 
 ---
 
-## CLI 子命令（11 个）
+## CLI 子命令（12 个）
 
 | 子命令 | 功能 | 来源 |
 |--------|------|------|
@@ -14,10 +14,12 @@
 | `render-file <file>` | 解析 + 布局 + ASCII 渲染（**不执行 JS**） | M2 |
 | `render-script <file>` | 解析 + **执行 `<script>`** + ASCII 渲染 | M3 |
 | `render-url <url>` | fetch + parse + 执行 JS + 渲染（端到端 SPA） | M4 |
+| `fetch <url>` | **M59：curl 式 SPA 爬虫** — fetch+JS+等待策略+内容提取（markdown/html/text/links） | M59 |
 | `open <url>` | fetch + 渲染 + GUI 窗口显示 | M5 |
 | `image-ascii <file>` | PNG/JPG → ASCII art | M12.3 |
 | `screenshot <url>` | fetch + JS + 布局 + 网页 PNG 截图（支持 --max-height） | M12 | 
 | `cdp --port N` | 启动 Chrome DevTools Protocol server（Puppeteer/Playwright 兼容） | M42 |
+| `serve` | 启动 HTTP API 服务（Fetch/GUI 模式，快速并发） | M70 |
 | `spa <url>` | fetch + JS + 等待策略 + 输出完整 HTML（爬虫友好） | M57 | 
 
 通用 flag：`--width N`（终端宽度，默认 80）、`--screenshot <path>`（输出 PNG）。
