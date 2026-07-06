@@ -964,7 +964,18 @@ fn run_scripts_quickjs(
                                 if has_static {
                                     // M77: 先尝试 Module::eval（触发 Loader → 模块作用域执行）
                                     // Vite 的 ESM module 在模块作用域内正确执行所有依赖链。
-                                    if engine.eval_module_with_imports(&url, &raw_code).is_ok() {
+                                    // 修补 import.meta.env（QuickJS 不可赋，Loader 只处理依赖模块，
+                                    // 主模块 raw_code 是 scripts.rs 直接 fetch 的，不走 Loader patch）
+                                    // 原始 raw_code 保留给 strip 路径用
+                                    // 修补 import.meta.env / import.meta.hot
+                                    //（QuickJS 模块作用域不可写 meta 属性）
+                                    // __vite_hot_stub__ + __vite_env__ 必须提前定义
+                                    let preamble = "if(typeof __vite_hot_stub__==='undefined')var __vite_hot_stub__={accept:function(){},dispose:function(){},on:function(){},decline:function(){},invalidate:function(){},data:{}};\nif(typeof __vite_env__==='undefined')var __vite_env__={};\n";
+                                    let patched = preamble.to_string()
+                                        + &raw_code
+                                            .replace("import.meta.env", "__vite_env__")
+                                            .replace("import.meta.hot", "__vite_hot_stub__");
+                                    if engine.eval_module_with_imports(&url, &patched).is_ok() {
                                         // ESM module 已成功——模块自身代码（含 React createRoot 等）
                                         // 已在模块作用域执行并修改 DOM，跳过 strip 路径。
                                         // strip 路径会在全局作用域重跑代码，导致依赖引用碎裂。

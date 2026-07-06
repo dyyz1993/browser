@@ -447,10 +447,13 @@ impl QuickJsEngine {
                             // M76bis: finish 模块 eval，捕获异常不崩
                             match promise.finish::<()>() {
                                 Ok(()) => Ok(()),
-                                Err(_) => {
-                                    // M76fin: promise reject 不传播（React 模块已评估）
+                                Err(e) => {
+                                    // M77: 记录模块执行错误（之前静默捕获导致 main.tsx 失败无日志）
+                                    let err_msg = format!("{e:?}");
+                                    // 用 catch 清空 pending exception
                                     let _ = ctx.catch();
-                                    Ok(())
+                                    eprintln!("[js-runtime] module error ({name}): {err_msg}");
+                                    Err(err_msg)
                                 }
                             }
                         }
