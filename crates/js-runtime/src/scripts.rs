@@ -1306,9 +1306,10 @@ fn run_scripts_quickjs(
                 } else {
                     idle_rounds = 0;
                 }
-                // M70.13: DOM 稳定检测——body 内有**可见文本**（非空 div 占位）则内容已就绪。
+                // M77: DOM 稳定检测——body 内有**可见文本**（非空 div 占位）则内容已就绪。
                 // CSR SPA 的 body 初始就有 <div id="root">，老的 `children.length>0` 检测
                 // 把占位元素当成内容，导致事件循环 7ms 就退出，React 来不及渲染。
+                // 新方案：只在 idle grace 后才检测 dom_ready（给 React 至少 300ms 渲染时间）。
                 if idle_start.unwrap() >= EL_IDLE_GRACE {
                     let dom_ready = engine
                         .eval_js_bool(
@@ -1321,17 +1322,10 @@ fn run_scripts_quickjs(
                 }
             }
         }
-        if fired == 0 && dyn_executed == 0 && trans_fired == 0 && ws_events.is_empty() {
-            let has = engine.eval_js_bool("__hasPendingTimers()").unwrap_or(false);
-            let has_trans = engine
-                .eval_js_bool("__hasPendingTransitions()")
-                .unwrap_or(false);
-            // M72.4: 有活动 WS 连接时继续轮询（等 onopen/onmessage）
-            let has_ws = crate::bridge::ws_connection_count() > 0;
-            if !has && !has_trans && !has_ws {
-                break;
-            }
-        }
+        // M77: 移除了 `__hasPendingTimers()` 立即 break 逻辑——
+        // CSR 框架（React/Vue）的异步渲染不依赖我们的 setTimeout shim，
+        // 无 pending timer 不代表渲染完成。让 idle 检测链
+        // （grace → rounds → dom_ready → max_total）决定退出时机。
         if el_start.elapsed() >= EL_MAX_TOTAL {
             break;
         }
