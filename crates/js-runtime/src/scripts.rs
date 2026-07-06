@@ -962,13 +962,20 @@ fn run_scripts_quickjs(
                                 // Vite 用绝对路径 from "/@react-refresh"——from"./" 检测漏了。
                                 let has_static = has_static_esm_syntax(&raw_code);
                                 if has_static {
-                                    // M76fin: 先尝试 Module::eval（触发 Loader → namespace registry）
-                                    // 即使 main.tsx runtime 失败，React namespace 已被 Loader 捕获
-                                    if let Err(e) = engine.eval_module_with_imports(&url, &raw_code)
-                                    {
-                                        eprintln!("[js-runtime] pre-eval (will strip): {e}");
+                                    // M77: 先尝试 Module::eval（触发 Loader → 模块作用域执行）
+                                    // Vite 的 ESM module 在模块作用域内正确执行所有依赖链。
+                                    if engine.eval_module_with_imports(&url, &raw_code).is_ok() {
+                                        // ESM module 已成功——模块自身代码（含 React createRoot 等）
+                                        // 已在模块作用域执行并修改 DOM，跳过 strip 路径。
+                                        // strip 路径会在全局作用域重跑代码，导致依赖引用碎裂。
+                                        executed += 1;
+                                        continue;
+                                    } else {
+                                        eprintln!(
+                                            "[js-runtime] module eval (strip fallback): {url}"
+                                        );
                                     }
-                                    // M76ter: strip import/export 后 eval 为普通 script
+                                    // M76ter: 仅当模块 eval 失败时，strip import/export 后 eval 为普通 script
                                     let mut stripped = String::new();
                                     for line in raw_code.lines() {
                                         let t = line.trim_start();
@@ -1299,10 +1306,14 @@ fn run_scripts_quickjs(
                 } else {
                     idle_rounds = 0;
                 }
-                // M70.13: DOM 稳定检测——body 有子节点则内容已就绪，提前退出。
+                // M70.13: DOM 稳定检测——body 内有**可见文本**（非空 div 占位）则内容已就绪。
+                // CSR SPA 的 body 初始就有 <div id="root">，老的 `children.length>0` 检测
+                // 把占位元素当成内容，导致事件循环 7ms 就退出，React 来不及渲染。
                 if idle_start.unwrap() >= EL_IDLE_GRACE {
                     let dom_ready = engine
-                        .eval_js_bool("__findTag('body')>0&&__children(__findTag('body')).length>0")
+                        .eval_js_bool(
+                            "__findTag('body')>0&&__getText(__findTag('body')).trim().length>80",
+                        )
                         .unwrap_or(false);
                     if dom_ready {
                         break;
