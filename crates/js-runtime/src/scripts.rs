@@ -2531,6 +2531,13 @@ Object.defineProperty(Element.prototype, 'nodeType', {
     get: function() { return this.__isFragment ? 11 : 1; },
     enumerable: true, configurable: true
 });
+// M77: ownerDocument——React 事件系统检查 rootContainerElement.ownerDocument
+// 如果返回 undefined，React 的 `!== null` 检查会误判（undefined !== null = true），
+// 然后试图在 undefined 上设 _reactListening 属性，抛 "cannot read property of undefined"。
+Object.defineProperty(Element.prototype, 'ownerDocument', {
+    get: function() { return typeof document !== 'undefined' ? document : null; },
+    enumerable: true, configurable: true
+});
 Object.defineProperty(Element.prototype, 'style', {
     get: function() {
         // M70.13: 返回一个可写 style 对象，属性变更时触发 __onStyleChange（CSS transition 仿真）。
