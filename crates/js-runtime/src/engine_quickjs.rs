@@ -95,6 +95,8 @@ impl rquickjs_core::loader::Loader for HttpLoader {
         let is_cjs = !source.contains("export") && !source.contains("import");
         let wrapped = if is_cjs {
             format!("{source}\nexport{{}};")
+        } else if wrapped_needs_named_exports(&source) {
+            add_named_exports_to_source(source)
         } else {
             source
         };
@@ -130,6 +132,74 @@ impl rquickjs_core::loader::Loader for HttpLoader {
             }
         }
         declared
+    }
+}
+
+/// M77: 检测模块是否需要为 Vite CJS→ESM wrapper 加命名导出。
+/// 条件：有 `export default <call>()` 且无别的 `export` 语句。
+fn wrapped_needs_named_exports(source: &str) -> bool {
+    if !source.contains("export default ") {
+        return false;
+    }
+    if !source.contains("exports.") {
+        return false;
+    }
+    // 检查是否有非 default 的 export 语句（忽略 export default 自身）
+    // 检查行首的 `export`（非字符串内的 `"export`）
+    let mut other_export = false;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("export ") && !trimmed.starts_with("export default ") {
+            other_export = true;
+            break;
+        }
+    }
+    !other_export
+}
+
+/// M77: 为 CJS→ESM wrapper 添加命名导出（解析 `exports.XXX =` 模式）。
+fn add_named_exports_to_source(source: String) -> String {
+    // 收集 CJS callback 内 `exports.XXX =` 的 export 名
+    let mut export_names: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("exports.") {
+            let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$');
+            if let Some(end) = name_end {
+                let name = &rest[..end];
+                if !name.is_empty() && !export_names.iter().any(|n| n == name) {
+                    export_names.push(name.to_string());
+                }
+            }
+        }
+    }
+    if export_names.is_empty() {
+        return source;
+    }
+    // 找到 `export default <expr>` 行，替换成两行版本 + 命名导出
+    let export_line_marker = "export default ";
+    if let Some(line_start) = source.find(export_line_marker) {
+        // 找到行尾
+        let after_marker = line_start + export_line_marker.len();
+        let line_end = source[after_marker..]
+            .find('\n')
+            .map(|i| after_marker + i)
+            .unwrap_or(source.len());
+        // 提取表达式的值（去除分号末尾）
+        let expr = source[after_marker..line_end]
+            .trim_end()
+            .trim_end_matches(';');
+        let prefix = &source[..line_start];
+        let suffix = &source[line_end..];
+        let mut named_exports: String = String::new();
+        for name in &export_names {
+            named_exports.push_str(&format!("export const {name} = __vite_ns__.{name};\n"));
+        }
+        format!(
+            "{prefix}var __vite_ns__ = {expr};\nexport default __vite_ns__;\n{named_exports}{suffix}"
+        )
+    } else {
+        source
     }
 }
 

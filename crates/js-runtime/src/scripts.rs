@@ -1125,6 +1125,18 @@ fn run_scripts_quickjs(
                 }
             }
             ScriptEntry::InlineModule(code) => {
+                // M77: inline module 有 import → 走 Module::declare + eval（正确解析命名导出）。
+                // 老路径 strip import 后当普通 script eval，`import { hello }` 的 hello 未定义。
+                if code.contains("import ") || code.contains("import{") {
+                    let module_url = base_url.as_deref().unwrap_or("about:blank").to_string()
+                        + "?inline="
+                        + &executed.to_string();
+                    if engine.eval_module_with_imports(&module_url, code).is_ok() {
+                        executed += 1;
+                        continue;
+                    }
+                    // 失败时回退到 strip 路径
+                }
                 // M75+M76: 检测静态 import { / import{ / import *，Vite minified 无空格。
                 let has_static_import = code.contains("import {")
                     || code.contains("import *")
