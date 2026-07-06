@@ -440,33 +440,20 @@ impl QuickJsEngine {
     /// 用 Module::declare + eval + catch 全部在 ctx.with 闭包内完成。
     pub fn eval_module_with_imports(&mut self, name: &str, source: &str) -> Result<(), String> {
         self.ctx.with(|ctx: Ctx| {
-            match Module::declare(ctx.clone(), name, source) {
-                Ok(module) => {
-                    match module.eval() {
-                        Ok((_m, promise)) => {
-                            // M76bis: finish 模块 eval，捕获异常不崩
-                            match promise.finish::<()>() {
-                                Ok(()) => Ok(()),
-                                Err(e) => {
-                                    // M77: 记录模块执行错误（之前静默捕获导致 main.tsx 失败无日志）
-                                    let err_msg = format!("{e:?}");
-                                    // 用 catch 清空 pending exception
-                                    let _ = ctx.catch();
-                                    eprintln!("[js-runtime] module error ({name}): {err_msg}");
-                                    Err(err_msg)
-                                }
-                            }
-                        }
-                        Err(e) => Err(format!("module eval: {e:?}")),
+            // M77: 改用 Module::evaluate（一步完成 declare + eval + promise resolve）。
+            // 之前 Module::declare + module.eval() + promise.finish 的顺序在某些 QuickJS
+            // 版本上会导致模块 eval 时报 "cannot read property '0' of undefined"——
+            // 可能是作用域竞争。Module::evaluate 是原始逻辑的合体。
+            match Module::evaluate(ctx.clone(), name, source) {
+                Ok(_promise) => match _promise.finish::<()>() {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        eprintln!("[js-runtime] module error ({name}): {e}");
+                        let _ = ctx.catch();
+                        Err(format!("{e}"))
                     }
-                }
-                Err(e) => {
-                    let diag = format!("{e:?}");
-                    Err(format!(
-                        "module declare: {diag} | name={name} | first_200={snippet}",
-                        snippet = &source[..source.len().min(200)]
-                    ))
-                }
+                },
+                Err(e) => Err(format!("module evaluate: {e:?}")),
             }
         })
     }
