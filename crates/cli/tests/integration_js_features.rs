@@ -1288,6 +1288,59 @@ document.getElementById('out').textContent =
     let _ = std::fs::remove_file(&path);
 }
 
+/// M78.10: innerText setter 规范语义（\n→<br>+子节点替换）+ getter 布局近似
+/// （块级边界换行 + display:none 子树排除）。
+#[test]
+fn inner_text_setter_and_layout_aware_getter() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="t1">abc<div>def</div>ghi</div>
+<div id="t2">a<div style="display:none">HID</div>b</div>
+<div id="set">OLD</div>
+<div id="out">FAIL</div>
+<script>
+var t1 = document.getElementById('t1').innerText;
+var t2 = document.getElementById('t2').innerText;
+var el = document.getElementById('set');
+el.innerText = 'line1\nline2';
+var nl1 = t1.split('\n').length;
+var nl2 = el.innerText.split('\n').length;
+document.getElementById('out').textContent =
+    'RES_' + nl1 + '_' + (t2.indexOf('HID') < 0) + '_' + nl2 + '_' + el.childNodes.length;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "200"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RES_3_true_2_3"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78.10: new Document() 实体（createCDATASection/createTextNode）+
+/// document.implementation.createHTMLDocument + 命名访问不遮蔽全局。
+#[test]
+fn document_entity_and_named_access_shadowing() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="test">DIV</div>
+<div id="out">FAIL</div>
+<script>
+var doc = new Document();
+var cd = doc.createCDATASection('x');
+var impl = document.implementation.createHTMLDocument('t').title;
+// <div id=test> 不得遮蔽全局赋值（testharness 的 self.test = fn 模式）
+test = function() { return 42; };
+document.getElementById('out').textContent =
+    'DE_' + doc.nodeType + cd.nodeType + '_' + impl + '_' + (typeof test === 'function' ? 'fn' : 'NOT');
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "160"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DE_94_t_fn"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

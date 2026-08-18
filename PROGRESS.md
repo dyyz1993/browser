@@ -213,6 +213,28 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   排除登记（moveBefore/render-blocking/tentative/Highlight ~55 行基建）。
 - **harness 已知问题**：latest.json 被单类别跑覆盖（下轮改分文件合并）。
 
+**M78.10 循环 10 —— innerText 布局感知 + Document 实体 + 命名访问白名单**：
+
+- **innerText**：getter 带布局近似（块级边界插 \n + display:none 子树排除 +
+  <br>→\n + script/style/template 跳过，纯 JS 遍历）；setter 规范语义
+  （HTML 转义 + \n→<br> + __parseHtml 替换子节点）。新增 `__textData` 桥
+  （文本节点自身 data——`__getText` 聚合子树，对文本节点本身返回空）。
+  text-transform 类真排版需求超目标（AGENTS 非 1:1 渲染）。
+- **new Document() 实体**：createElement/TextNode/Comment/CDATASection/
+  ProcessingInstruction/DocumentFragment/Range/Event + appendChild；
+  `document.implementation.createHTMLDocument`（dom/common.js setupRangeTests
+  链路，解锁 Range 簇的前提）。
+- **命名访问白名单**：`<div id=test>` 的 accessor 会吞 sloppy 全局赋值
+  （testharness 的 self.test = fn）和 var 声明——本轮曾造成 html_dom
+  246→90 的大回归（跨 manifest 对照排查 3 轮定位）。改为 35 个保留全局名
+  白名单跳过 + accessor 带 set 转 数据属性。
+- **harness（子任务 D）**：OUT_OF_SCOPE 排除登记（moveBefore/render-blocking/
+  partial-updates/tentative/OpaqueRange/Highlight/shadow-dom 精确 token，
+  html_dom 109→92 页，css/webapi/storage 误伤 0）；latest.json 分文件合并
+  （单类别跑不再互相清零）。
+- 测试：+2 集成（innerText 语义、Document 实体+命名访问）。html_dom 同
+  manifest +4（86→90）。757 passed 0 failed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

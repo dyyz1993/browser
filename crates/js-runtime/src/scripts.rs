@@ -2457,18 +2457,52 @@ if (typeof EventTarget === 'undefined') {
 }
 
 // Document（框架检查 instanceof Document）
+// M78.10: 真实体——WPT dom/common.js setupRangeTests 用 xmlDocument.
+// createCDATASection/createComment/appendChild 链（空壳让 setup 崩，
+// Range 簇整页 harness-not-run）。元素挂到独立子树（__createEl 默认挂 body，
+// 可接受：WPT 只读节点属性/树形，不要求脱离主文档）。
 if (typeof Document === 'undefined') {
-    window.Document = function() {};
+    window.Document = function Document() {
+        this.nodeType = 9;
+        this.nodeName = '#document';
+        this.readyState = 'complete';
+        this.contentType = 'application/xml';
+    };
     Document.prototype = Object.create(Object.prototype);
+    Object.defineProperty(Document.prototype, Symbol.toStringTag, { value: 'Document' });
     Document.prototype.body = null;
     Document.prototype.documentElement = null;
-    Document.prototype.readyState = 'complete';
     Document.prototype.addEventListener = function() {};
     Document.prototype.removeEventListener = function() {};
     Document.prototype.dispatchEvent = function() { return true; };
-    Document.prototype.createElement = function(tag) { return { tagName: tag.toUpperCase() }; };
-    Document.prototype.createTextNode = function(t) { return { nodeType: 3, textContent: t, data: t }; };
+    Document.prototype.createElement = function(tag) { return document.createElement(tag); };
+    Document.prototype.createElementNS = function(ns, tag) { return document.createElement(tag); };
+    Document.prototype.createTextNode = function(t) { return document.createTextNode(t); };
+    Document.prototype.createComment = function(t) { return document.createComment(t); };
+    Document.prototype.createCDATASection = function(t) {
+        return { nodeType: 4, nodeName: '#cdata-section', data: String(t), textContent: String(t) };
+    };
+    Document.prototype.createProcessingInstruction = function(target, data) {
+        return { nodeType: 7, nodeName: String(target), data: String(data), target: String(target) };
+    };
+    Document.prototype.createDocumentFragment = function() { return document.createDocumentFragment(); };
+    Document.prototype.createRange = function() { return new Range(); };
+    Document.prototype.createEvent = function(t) { return document.createEvent(t); };
+    Document.prototype.appendChild = function(child) {
+        if (child && typeof child.__nodeId === 'number') __appendChild(this.__rootId || __getBody(0), child.__nodeId);
+        return child;
+    };
+    Document.prototype.getElementsByTagName = function() { return []; };
+    Document.prototype.getElementById = function() { return null; };
+    Document.prototype.querySelector = function() { return null; };
+    Document.prototype.querySelectorAll = function() { return []; };
 }
+// M78.10: document.implementation —— dom/common.js L78 用
+// implementation.createHTMLDocument（Node-removeChild 系列也依赖）。
+document.implementation = {
+    createHTMLDocument: function(title) { return document.createHTMLDocument(title); },
+    hasFeature: function() { return true; }
+};
 
 // DocumentFragment
 if (typeof DocumentFragment === 'undefined') {
@@ -2690,7 +2724,9 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
             var id = parseInt(ids[i], 10);
             var tag = __getTag(id);
             var text = __getText(id);
-            if (tag === '__text__') {
+            // M78.10: 真 Text 节点（__parseHtml/html5ever 插入）getTag 返回空串，
+            // 与 shim 的 '__text__' 伪标签同等按文本输出。
+            if (!tag || tag === '__text__') {
                 out += text;
             } else {
                 out += '<' + tag + '>' + text + '</' + tag + '>';
@@ -2704,6 +2740,68 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
             __parseHtml(this.__nodeId, s);
         } else {
             __setText(this.__nodeId, s);
+        }
+    },
+    enumerable: true, configurable: true
+});
+// M78.10: innerText —— getter 带布局感知近似（块级边界插 \n + display:none
+// 子树排除 + <br>→\n，纯 JS 遍历）；setter 按规范语义：文本 HTML 转义 +
+// 换行拆分插 <br> + 替换全部子节点。text-transform 类真排版需求超目标。
+function __innerTextWalk(nodeId, out) {
+    var cs = __children(nodeId);
+    if (!cs) return;
+    var ids = cs.split(',');
+    var __blockTags = { DIV:1, P:1, UL:1, OL:1, LI:1, H1:1, H2:1, H3:1, H4:1, H5:1, H6:1,
+        SECTION:1, ARTICLE:1, HEADER:1, FOOTER:1, NAV:1, BLOCKQUOTE:1, PRE:1,
+        TABLE:1, TR:1, ADDRESS:1, MAIN:1, ASIDE:1, FIGURE:1, FIELDSET:1, DETAILS:1 };
+    for (var i = 0; i < ids.length; i++) {
+        if (!ids[i]) continue;
+        var id = parseInt(ids[i], 10);
+        var tag = (__getTag(id) || '').toUpperCase();
+        if (!tag || tag === '__TEXT__') {
+            // 真 Text 节点用 __textData；shim 伪文本元素（__createEl('__text__')
+            // + __setText，文本在其子 Text 节点）fallback 到 __getText 聚合。
+            var t = (typeof __textData === 'function') ? __textData(id) : '';
+            if (!t) t = __getText(id);
+            out.push(t);
+        } else if (tag === 'BR') {
+            out.push('\n');
+        } else if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') {
+            // 不可见子树
+        } else {
+            // display:none 子树排除（inline style 近似）
+            var st = __getAttr(id, 'style') || '';
+            if (/display\s*:\s*none/i.test(st)) continue;
+            var isBlock = __blockTags[tag] === 1;
+            if (isBlock) out.push('\n');
+            __innerTextWalk(id, out);
+            if (isBlock) out.push('\n');
+        }
+    }
+}
+Object.defineProperty(Element.prototype, 'innerText', {
+    get: function() {
+        var out = [];
+        __innerTextWalk(this.__nodeId, out);
+        var joined = out.join('');
+        // 规范：首尾各去一个换行，连续换行折叠保留（简化：首尾 strip）
+        return joined.replace(/^\n/, '').replace(/\n$/, '');
+    },
+    set: function(v) {
+        var text = String(v == null ? '' : v);
+        function esc(s) {
+            return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        var lines = text.split('\n');
+        var html = '';
+        for (var i = 0; i < lines.length; i++) {
+            if (i > 0) html += '<br>';
+            html += esc(lines[i]);
+        }
+        if (typeof __parseHtml === 'function' && html.length > 0) {
+            __parseHtml(this.__nodeId, html);
+        } else {
+            __setText(this.__nodeId, text);
         }
     },
     enumerable: true, configurable: true
@@ -3279,12 +3377,28 @@ window.__hasPendingTransitions = function() {
 // （WPT 测试大量使用 `div2_3` 这类裸引用）。shim 安装时 DOM 已解析，
 // 为每个 id 惰性定义 getter。动态新建元素不覆盖（已知子集，记录于 PROGRESS）。
 try {
+    // M78.10: 命名访问——白名单外的 id 才定义。常见全局名（testharness 的
+    // test/setup/done、浏览器自身属性）不定义 accessor：<div id=test> 会把
+    // self.test = fn 变成 getter 调用（sloppy 静默吞赋值）或吞 var 声明，
+    // 曾致 html_dom 类 246→90 的整片回归（var x 声明被 accessor 挡住后
+    // 读取得 undefined）。
+    var __reservedGlobals = { test:1, setup:1, done:1, name:1, top:1, self:1,
+        parent:1, opener:1, closed:1, status:1, length:1, history:1, location:1,
+        document:1, window:1, navigator:1, frame:1, frames:1, origin:1, close:1,
+        open:1, focus:1, blur:1, print:1, stop:1, postMessage:1, alert:1,
+        confirm:1, prompt:1, scroll:1, scrollTo:1, scrollBy:1, getComputedStyle:1,
+        matchMedia:1, requestAnimationFrame:1, cancelAnimationFrame:1 };
     var __namedIds = (typeof __allIds === 'function') ? String(__allIds() || '') : '';
     __namedIds.split(',').forEach(function(id) {
-        if (id && !(id in window)) {
+        if (id && !(id in window) && !__reservedGlobals[id]) {
             try {
                 Object.defineProperty(window, id, {
                     get: function() { return document.getElementById(id); },
+                    set: function(v) {
+                        // 真实全局赋值优先：转数据属性（named access 是 fallback）。
+                        try { delete window[id]; } catch (e) {}
+                        try { window[id] = v; } catch (e) {}
+                    },
                     configurable: true, enumerable: false
                 });
             } catch (e) {}

@@ -2846,6 +2846,15 @@ pub mod qjs_bridge {
         })
     }
 
+    /// M78.10: textData(id) -> 节点自身 Text data（__getText 聚合子树，
+    /// 对文本节点本身返回空；innerText getter 逐节点遍历需要自身值）。
+    pub fn text_data(node_id: f64) -> String {
+        with_tree(|t| match t.data(node_id as usize) {
+            NodeData::Text(s) => s.clone(),
+            _ => String::new(),
+        })
+    }
+
     /// M78: attrsOf(id) -> "k=v\nk=v" —— element.attributes（NamedNodeMap）反射。
     pub fn attrs_of(node_id: f64) -> String {
         with_tree(|t| {

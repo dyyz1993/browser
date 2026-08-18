@@ -9,8 +9,8 @@
 
 用法：
   python3 tests/compat/run_compat.py --lock            # 扫描 suites/ 生成锁定清单 manifest.json
-  python3 tests/compat/run_compat.py                    # 全量跑分 → results/latest.json + report.md
-  python3 tests/compat/run_compat.py --category html_dom
+  python3 tests/compat/run_compat.py                    # 全量跑分 → 合并 results/*.json 生成 latest.json + report.md
+  python3 tests/compat/run_compat.py --category html_dom  # 单类别跑 → 只写 results/html_dom.json（不动 latest.json）
   python3 tests/compat/run_compat.py --verdict          # 目标判定（总分≥0.85 且每类≥0.50）
 """
 import argparse
@@ -85,6 +85,15 @@ WPT_EXCLUDE_PATTERNS = [
     ".any.window", ".any.worker", "crossOriginIsolated", "reporting",
     # M78: testdriver 自动化（需要 WebDriver/CDP 驱动的合成输入）与人工测试
     "/resources/testdriver", "-manual.html", "test-rerun", ".sub.html",
+    # M78.9: OUT_OF_SCOPE 簇登记（对齐 AGENTS.md 非目标——与 target_profile=
+    # crawler-spa 无关，不排除会以 0 分进分母虚降兼容性分）
+    "moveBefore/",                      # Chrome 133+ moveBefore 新 API
+    "render-blocking",                  # document.renderBlocking 基建
+    "/partial-updates/", "tentative",   # 规范草案（目录或 .tentative 标记）
+    "OpaqueRange", "::highlight", "css-highlight",  # CSS Custom Highlight API
+    "shadow-root", "ShadowRoot", "attachShadow", "shadowRoot",
+    "shadowrootmode", "shadow-relatedTarget", "-shadow.html",
+    "focus-within-shadow",              # shadow-dom 子树（dom/shadow-root 若被选入）
 ]
 
 PASS, FAIL, TIMEOUT, CRASH, NOT_RUN = "PASS", "FAIL", "TIMEOUT", "CRASH", "NOT_RUN"
@@ -486,19 +495,70 @@ def normalize_fail(detail):
     return d[:90]
 
 
-def write_report(manifest, agg, perf, extra_rows=None):
-    os.makedirs(RESULTS, exist_ok=True)
+def compute_totals(manifest, agg):
+    """总分与各类别分（latest.json 的 total/categories 来源）。"""
     total_score, cat_scores = 0.0, {}
-    lines = ["# M78 兼容性评分报告", "", "生成时间: " + time.strftime("%Y-%m-%d %H:%M:%S"), ""]
-    lines.append("| 类别 | 权重 | 通过/总数 | 类分 |")
-    lines.append("|------|------|-----------|------|")
     for cat, info in manifest["categories"].items():
         a = agg.get(cat, {"pass": 0, "total": 0, "fails": {}})
         score = (a["pass"] / a["total"]) if a["total"] else 0.0
         cat_scores[cat] = round(score, 4)
         total_score += info["weight"] * score
+    return round(total_score, 4), cat_scores
+
+
+def category_result_path(cat):
+    return os.path.join(RESULTS, "%s.json" % cat)
+
+
+def write_category_result(cat, rows):
+    """单类别结果落盘 results/<category>.json。
+
+    M78.9: --category 循环各自只写自己的分文件；latest.json/report.md 只在
+    全量跑时合并生成——此前 write_report 整文件覆盖 latest.json，导致
+    --category 循环互相清零。
+    """
+    os.makedirs(RESULTS, exist_ok=True)
+    agg = score_rows(rows)
+    with open(category_result_path(cat), "w", encoding="utf-8") as f:
+        json.dump({"category": cat, "agg": agg, "rows": rows,
+                   "generated": time.strftime("%Y-%m-%d %H:%M:%S")}, f,
+                  ensure_ascii=False, indent=1)
+    a = agg.get(cat, {"pass": 0, "total": 0, "fails": {}})
+    print("[save] %-28s %d/%d → %s" % (cat, a["pass"], a["total"], category_result_path(cat)))
+
+
+def merge_category_results(manifest, this_agg, this_rows):
+    """全量报告数据源：优先读 results/<cat>.json，缺失/损坏类别用本轮数据补齐。"""
+    agg, rows = {}, []
+    for cat in manifest["categories"]:
+        data = None
+        p = category_result_path(cat)
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                data = None
+        if data and cat in data.get("agg", {}):
+            agg.update(data["agg"])
+            rows.extend(data.get("rows", []))
+        else:
+            if cat in this_agg:
+                agg[cat] = this_agg[cat]
+            rows.extend([r for r in this_rows if r[0] == cat])
+    return agg, rows
+
+
+def write_report(manifest, agg, perf, extra_rows=None):
+    os.makedirs(RESULTS, exist_ok=True)
+    total_score, cat_scores = compute_totals(manifest, agg)
+    lines = ["# M78 兼容性评分报告", "", "生成时间: " + time.strftime("%Y-%m-%d %H:%M:%S"), ""]
+    lines.append("| 类别 | 权重 | 通过/总数 | 类分 |")
+    lines.append("|------|------|-----------|------|")
+    for cat, info in manifest["categories"].items():
+        a = agg.get(cat, {"pass": 0, "total": 0, "fails": {}})
+        score = cat_scores[cat]
         lines.append("| %s | %.2f | %d/%d | %.3f |" % (cat, info["weight"], a["pass"], a["total"], score))
-    total_score = round(total_score, 4)
     lines += ["", "**总分: %.4f**（目标 ≥ 0.85）" % total_score, ""]
     lines.append("## 失败频率表（每类 Top 15，循环燃料）")
     for cat, info in manifest["categories"].items():
@@ -609,17 +669,25 @@ def main():
                 print("[run] %-28s 第%d轮 %d/%d (%.1fs)" % (
                     cat, i + 1, a["pass"], a["total"], time.time() - t0))
             rounds.sort(key=lambda x: x[0])
-            rows.extend(rounds[len(rounds) // 2][1])
-        # storage_nav_cdp 类并入 CDP 代理分（占该类一半权重）
-        if (not args.category) or args.category == "storage_nav_cdp":
-            cdp = cdp_proxy_score()
-            wpt_a = {r for r in rows}
-            for i in range(cdp["total"]):
-                rows.append(("storage_nav_cdp", "cdp-proxy#%d" % i,
-                             PASS if i < cdp["pass"] else FAIL, "cdp-unit", 0))
-        perf = measure_perf()
-        agg = score_rows(rows)
-        total, cat_scores = write_report(manifest, agg, perf, extra_rows=rows)
+            cat_rows = list(rounds[len(rounds) // 2][1])
+            # storage_nav_cdp 类并入 CDP 代理分（占该类一半权重；只归属该类别，
+            # 随 results/storage_nav_cdp.json 一起落盘）
+            if cat == "storage_nav_cdp":
+                cdp = cdp_proxy_score()
+                for i in range(cdp["total"]):
+                    cat_rows.append(("storage_nav_cdp", "cdp-proxy#%d" % i,
+                                     PASS if i < cdp["pass"] else FAIL, "cdp-unit", 0))
+            rows.extend(cat_rows)
+            write_category_result(cat, cat_rows)
+        # M78.9: 全量跑合并 results/*.json 生成 latest.json + report.md；
+        # 单类别跑只写 results/<category>.json，不再整文件覆盖 latest.json
+        #（此前 --category 循环互相清零）。
+        merged_agg, merged_rows = merge_category_results(manifest, score_rows(rows), rows)
+        if args.category:
+            total, cat_scores = compute_totals(manifest, merged_agg)
+        else:
+            perf = measure_perf()
+            total, cat_scores = write_report(manifest, merged_agg, perf, extra_rows=merged_rows)
         if args.verdict:
             spa = spa_task_score()
             ok_total = total >= 0.85
