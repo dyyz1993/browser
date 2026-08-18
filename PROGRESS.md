@@ -98,6 +98,26 @@ css_selector 类分变化：0.000 → 0.273（循环 2）→ **0.915**（43/47�
 测试：css-engine +3 单测，cli +4 集成（dash-match 样式、display:none、
 insertAdjacentText、命名访问+身份）。741 passed。
 
+**M78.5 循环 4 —— 脚本 MIME 强制 + DOMTokenList + testdriver/manual 排除**：
+
+- **脚本 MIME 强制**（对齐浏览器 classic script 行为）：静态路径
+  （fetch_external_script 改 get_with_headers + MIME 门）+ 动态路径
+  （appendChild script 先 `__fetchScriptMimeOk` 桥检查，非 JS MIME 触发
+  onerror 不执行）。允许集：JS 系列 + text/html/text/plain（历史兼容，
+  WPT block-mime 断言）+ 缺失头；text/csv、audio/*、video/*、image/* 阻止。
+- **harness 基建**：python handler 支持 `script-with-header.py?content=&mime=`
+  （WPT 服务端脚本的极小子集）。
+- **DOMTokenList 真类**：Symbol.toStringTag（`[object DOMTokenList]`）+
+  惰性身份缓存 + value getter/setter + Symbol.iterator/forEach/entries +
+  replace。旧实现是每次访问新建的裸对象（toStringTag 缺失、身份不等）。
+- **选例卫生**：排除模式同时匹配路径与内容；新增 `-manual.html`（人工测试）、
+  `/resources/testdriver`（需 WebDriver 合成输入）、`.sub.html`（服务端模板）
+  ——均为测试基建依赖，登记 manifest excluded，非浏览器能力。
+
+类分变化：webapi 0.030→**0.308**（block-mime 22 子测试全过）；html_dom
+0.292→**0.395**（DOMTokenList）；storage_nav_cdp 0.437（WPT 部分 14/126 +
+CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

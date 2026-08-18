@@ -735,10 +735,23 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
         // 用 tokio::time::timeout 给 fetch 加 60s 上限（GitHub rspack chunk 最大 258KB）
         let result = rt.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(30), client.get(&url_owned)).await
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                client.get_with_headers(&url_owned, None),
+            )
+            .await
         });
         match result {
-            Ok(Ok(bytes)) => {
+            Ok(Ok((bytes, headers))) => {
+                // M78: 脚本 MIME 强制（对齐浏览器）：非 JS MIME 的 classic script 不执行。
+                let mime = headers
+                    .iter()
+                    .find(|(k, _)| k.as_str().eq_ignore_ascii_case("content-type"))
+                    .and_then(|(_, v)| v.to_str().ok())
+                    .map(str::to_string);
+                if !script_mime_executable(mime.as_deref()) {
+                    return Err(format!("blocked script MIME: {}", mime.unwrap_or_default()));
+                }
                 String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))
             }
             Ok(Err(e)) => Err(format!("{e:?}")),
@@ -754,6 +767,74 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
         cache.insert(url.to_string(), code.clone());
     }
     Ok(code)
+}
+
+/// M78: classic script 可执行的 MIME 集。JS 系列 + 缺失头可执行；
+/// text/html / text/plain 历史兼容可加载（WPT block-mime-as-script 断言）。
+/// 其余（text/csv、audio/*、video/*、image/* 等）阻止执行。
+fn script_mime_executable(mime: Option<&str>) -> bool {
+    let Some(m) = mime else {
+        return true;
+    };
+    let base = m.split(';').next().unwrap_or("").trim().to_lowercase();
+    matches!(
+        base.as_str(),
+        "application/javascript"
+            | "text/javascript"
+            | "application/x-javascript"
+            | "application/ecmascript"
+            | "text/ecmascript"
+            | "text/html"
+            | "text/plain"
+    )
+}
+
+/// M78: 动态 script（appendChild）加载前的 MIME 检查。
+/// 放行时把 body 写入 script cache（后续 __fetchSync 命中，只发一次请求）。
+#[cfg(feature = "quickjs")]
+pub fn fetch_script_mime_ok(url: String) -> bool {
+    if let Ok(cache) = script_cache().lock() {
+        if cache.contains_key(&url) {
+            return true;
+        }
+    }
+    let url_owned = url.clone();
+    let handle = std::thread::spawn(move || {
+        let client = SCRIPT_FETCH_CLIENT.get_or_init(browser_net::HttpClient::new);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        rt.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                client.get_with_headers(&url_owned, None),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+        })
+    });
+    let fetched = handle.join().ok().and_then(|r| r);
+    let Some((bytes, headers)) = fetched else {
+        return false;
+    };
+    let mime = headers
+        .iter()
+        .find(|(k, _)| k.as_str().eq_ignore_ascii_case("content-type"))
+        .and_then(|(_, v)| v.to_str().ok())
+        .map(str::to_string);
+    if !script_mime_executable(mime.as_deref()) {
+        return false;
+    }
+    if let Ok(s) = String::from_utf8(bytes) {
+        if let Ok(mut cache) = script_cache().lock() {
+            cache.insert(url, s);
+        }
+        true
+    } else {
+        false
+    }
 }
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
@@ -2356,6 +2437,17 @@ Element.prototype.appendChild = function(child) {
             if (!src && typeof child.src === 'string') src = child.src;
             var code = null;
             if (src) {
+                // M78: 脚本 MIME 强制（对齐浏览器）：非 JS MIME 触发 onerror 而非执行。
+                var mimeOk = (typeof __fetchScriptMimeOk === 'function') ? __fetchScriptMimeOk(src) : true;
+                if (!mimeOk) {
+                    var _m_err = child;
+                    setTimeout(function() {
+                        if (typeof _m_err.onerror === 'function') {
+                            try { _m_err.onerror.call(_m_err, { type: 'error', target: _m_err }); } catch(e) {}
+                        }
+                    }, 0);
+                    return child;
+                }
                 // 外链 script：同步 fetch（复用 __fetchSync，相对 URL 自动解析）。
                 // 同步阻塞是期望行为——保证 webpack chunk loader 的 Promise.resolve 顺序。
                 code = (typeof __fetchSync === 'function') ? __fetchSync(src) : null;
@@ -2540,40 +2632,83 @@ Object.defineProperty(Element.prototype, 'className', {
     set: function(v) { __setAttr(this.__nodeId, 'class', String(v)); },
     enumerable: true, configurable: true
 });
+// M78: DOMTokenList —— 真类实现（Symbol.toStringTag + 惰性缓存 + value/迭代）。
+// WPT assert_class_string 用 {}.toString.call(obj) 检查 [object DOMTokenList]。
+function DOMTokenList(nodeId) { this.__nodeId = nodeId; }
+Object.defineProperty(DOMTokenList.prototype, Symbol.toStringTag, { value: 'DOMTokenList' });
+DOMTokenList.prototype.__tokens = function() {
+    return (__getAttr(this.__nodeId, 'class') || '').split(/\s+/).filter(function(s) { return s; });
+};
+DOMTokenList.prototype.__write = function(arr) { __setAttr(this.__nodeId, 'class', arr.join(' ')); };
+DOMTokenList.prototype.add = function() {
+    var cls = this.__tokens();
+    for (var i = 0; i < arguments.length; i++) {
+        var c = String(arguments[i]);
+        if (cls.indexOf(c) < 0) cls.push(c);
+    }
+    this.__write(cls);
+};
+DOMTokenList.prototype.remove = function() {
+    var cls = this.__tokens();
+    for (var i = 0; i < arguments.length; i++) {
+        var idx = cls.indexOf(String(arguments[i]));
+        if (idx >= 0) cls.splice(idx, 1);
+    }
+    this.__write(cls);
+};
+DOMTokenList.prototype.toggle = function(c, force) {
+    c = String(c);
+    var cls = this.__tokens();
+    var has = cls.indexOf(c) >= 0;
+    if (force === true || (!has && force !== false)) {
+        if (!has) cls.push(c);
+    } else if (has) {
+        cls.splice(cls.indexOf(c), 1);
+    }
+    this.__write(cls);
+    return cls.indexOf(c) >= 0;
+};
+DOMTokenList.prototype.contains = function(c) { return this.__tokens().indexOf(String(c)) >= 0; };
+DOMTokenList.prototype.item = function(i) { var t = this.__tokens(); return (i >= 0 && i < t.length) ? t[i] : null; };
+DOMTokenList.prototype.replace = function(a, b) {
+    var cls = this.__tokens();
+    var idx = cls.indexOf(String(a));
+    if (idx >= 0) { cls[idx] = String(b); this.__write(cls); return true; }
+    return false;
+};
+DOMTokenList.prototype.toString = function() { return __getAttr(this.__nodeId, 'class') || ''; };
+DOMTokenList.prototype[Symbol.iterator] = function() {
+    var tokens = this.__tokens();
+    var idx = 0;
+    return { next: function() { return (idx < tokens.length) ? { value: tokens[idx++], done: false } : { value: undefined, done: true }; } };
+};
+DOMTokenList.prototype.forEach = function(fn, thisArg) {
+    var tokens = this.__tokens();
+    for (var i = 0; i < tokens.length; i++) fn.call(thisArg || undefined, tokens[i], String(i), this);
+};
+DOMTokenList.prototype.entries = function() {
+    var tokens = this.__tokens();
+    var idx = 0;
+    return { next: function() { return (idx < tokens.length) ? { value: [String(idx), tokens[idx++]], done: false } : { value: undefined, done: true }; } };
+};
+DOMTokenList.prototype.keys = function() {
+    var tokens = this.__tokens();
+    var idx = 0;
+    return { next: function() { return (idx < tokens.length) ? { value: String(idx++), done: false } : { value: undefined, done: true }; } };
+};
+DOMTokenList.prototype.values = DOMTokenList.prototype[Symbol.iterator];
+Object.defineProperty(DOMTokenList.prototype, 'length', { get: function() { return this.__tokens().length; }, enumerable: true, configurable: true });
+Object.defineProperty(DOMTokenList.prototype, 'value', {
+    get: function() { return __getAttr(this.__nodeId, 'class') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'class', String(v)); },
+    enumerable: true, configurable: true
+});
+window.DOMTokenList = DOMTokenList;
 Object.defineProperty(Element.prototype, 'classList', {
     get: function() {
-        var self = this;
-        var cls = (__getAttr(self.__nodeId, 'class') || '').split(/\s+/).filter(function(s) { return s; });
-        return {
-            add: function() {
-                for (var i = 0; i < arguments.length; i++) {
-                    var c = String(arguments[i]);
-                    if (cls.indexOf(c) < 0) cls.push(c);
-                }
-                __setAttr(self.__nodeId, 'class', cls.join(' '));
-            },
-            remove: function() {
-                for (var i = 0; i < arguments.length; i++) {
-                    var idx = cls.indexOf(String(arguments[i]));
-                    if (idx >= 0) cls.splice(idx, 1);
-                }
-                __setAttr(self.__nodeId, 'class', cls.join(' '));
-            },
-            toggle: function(c, force) {
-                c = String(c);
-                var has = cls.indexOf(c) >= 0;
-                if (force === true || (!has && force !== false)) {
-                    if (!has) cls.push(c);
-                } else if (has) {
-                    cls.splice(cls.indexOf(c), 1);
-                }
-                __setAttr(self.__nodeId, 'class', cls.join(' '));
-                return cls.indexOf(c) >= 0;
-            },
-            contains: function(c) { return cls.indexOf(String(c)) >= 0; },
-            item: function(i) { return cls[i] || null; },
-            get length() { return cls.length; }
-        };
+        // 惰性缓存：同一元素的 classList 必须身份相等（===）。
+        if (!this.__classList) this.__classList = new DOMTokenList(this.__nodeId);
+        return this.__classList;
     },
     enumerable: true, configurable: true
 });

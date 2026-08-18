@@ -83,6 +83,8 @@ WPT_EXCLUDE_PATTERNS = [
     "?pipe", "stash", "SharedWorker", "ServiceWorker", "service-worker",
     "websocket", "WebSocket", "wss:", "https:", "WebTransport", "import(",
     ".any.window", ".any.worker", "crossOriginIsolated", "reporting",
+    # M78: testdriver 自动化（需要 WebDriver/CDP 驱动的合成输入）与人工测试
+    "/resources/testdriver", "-manual.html", "test-rerun", ".sub.html",
 ]
 
 PASS, FAIL, TIMEOUT, CRASH, NOT_RUN = "PASS", "FAIL", "TIMEOUT", "CRASH", "NOT_RUN"
@@ -223,8 +225,9 @@ def wpt_select_file(path):
         return False
     if "testharness.js" not in src:
         return False
+    # M78: 排除模式同时匹配路径和内容（-manual.html/.sub.html 是文件名特征）
     for pat in WPT_EXCLUDE_PATTERNS:
-        if pat in src:
+        if pat in src or pat in path:
             return False
     return True
 
@@ -255,7 +258,21 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        path = self.path.split("?")[0].split("#")[0]
+        import urllib.parse
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        # WPT 基建子集：script-with-header.py?content=&mime= → 自定义 MIME 的脚本体
+        #（fetch/api/basic/block-mime-as-script.html 依赖，测试脚本 MIME 强制）。
+        if path.endswith("script-with-header.py"):
+            q = urllib.parse.parse_qs(parsed.query)
+            mime = (q.get("mime") or ["application/javascript"])[0]
+            body = b"self.bootstrap();" if (q.get("content") or ["non-empty"])[0] == "non-empty" else b""
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path.startswith("/gen/"):
             root, rel = BUILD, os.path.normpath(path[len("/gen/"):])
         else:

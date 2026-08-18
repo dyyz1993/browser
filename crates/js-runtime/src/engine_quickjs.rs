@@ -328,6 +328,8 @@ impl QuickJsEngine {
                 let _ = g.set("__offsetWidth", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::offset_width(id)).unwrap());
                 // M78: __allIds() —— window 命名访问（WPT 裸引用元素 id）。
                 let _ = g.set("__allIds", Function::new(ctx.clone(), bridge::qjs_bridge::all_ids).unwrap());
+                // M78: __fetchScriptMimeOk(url) —— 动态 script MIME 强制（WPT block-mime）。
+                let _ = g.set("__fetchScriptMimeOk", Function::new(ctx.clone(), |u: String| crate::scripts::fetch_script_mime_ok(u)).unwrap());
                 let _ = g.set("__getBody", Function::new(ctx.clone(), |_: f64| bridge::qjs_bridge::get_body()).unwrap());
                 let _ = g.set("__setTitle", Function::new(ctx.clone(), |t: String| bridge::qjs_bridge::set_title(t)).unwrap());
                 let _ = g.set("__getParent", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_parent(id)).unwrap());
