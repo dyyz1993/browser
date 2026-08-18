@@ -817,7 +817,10 @@ pub fn fetch_script_mime_ok(url: String) -> bool {
     });
     let fetched = handle.join().ok().and_then(|r| r);
     let Some((bytes, headers)) = fetched else {
-        return false;
+        // M78-fix: 网络错误放行——__fetchSync 会走既有的失败路径（onerror）。
+        // 门只在拿到明确被禁 MIME 时拦截（release 模式下测试服务器的
+        // 连接时序曾让这里的 fetch 偶发失败，误杀正常 chunk）。
+        return true;
     };
     let mime = headers
         .iter()

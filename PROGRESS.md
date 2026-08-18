@@ -157,6 +157,15 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 
 回归测试 3 项入库（onload 属性/hashchange/Range）。738 passed 0 failed。
 
+**M78.7-fix —— MIME 门网络错误放行**：release 模式下动态 script 测试
+（EXTERNAL_FAIL/CHAIN_INIT）偶发失败——`__fetchScriptMimeOk` 的独立 fetch
+在测试服务器连接时序下偶发失败被当成"阻止"。改为**只在拿到明确被禁 MIME
+时拦截**，网络错误放行给既有 onerror 路径。release 740 passed 0 failed。
+
+**复评方差实录**（同二进制三轮全量）：0.514 / 0.484，storage WPT 部分
+32↔105 双峰摆动——iframe 重型页面的完成与否是主要噪声源，也是下一轮
+的最大目标（112 页 no-results 的根因预计同源）。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新
