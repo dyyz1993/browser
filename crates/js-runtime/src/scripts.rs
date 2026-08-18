@@ -2245,10 +2245,45 @@ window.FileReader = function() {
 };
 
 // MutationObserver（框架用，存回调但不触发）
+// MutationObserver —— M78.11: 真实触发（近似）。observe 记录 target，
+// DOM 变更入口 fire 挂起 observer 的回调（microtask 时机，records 近似）。
+window.__activeObservers = [];
 window.MutationObserver = function(cb) {
-    this.observe = function(target, opts) {};
-    this.disconnect = function() {};
-    this.takeRecords = function() { return []; };
+    var self = this;
+    self.__cb = cb;
+    self.__targets = [];
+    self.observe = function(target, opts) {
+        if (target && target.__nodeId !== undefined) {
+            self.__targets.push(target);
+            if (window.__activeObservers.indexOf(self) < 0) window.__activeObservers.push(self);
+        }
+    };
+    self.disconnect = function() {
+        self.__targets = [];
+        var i = window.__activeObservers.indexOf(self);
+        if (i >= 0) window.__activeObservers.splice(i, 1);
+    };
+    self.takeRecords = function() { return []; };
+};
+// fire 变更通知：type ∈ attributes|childList，attributeName 可选。
+window.__fireMutation = function(nodeId, type, attrName) {
+    var observers = window.__activeObservers;
+    if (!observers || !observers.length) return;
+    for (var i = 0; i < observers.length; i++) {
+        var obs = observers[i];
+        for (var j = 0; j < obs.__targets.length; j++) {
+            if (obs.__targets[j].__nodeId === nodeId) {
+                var records = [{ type: type, target: obs.__targets[j],
+                                 attributeName: attrName || null, addedNodes: [], removedNodes: [] }];
+                (function(o, recs) {
+                    Promise.resolve().then(function() {
+                        try { o.__cb.call(o, recs, o); } catch (e) {}
+                    });
+                })(obs, records);
+                break;
+            }
+        }
+    }
 };
 
 // MatchMedia（CSS 媒体查询检测）
@@ -2541,7 +2576,7 @@ Element.prototype.getAttribute = function(key) {
     var v = __getAttr(this.__nodeId, key);
     return (v === null || v === undefined) ? null : String(v);
 };
-Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); };
+Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); try { window.__fireMutation(this.__nodeId, 'attributes', String(key)); } catch(e) {} };
 Element.prototype.appendChild = function(child) {
     if (child && typeof child.__nodeId === 'number') {
         // GAP-K: DocumentFragment 插入时展开子节点（Web 标准行为）。
@@ -2559,6 +2594,7 @@ Element.prototype.appendChild = function(child) {
             return child;
         }
         __appendChild(this.__nodeId, child.__nodeId);
+        try { window.__fireMutation(this.__nodeId, 'childList'); } catch(e) {}
         // M69: 动态 script 执行。webpack/vite 等前端工程化站点把业务代码打包成
         // 独立 chunk，在运行时用 createElement("script") + head.appendChild(s)
         // 动态加载。浏览器语义：appendChild 一个 script 元素时，若它有 src 则

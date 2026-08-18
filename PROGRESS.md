@@ -235,6 +235,21 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 测试：+2 集成（innerText 语义、Document 实体+命名访问）。html_dom 同
   manifest +4（86→90）。757 passed 0 failed。
 
+**M78.11 循环 11 —— MutationObserver 真实触发**：
+
+- 新口径基线 0.4406（稳定采样 + 排除登记后首次全量）。
+- html_dom 新池失败主簇：no-results 24 页中 MutationObserver-*/Document-URL
+  呈「Running, N complete, 1 remain」形态——最后一个 async 测试等
+  MutationObserver 回调（旧 shim observe 是 no-op，只存不触发）。
+- **实现**：observe 记录 target（window.__activeObservers 注册表）；
+  setAttribute / appendChild 变更入口 fire `__fireMutation(nodeId, type,
+  attrName)`（Promise microtask 时机，records 近似 {type/target/
+  attributeName/addedNodes/removedNodes}）；disconnect 注销。
+- 验证：手动 fired=1/type=attributes/attributeName 正确；
+  html_dom 69→80（+11，"1 remain" 挂起页完成）。
+- 遗留：reflection-* 8 页 log 空（testharness 未装上，B 报告线索：输出挂
+  在第二个 <html> 子树、event_loop 302ms 早退）——下轮单独深挖。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新
