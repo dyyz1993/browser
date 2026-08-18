@@ -193,6 +193,26 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   **storage 三轮完全一致（33/199，方差归零）**；每轮 27s→14s（缺陷 B
   修复）；css_selector 0.632→0.647；749 passed 0 failed。
 
+**M78.9 循环 9 —— 并发子任务分析落地（TS 字符串误杀 + Event 家族 + 回归修复）**：
+
+三个并发子任务（A 诊断 / B 失败分析 / C css 实现）全部返回：
+
+- **子任务 B 关键发现 → 已修**：①`has_ts_syntax` 被**字符串内容**触发——
+  WPT Event-constants 的描述串 "Event interface object" 让整页静默跳过
+  （真实 bundle 字符串含这些字样同样丢整段脚本）。strip_js_comments 的
+  字符串态改为与注释同等置空。②Event 家族补全：UIEvent/WheelEvent/
+  InputEvent/CompositionEvent/TextEvent/PointerEvent 构造器 + init* 方法
+  + MouseEvent 键位/relatedTarget + KeyboardEvent.location + FocusEvent
+  relatedTarget（预计 ~64 子测试）。
+- **history.length 回归修复**：getter 化后旧 fixture 的 `history.length()`
+  调用抛 TypeError 杀死整脚本。fixture 改标准 getter 语义（W3C 正确），
+  release 753→755 全绿。
+- **子任务 B 待办清单**（下轮地图）：innerText setter（~110 行）、
+  `new Document()` 实体 + document.implementation（解锁 Range 簇 ~150 行）、
+  window 命名访问遮蔽（`<div id=test>` 吞掉 testharness 的 self.test）、
+  排除登记（moveBefore/render-blocking/tentative/Highlight ~55 行基建）。
+- **harness 已知问题**：latest.json 被单类别跑覆盖（下轮改分文件合并）。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

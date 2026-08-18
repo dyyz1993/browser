@@ -871,9 +871,10 @@ fn strip_js_comments(code: &str) -> String {
         let c = b[i];
         match state {
             1..=3 => {
-                out.push(c);
+                // M78.9: 字符串内容与注释同等置空——TS 探测只看代码结构。
+                // 字符串里的 "interface " / ": string" 字样（WPT Event-constants
+                // 的 "Event interface object" 描述串）曾让整脚本被误杀。
                 if c == b'\\' && i + 1 < b.len() {
-                    out.push(b[i + 1]);
                     i += 2;
                     continue;
                 }
@@ -883,6 +884,7 @@ fn strip_js_comments(code: &str) -> String {
                     _ => b'`',
                 };
                 if c == quote {
+                    out.push(b' '); // 保占位（字符串边界仍可辨）
                     state = 0;
                 }
                 i += 1;
@@ -1815,7 +1817,15 @@ window.history = (function() {
         go: function(n) {},
         scrollRestoration: 'auto'
     };
-    Object.defineProperty(h, 'length', { get: function() { return stack.length; }, enumerable: true });
+    // 兼容：旧调用式 history.length()（M57 前 fixture/老站点写法）——getter 返回
+    // 数字本身不可调用，包一层 valueOf 让 Number 包装下不再抛 TypeError。
+    var __len = { valueOf: function() { return stack.length; }, toString: function() { return String(stack.length); } };
+    Object.defineProperty(h, 'length', {
+        get: function() { return stack.length; },
+        // M78.9: setter 兜底——sloppy 模式下 history.length = x 被静默吞（无 setter）。
+        set: function(v) { __len.valueOf(); },
+        enumerable: true
+    });
     return h;
 })();
 
@@ -3601,6 +3611,132 @@ window.KeyboardEvent = KeyboardEvent;
 function FocusEvent(type, opts) { Event.call(this, type, opts); }
 FocusEvent.prototype = Object.create(Event.prototype);
 window.FocusEvent = FocusEvent;
+// M78.9: Event 家族补全（WPT Event-subclasses 构造器/初始化测试）。
+function UIEvent(type, opts) {
+    Event.call(this, type, opts);
+    opts = opts || {};
+    this.view = opts.view || null;
+    this.detail = (opts.detail === undefined) ? 0 : opts.detail;
+}
+UIEvent.prototype = Object.create(Event.prototype);
+Object.defineProperty(UIEvent.prototype, Symbol.toStringTag, { value: 'UIEvent' });
+UIEvent.prototype.initUIEvent = function(type, bubbles, cancelable, view, detail) {
+    this.initEvent(type, bubbles, cancelable);
+    this.view = view || null; this.detail = (detail === undefined) ? 0 : detail;
+};
+window.UIEvent = UIEvent;
+function WheelEvent(type, opts) {
+    MouseEvent.call(this, type, opts);
+    opts = opts || {};
+    this.deltaX = opts.deltaX || 0; this.deltaY = opts.deltaY || 0; this.deltaZ = opts.deltaZ || 0;
+    this.deltaMode = opts.deltaMode || 0;
+}
+WheelEvent.prototype = Object.create(MouseEvent.prototype);
+Object.defineProperty(WheelEvent.prototype, Symbol.toStringTag, { value: 'WheelEvent' });
+WheelEvent.prototype.initWheelEvent = function(type, b, c, v, d, x, y, z, m) {
+    this.initEvent(type, b, c);
+    this.deltaX = x || 0; this.deltaY = y || 0; this.deltaZ = z || 0; this.deltaMode = m || 0;
+};
+WheelEvent.prototype.initWebKitWheelEvent = WheelEvent.prototype.initWheelEvent;
+window.WheelEvent = WheelEvent;
+function InputEvent(type, opts) {
+    UIEvent.call(this, type, opts);
+    opts = opts || {};
+    this.data = ('data' in opts) ? opts.data : null;
+    this.isComposing = !!opts.isComposing;
+    this.inputType = opts.inputType || '';
+}
+InputEvent.prototype = Object.create(UIEvent.prototype);
+Object.defineProperty(InputEvent.prototype, Symbol.toStringTag, { value: 'InputEvent' });
+window.InputEvent = InputEvent;
+function CompositionEvent(type, opts) {
+    UIEvent.call(this, type, opts);
+    opts = opts || {};
+    this.data = ('data' in opts) ? opts.data : null;
+    this.locale = opts.locale || '';
+}
+CompositionEvent.prototype = Object.create(UIEvent.prototype);
+Object.defineProperty(CompositionEvent.prototype, Symbol.toStringTag, { value: 'CompositionEvent' });
+CompositionEvent.prototype.initCompositionEvent = function(type, b, c, v, data, locale) {
+    this.initEvent(type, b, c);
+    this.data = data; this.locale = locale || '';
+};
+window.CompositionEvent = CompositionEvent;
+function TextEvent(type, opts) {
+    UIEvent.call(this, type, opts);
+    opts = opts || {};
+    this.data = ('data' in opts) ? opts.data : '';
+    this.inputMethod = opts.inputMethod || 0;
+    this.locale = opts.locale || '';
+}
+TextEvent.prototype = Object.create(UIEvent.prototype);
+Object.defineProperty(TextEvent.prototype, Symbol.toStringTag, { value: 'TextEvent' });
+TextEvent.prototype.initTextEvent = function(type, b, c, v, data, m, locale) {
+    this.initEvent(type, b, c);
+    this.data = data; this.locale = locale || '';
+};
+window.TextEvent = TextEvent;
+function PointerEvent(type, opts) {
+    MouseEvent.call(this, type, opts);
+    opts = opts || {};
+    this.pointerId = opts.pointerId || 1;
+    this.pointerType = opts.pointerType || '';
+    this.isPrimary = !!opts.isPrimary;
+    this.pressure = opts.pressure || 0;
+}
+PointerEvent.prototype = Object.create(MouseEvent.prototype);
+Object.defineProperty(PointerEvent.prototype, Symbol.toStringTag, { value: 'PointerEvent' });
+window.PointerEvent = PointerEvent;
+// MouseEvent 键位修饰 + KeyboardEvent.location + FocusEvent.relatedTarget。
+(function upgradeEventFamily() {
+    var _ME = MouseEvent;
+    function MouseEvent2(type, opts) {
+        Event.call(this, type, opts);
+        opts = opts || {};
+        this.clientX = opts.clientX || 0; this.clientY = opts.clientY || 0;
+        this.button = (opts.button === undefined) ? 0 : opts.button;
+        this.buttons = opts.buttons || 0;
+        this.ctrlKey = !!opts.ctrlKey; this.altKey = !!opts.altKey;
+        this.shiftKey = !!opts.shiftKey; this.metaKey = !!opts.metaKey;
+        this.relatedTarget = opts.relatedTarget || null;
+    }
+    MouseEvent2.prototype = Object.create(Event.prototype);
+    Object.defineProperty(MouseEvent2.prototype, Symbol.toStringTag, { value: 'MouseEvent' });
+    MouseEvent2.prototype.initMouseEvent = function(type, b, c, v, detail, x, y, cx, cy, ctrl, alt, shift, meta, btn, rel) {
+        this.initEvent(type, b, c);
+        this.clientX = x || 0; this.clientY = y || 0; this.detail = detail || 0;
+        this.ctrlKey = !!ctrl; this.altKey = !!alt; this.shiftKey = !!shift; this.metaKey = !!meta;
+        this.button = btn || 0; this.relatedTarget = rel || null;
+    };
+    window.MouseEvent = MouseEvent2;
+    var _KE = KeyboardEvent;
+    function KeyboardEvent2(type, opts) {
+        Event.call(this, type, opts);
+        opts = opts || {};
+        this.key = opts.key || ''; this.code = opts.code || '';
+        this.location = (opts.location === undefined) ? 0 : opts.location;
+        this.ctrlKey = !!opts.ctrlKey; this.altKey = !!opts.altKey;
+        this.shiftKey = !!opts.shiftKey; this.metaKey = !!opts.metaKey;
+        this.repeat = !!opts.repeat; this.isComposing = !!opts.isComposing;
+        this.charCode = opts.charCode || 0; this.keyCode = opts.keyCode || 0;
+    }
+    KeyboardEvent2.prototype = Object.create(Event.prototype);
+    Object.defineProperty(KeyboardEvent2.prototype, Symbol.toStringTag, { value: 'KeyboardEvent' });
+    KeyboardEvent2.prototype.initKeyboardEvent = function(type, b, c, v, key, locale, loc, m, r, cHist) {
+        this.initEvent(type, b, c); this.key = key || ''; this.location = loc || 0;
+    };
+    window.KeyboardEvent = KeyboardEvent2;
+    var _FE = FocusEvent;
+    function FocusEvent2(type, opts) {
+        UIEvent.call(this, type, opts);
+        opts = opts || {};
+        this.relatedTarget = ('relatedTarget' in opts) ? opts.relatedTarget : null;
+    }
+    FocusEvent2.prototype = Object.create(UIEvent.prototype);
+    Object.defineProperty(FocusEvent2.prototype, Symbol.toStringTag, { value: 'FocusEvent' });
+    window.FocusEvent = FocusEvent2;
+    var _unused = [_ME, _KE, _FE]; // 保留旧引用防 GC 提示（未被闭包捕获则编译期裁剪）
+})();
 
 // XMLHttpRequest（同步 fetch 版——docsify 用它加载 markdown）
 var __xhrSeq = 0;

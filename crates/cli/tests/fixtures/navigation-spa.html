@@ -22,12 +22,12 @@
 
     // 模拟用户点击导航：pushState 改 URL（不重新加载）+ 更新内容
     history.pushState({page: 'about'},'','/about');
-    __appendBody('AFTER_PUSH_LENGTH: '+history.length());
+    __appendBody('AFTER_PUSH_LENGTH: '+history.length);
     __appendBody('AFTER_PUSH_HREF: '+location.href);
 
     // replaceState 替换当前条目
     history.replaceState({page: 'about-v2'},'','/about-v2');
-    __appendBody('AFTER_REPLACE_LENGTH: '+history.length());
+    __appendBody('AFTER_REPLACE_LENGTH: '+history.length);
     __appendBody('AFTER_REPLACE_HREF: '+location.href);
 
     // back 回到首页

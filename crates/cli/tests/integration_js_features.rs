@@ -1238,6 +1238,56 @@ document.getElementById('out').textContent =
     let _ = std::fs::remove_file(&path);
 }
 
+/// M78.9: TS 探测不得被字符串内容触发——"interface "/"type: string" 出现在
+/// 普通字符串里时脚本必须照常执行（WPT Event-constants 的描述串曾让整页被
+/// 静默跳过；真实 bundle 的字符串含这些字样同样会丢整段脚本）。
+#[test]
+fn ts_detection_ignores_string_contents() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var desc = "Event interface object";
+var s2 = "field: string";
+document.getElementById('out').textContent = 'STR_TS_OK_' + desc.length + '_' + s2.length;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("STR_TS_OK_"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78.9: Event 家族构造器（UIEvent/WheelEvent/InputEvent/TextEvent/PointerEvent）
+/// + 键位/位置/relatedTarget 属性。
+#[test]
+fn event_family_constructors_complete() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var ui = new UIEvent('x', {detail: 7});
+var wh = new WheelEvent('w', {deltaY: 100});
+var ie = new InputEvent('i', {data: 'q', inputType: 'insertText'});
+var me = new MouseEvent('c', {ctrlKey: true});
+var ke = new KeyboardEvent('k', {location: 2});
+var fe = new FocusEvent('f');
+document.getElementById('out').textContent =
+    'EVFAM_' + {}.toString.call(ui) + ui.detail + '_'
+    + wh.deltaY + '_' + ie.inputType + '_' + me.ctrlKey + '_'
+    + ke.location + '_' + {}.toString.call(fe);
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "160"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "EVFAM_[object UIEvent]7_100_insertText_true_2_[object FocusEvent]",
+        ));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
