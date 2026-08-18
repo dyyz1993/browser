@@ -3215,6 +3215,34 @@ Element.prototype.insertAdjacentHTML = function(pos, html) {
         __setAttr(this.__nodeId, 'innerHTML', (__getAttr(this.__nodeId, 'innerHTML') || '') + html);
     }
 };
+// M78.13: insertAdjacentElement —— 镜像 insertAdjacentText 的位置逻辑。
+Element.prototype.insertAdjacentElement = function(pos, el) {
+    if (!el || typeof el.__nodeId !== 'number') return null;
+    var self = this;
+    function nextSiblingId(pid) {
+        var ids = (__children(pid) || '').split(',');
+        for (var i = 0; i < ids.length; i++) {
+            if (parseInt(ids[i], 10) === self.__nodeId) {
+                return (i + 1 < ids.length) ? parseInt(ids[i + 1], 10) : -1;
+            }
+        }
+        return -1;
+    }
+    try {
+        if (pos === 'beforeend') {
+            __appendChild(self.__nodeId, el.__nodeId);
+        } else if (pos === 'afterbegin') {
+            var first = parseInt((__children(self.__nodeId) || '').split(',')[0], 10);
+            __insertBefore(self.__nodeId, el.__nodeId, isNaN(first) ? -1 : first);
+        } else if (pos === 'beforebegin' || pos === 'afterend') {
+            var pid = __getParent(self.__nodeId);
+            if (pid < 0) return null;
+            var ref = (pos === 'beforebegin') ? self.__nodeId : nextSiblingId(pid);
+            __insertBefore(pid, el.__nodeId, ref);
+        }
+    } catch (e) { return null; }
+    return el;
+};
 // M78: insertAdjacentText —— testharness.js 的输出渲染依赖它（4 个位置全支持）。
 Element.prototype.insertAdjacentText = function(pos, text) {
     text = String(text == null ? '' : text);
@@ -3282,6 +3310,20 @@ Object.defineProperty(Element.prototype, 'dataset', {
                     if (typeof k !== 'string') return undefined;
                     var v = __getAttr(self.__nodeId, toKebab(k));
                     return (v === null || v === undefined) ? undefined : v;
+                },
+                deleteProperty: function(t, k) {
+                    if (typeof k === 'string') {
+                        try { __removeAttr(self.__nodeId, toKebab(k)); } catch (e) {}
+                        delete t[k];
+                        return true;
+                    }
+                    return false;
+                },
+                has: function(t, k) {
+                    if (typeof k !== 'string') return false;
+                    if (k in t) return true;
+                    var v = __getAttr(self.__nodeId, toKebab(k));
+                    return v !== null && v !== undefined;
                 },
                 set: function(t, k, v) {
                     if (typeof k === 'string') {
@@ -4030,6 +4072,74 @@ window.__wsDispatchEvent = function(id, type, data) {
 window.WebSocket = WebSocket;
 
 // fetch（Promise-based，内部同步 fetch）
+// M78.13: Response/Request 全局构造器（WPT fetch/response-form-data 等 14
+// 子测试依赖 window.Response 存在 + instanceof 语义）。
+function Response(body, init) {
+    init = init || {};
+    this.type = 'default';
+    this.url = '';
+    this.redirected = false;
+    this.status = (init.status === undefined) ? 200 : init.status;
+    this.statusText = init.statusText || '';
+    this.ok = this.status >= 200 && this.status < 300;
+    this.bodyUsed = false;
+    this.headers = { get: function() { return null; }, forEach: function() {}, has: function() { return false; } };
+    this.__body = (body === undefined || body === null) ? '' : String(body);
+}
+Object.defineProperty(Response.prototype, Symbol.toStringTag, { value: 'Response' });
+Response.prototype.text = function() { this.bodyUsed = true; return Promise.resolve(this.__body); };
+Response.prototype.json = function() { this.bodyUsed = true; return Promise.resolve(JSON.parse(this.__body)); };
+Response.prototype.clone = function() { return new Response(this.__body, { status: this.status, statusText: this.statusText }); };
+Response.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+Response.prototype.blob = function() { return Promise.resolve({}); };
+Response.prototype.formData = function() {
+    // M78.13: multipart/form-data 解析（boundary 分割 → FormData 近似项）。
+    var self = this;
+    return Promise.resolve().then(function() {
+        var fd = new FormData();
+        var m = /boundary="?([^";\s]+)"?/i.exec(self.__multipartBoundary || '');
+        if (!m) {
+            // body 自带 preamble：--boundary
+            var bm = /--([^\r\n]+)/.exec(self.__body.slice(0, 200));
+            if (bm) m = bm;
+        }
+        if (!m) return fd;
+        var boundary = '--' + m[1];
+        var parts = self.__body.split(boundary);
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            if (!part || part === '--' || part === '--\r\n' || part.indexOf('--') === 0) continue;
+            part = part.replace(/^\r\n/, '');
+            var hdrEnd = part.indexOf('\r\n\r\n');
+            if (hdrEnd < 0) continue;
+            var headers = part.slice(0, hdrEnd);
+            var value = part.slice(hdrEnd + 4).replace(/\r\n$/, '');
+            var nm = /name="([^"]*)"/i.exec(headers);
+            if (nm) {
+                try { fd.append(nm[1], value); } catch (e) {}
+            }
+        }
+        return fd;
+    });
+};
+Response.error = function() { return new Response('', { status: 0 }); };
+Response.redirect = function(url, status) { var r = new Response('', { status: status || 302 }); r.url = url; r.redirected = true; return r; };
+window.Response = Response;
+function Request(input, init) {
+    init = init || {};
+    var url = (typeof input === 'string') ? input : (input && input.url) || String(input);
+    this.url = url;
+    this.method = (init.method || (input && input.method) || 'GET').toUpperCase();
+    this.headers = init.headers || {};
+    this.body = init.body || null;
+    this.credentials = init.credentials || 'same-origin';
+    this.mode = init.mode || 'cors';
+    this.redirect = init.redirect || 'follow';
+}
+Object.defineProperty(Request.prototype, Symbol.toStringTag, { value: 'Request' });
+Request.prototype.clone = function() { return new Request(this.url, { method: this.method, headers: this.headers, body: this.body }); };
+window.Request = Request;
+
 window.fetch = function(input, options) {
     var url = (typeof input === 'string') ? input : (input && input.url) || String(input);
     options = options || {};
@@ -4053,20 +4163,9 @@ window.fetch = function(input, options) {
         if (raw === null || raw === undefined) {
             reject(new TypeError('Failed to fetch ' + url));
         } else {
-            resolve({
-                ok: statusCode >= 200 && statusCode < 300,
-                status: statusCode,
-                statusText: statusCode === 200 ? 'OK' : String(statusCode),
-                url: url,
-                redirected: false,
-                text: function() { return Promise.resolve(raw); },
-                json: function() { return Promise.resolve(JSON.parse(raw)); },
-                headers: {
-                    get: function(k) { return null; },
-                    forEach: function() {}
-                },
-                clone: function() { return this; }
-            });
+            var resp = new Response(raw, { status: statusCode, statusText: statusCode === 200 ? 'OK' : String(statusCode) });
+            resp.url = url;
+            resolve(resp);
         }
     });
 };

@@ -264,6 +264,17 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   test/setup 是 testharness 装的全局，CSR 页面不会有（语义安全）。
 - 门禁：757 passed 0 failed（debug 全量）。
 
+**M78.13 循环 13 —— Response/Request 构造器 + dataset traps + insertAdjacentElement**：
+
+- **window.Response / window.Request 全局构造器**（toStringTag + text/
+  json/clone/arrayBuffer/blob/formData/error/redirect；fetch 返回值从裸
+  对象升级为 Response 实例，integration_fetch 9/9 零回归）。formData 带
+  multipart 分割近似（boundary 需从构造 headers 透传，未竟——WPT
+  response-form-data 仍 17/66，边际收益低，停）。
+- **dataset Proxy 补 deleteProperty/has trap**（镜像 __removeAttr）。
+- **insertAdjacentElement**（四位置，镜像 insertAdjacentText）。
+- html_dom 80→82；webapi 持平。757 passed 0 failed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新
