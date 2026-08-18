@@ -988,6 +988,115 @@ var x: string = "hello";
     let _ = std::fs::remove_file(&path);
 }
 
+/// M78: :lang 伪类样式匹配 + offsetWidth（mini 级联）。
+/// WPT css/selectors 的 :lang 系列测试正是这条链路：
+/// `#box:lang(es){width:100px}` 覆盖 `.test div{width:50px}`（源顺序后写赢）。
+#[test]
+fn pseudo_lang_css_matches_and_offset_width() {
+    let html = r#"<!DOCTYPE html><html lang="en"><body>
+<style>.test div { width: 50px; } #box:lang(es) { width: 100px; }</style>
+<div class="test"><div id="box" lang="es">&#xA0;</div></div>
+<div id="out">FAIL</div>
+<script>
+var box = document.getElementById('box');
+document.getElementById('out').textContent =
+    'LANG_W_' + box.offsetWidth + '_TYPE_' + (typeof DOMException);
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("LANG_W_100_TYPE_function"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: :lang 不匹配时用基础规则宽度（级联回退）。
+#[test]
+fn pseudo_lang_non_match_falls_back() {
+    let html = r#"<!DOCTYPE html><html lang="en"><body>
+<style>.test div { width: 50px; } #box:lang(fr) { width: 100px; }</style>
+<div class="test"><div id="box" lang="es">&#xA0;</div></div>
+<div id="out">FAIL</div>
+<script>
+document.getElementById('out').textContent = 'FALLBACK_W_' + document.getElementById('box').offsetWidth;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FALLBACK_W_50"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: :dir 伪类 + querySelector 正向匹配 + lang 继承（祖先 lang 生效于后代）。
+#[test]
+fn pseudo_dir_query_selector() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div dir="rtl"><p id="rtl-p">a</p></div>
+<div dir="ltr"><p id="ltr-p">b</p></div>
+<div id="out">FAIL</div>
+<script>
+var rtl = document.querySelector('p:dir(rtl)');
+var ltr = document.querySelector(':dir(ltr)');
+var bad = document.querySelector(':dir(lol)');
+document.getElementById('out').textContent =
+    'DIR_' + (rtl && rtl.id) + '_' + (ltr && ltr.tagName) + '_' + bad;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DIR_rtl-p_HTML_null"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: 非法选择器抛 SYNTAX_ERR DOMException（name=SyntaxError, code=12）。
+#[test]
+fn query_selector_invalid_selector_throws_syntax_err() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var name = 'NO_THROW', code = -1, ctorOk = false;
+try { document.querySelector(':dir()'); } catch (e) {
+    name = e.name; code = e.code; ctorOk = (e.constructor === window.DOMException);
+}
+try { document.querySelectorAll("div:dir('ltr')"); name += '_X'; } catch (e) { name += '_Q'; }
+try { document.querySelector(':dir(ltr, rtl)'); name += '_X'; } catch (e) { name += '_C'; }
+document.getElementById('out').textContent = 'SYN_' + name + '_' + code + '_' + ctorOk;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SYN_SyntaxError_Q_C_12_true"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: :nth-child 整数形式（querySelectorAll）。
+#[test]
+fn pseudo_nth_child() {
+    let html = r#"<!DOCTYPE html><html><body>
+<ul><li id="a">1</li><li id="b">2</li><li id="c">3</li></ul>
+<div id="out">FAIL</div>
+<script>
+var second = document.querySelectorAll('li:nth-child(2)');
+var cMatches = document.getElementById('c').matches('li:nth-child(3)');
+document.getElementById('out').textContent =
+    'NTH_' + second.length + '_' + (second[0] && second[0].id) + '_' + cMatches;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NTH_1_b_true"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

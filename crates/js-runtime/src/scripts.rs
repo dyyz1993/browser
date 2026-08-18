@@ -2678,14 +2678,41 @@ Element.prototype.querySelectorAll = function(sel) {
     return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
 };
 Element.prototype.contains = function(node) { return false; };
+// M78: DOMException —— WPT testharness 的 assert_throws_dom 检查
+// e.constructor === window.DOMException 且 name/code 正确（SyntaxError=12）。
+function DOMException(message, name) {
+    this.message = String(message || '');
+    this.name = String(name || 'Error');
+    var codes = {
+        IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4,
+        InvalidCharacterError: 5, NoModificationAllowedError: 7, NotFoundError: 8,
+        NotSupportedError: 9, InUseAttributeError: 10, InvalidStateError: 11,
+        SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14,
+        InvalidAccessError: 15, TypeMismatchError: 17, SecurityError: 18,
+        NetworkError: 19, AbortError: 20, URLMismatchError: 21, TimeoutError: 23,
+        InvalidNodeTypeError: 24, DataCloneError: 25, QuotaExceededError: 22,
+        EvalError: 27, RangeError: 27, ReferenceError: 27, TypeError: 27, URIError: 27
+    };
+    this.code = codes[this.name] || 0;
+}
+DOMException.prototype.toString = function() { return this.name + ': ' + this.message; };
+window.DOMException = DOMException;
+// M78: 选择器语法预检 —— 非法选择器抛 SYNTAX_ERR（对齐浏览器 querySelector 行为）。
+function __qsThrowIfInvalid(sel) {
+    if (typeof __qsCheck === 'function' && !__qsCheck(String(sel))) {
+        throw new DOMException(String(sel) + " is not a valid selector.", 'SyntaxError');
+    }
+}
 // matches/closest：CSS 选择器匹配。依赖 __qsMatch/__qsClosest bridge。
 Element.prototype.matches = function(sel) {
+    __qsThrowIfInvalid(sel);
     if (typeof __qsMatch === 'function') {
         try { return !!__qsMatch(this.__nodeId, String(sel)); } catch(e) { return false; }
     }
     return false;
 };
 Element.prototype.closest = function(sel) {
+    __qsThrowIfInvalid(sel);
     if (typeof __qsClosest === 'function') {
         try {
             var id = __qsClosest(this.__nodeId, String(sel));
@@ -2804,6 +2831,21 @@ Element.prototype.insertAdjacentHTML = function(pos, html) {
 Element.prototype.getBoundingClientRect = function() {
     return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 };
 };
+// M78: offsetWidth —— 经 __offsetWidth 桥做 mini 级联（<style> 规则 → width px）。
+// 近似：只有显式 px 宽才返回非 0（WPT :lang 系列测试的断言路径）。
+Object.defineProperty(Element.prototype, 'offsetWidth', {
+    get: function() {
+        try {
+            var w = (typeof __offsetWidth === 'function') ? __offsetWidth(this.__nodeId) : 0;
+            return (typeof w === 'number' && w >= 0) ? w : 0;
+        } catch(e) { return 0; }
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'offsetHeight', {
+    get: function() { return 0; },
+    enumerable: true, configurable: true
+});
 Element.prototype.focus = function() {};
 Element.prototype.blur = function() {};
 Element.prototype.scrollIntoView = function() {};
@@ -2988,10 +3030,12 @@ document.getElementById = function(id) {
     return (nodeId >= 0) ? __makeElement(nodeId) : null;
 };
 document.querySelector = function(sel) {
+    __qsThrowIfInvalid(sel);
     var nodeId = __qs(String(sel));
     return (nodeId >= 0) ? __makeElement(nodeId) : null;
 };
 document.querySelectorAll = function(sel) {
+    __qsThrowIfInvalid(sel);
     var ids = __qsAll(String(sel));
     if (!ids) return [];
     return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });

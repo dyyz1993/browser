@@ -322,6 +322,10 @@ impl QuickJsEngine {
                 let _ = g.set("__qsAll", Function::new(ctx.clone(), |s: String| bridge::qjs_bridge::qs_all(s)).unwrap());
                 let _ = g.set("__qsMatch", Function::new(ctx.clone(), |id: f64, s: String| bridge::qjs_bridge::qs_match(id, s)).unwrap());
                 let _ = g.set("__qsClosest", Function::new(ctx.clone(), |id: f64, s: String| bridge::qjs_bridge::qs_closest(id, s)).unwrap());
+                // M78: __qsCheck(sel) —— querySelector 语法校（非法选择器抛 SYNTAX_ERR 前置）。
+                let _ = g.set("__qsCheck", Function::new(ctx.clone(), |s: String| crate::bridge::qs_syntax_error(&s).is_none()).unwrap());
+                // M78: __offsetWidth(id) —— 经 css-engine mini 级联取元素 width（WPT :lang 测试）。
+                let _ = g.set("__offsetWidth", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::offset_width(id)).unwrap());
                 let _ = g.set("__getBody", Function::new(ctx.clone(), |_: f64| bridge::qjs_bridge::get_body()).unwrap());
                 let _ = g.set("__setTitle", Function::new(ctx.clone(), |t: String| bridge::qjs_bridge::set_title(t)).unwrap());
                 let _ = g.set("__getParent", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_parent(id)).unwrap());

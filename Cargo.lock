@@ -562,6 +562,7 @@ dependencies = [
  "assert_cmd",
  "boa_engine",
  "browser-cookie",
+ "browser-css-engine",
  "browser-dom",
  "browser-eventloop",
  "browser-html-parser",

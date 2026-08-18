@@ -55,6 +55,31 @@
 
 门禁：fmt ✅ / clippy 0 warnings ✅ / **725 passed**（baseline 723 + 2 新）。
 
+**M78.3 循环 2 —— :lang/:dir/:nth-child 伪类 + offsetWidth + DOMException（基线 0.333）**：
+
+基线分（锁定 1837 用例，test262 3655e74 + wpt 7b4ed9f）：
+`总分 0.3334`（js_test262 0.914 / html_dom 0.292 / css_selector 0.000 /
+webapi 0.000 / storage_nav_cdp 0.517）。
+
+- **css-engine**（selector.rs）：`Pseudo::{Lang,Dir,NthChild}` 解析+匹配。
+  :lang 走 RFC4647（en 匹配 en-US 不匹配 enm；`en-*`/`*` 通配；祖先 lang 继承）；
+  :dir 走 dir 属性继承（HTML 无 dir 祖先默认 ltr）；id/class 名在 `:` 处断开
+  （`#box:lang(es)` 之前会把 id 解析成 `box:lang(es)`）。
+- **bridge**（querySelector 路径）：token 加伪类三件套；matches_selector 换
+  `(tree, id, node, tokens)` 签名（继承/兄弟匹配需要树）；`qs_syntax_error()`
+  语法校验（`:dir()` 空/带引号/逗号 → SYNTAX_ERR）；`offset_width()` 桥
+  （js-runtime 新增内部依赖 browser-css-engine：<style> 收集 → parse →
+  compute_styles → 最后一条 width px）。
+- **QuickJS shim**：DOMException 构造器（name→code 映射，SyntaxError=12，
+  testharness 的 assert_throws_dom 检查 constructor 同一性）；
+  querySelector/All + matches/closest 非法选择器抛 SYNTAX_ERR；
+  Element.offsetWidth（mini 级联近似：显式 px 宽）。
+- 测试：css-engine 8 个单测（含 `#in:lang(es)` 复合）+ cli 5 个集成测试
+  （lang→offsetWidth 100/50 级联回退、:dir 命中与默认 ltr、
+  SYNTAX_ERR name+code+constructor、:nth-child）。
+
+门禁：fmt ✅ / clippy 0 warnings ✅ / **737 passed**（+12 新）。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

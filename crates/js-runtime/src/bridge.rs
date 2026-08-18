@@ -1233,7 +1233,7 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     // For 简化版 descendant 选择器，仅匹配最后一段 selector。
     let mut found = None;
     tree.traverse(tree.root(), |id, node| {
-        if matches_selector(node, &tokens) {
+        if matches_selector(tree, id, node, &tokens) {
             found = Some(id);
             return false;
         }
@@ -1268,7 +1268,7 @@ fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
     };
     let mut found = Vec::new();
     tree.traverse(tree.root(), |id, node| {
-        if matches_selector(node, &tokens) {
+        if matches_selector(tree, id, node, &tokens) {
             found.push(id);
         }
         true // 不提前退出，收集全部
@@ -1322,6 +1322,63 @@ fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
             }
             if !cls.is_empty() {
                 tokens.push(SelectorToken::Class(cls));
+            }
+        } else if c == ':' {
+            // M78: 伪类子集 :lang/:dir/:nth-child。未知伪类只消费 ':'，
+            // 后续 ident 落入 Tag 分支 → 永不匹配（与历史行为一致）。
+            chars.next();
+            let mut name = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '-' {
+                    name.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let reads_args = matches!(chars.peek(), Some('('));
+            if !reads_args {
+                continue;
+            }
+            chars.next(); // '('
+            let mut args = String::new();
+            let mut depth = 1;
+            while let Some(&next) = chars.peek() {
+                if next == '(' {
+                    depth += 1;
+                } else if next == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        chars.next();
+                        break;
+                    }
+                }
+                args.push(next);
+                chars.next();
+            }
+            match name.as_str() {
+                "lang" => {
+                    let ranges: Vec<String> = args
+                        .split(',')
+                        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                        .filter(|p| !p.is_empty())
+                        .collect();
+                    if !ranges.is_empty() {
+                        tokens.push(SelectorToken::Lang(ranges));
+                    }
+                }
+                "dir" => {
+                    let d = args.trim().to_string();
+                    if !d.is_empty() && !d.contains(',') && !d.contains('"') && !d.contains('\'') {
+                        tokens.push(SelectorToken::Dir(d));
+                    }
+                }
+                "nth-child" => {
+                    if let Ok(n) = args.trim().parse::<u32>() {
+                        tokens.push(SelectorToken::NthChild(n));
+                    }
+                }
+                _ => {}
             }
         } else if c == '[' {
             chars.next();
@@ -1439,9 +1496,152 @@ enum SelectorToken {
     Id(String),
     AttrExists(String),
     AttrEquals(String, String),
+    /// M78: :lang(en, fr-*) — BCP47 语言范围。
+    Lang(Vec<String>),
+    /// M78: :dir(ltr|rtl)。
+    Dir(String),
+    /// M78: :nth-child(n)（仅整数）。
+    NthChild(u32),
 }
 
-fn matches_selector(node: &Node, tokens: &[SelectorToken]) -> bool {
+/// M78: querySelector 语法校验（WPT 要求非法选择器抛 SYNTAX_ERR）。
+/// 返回 Some(原因) 表示非法。覆盖：已知伪类的参数形状 + 括号配平。
+pub fn qs_syntax_error(sel: &str) -> Option<String> {
+    let b = sel.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b':' {
+            i += 1;
+            let name_start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-') {
+                i += 1;
+            }
+            let name = &sel[name_start..i];
+            let known = matches!(name, "lang" | "dir" | "nth-child");
+            if i >= b.len() || b[i] != b'(' {
+                if known {
+                    return Some(format!("pseudo-class :{name} requires arguments"));
+                }
+                continue; // 未知伪类不在此校验（matcher 自行不匹配）
+            }
+            // 读括号内参数
+            let arg_start = i + 1;
+            let mut depth = 1;
+            i += 1;
+            while i < b.len() && depth > 0 {
+                if b[i] == b'(' {
+                    depth += 1;
+                } else if b[i] == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            if depth != 0 {
+                return Some("unbalanced parentheses".to_string());
+            }
+            let args = &sel[arg_start..i];
+            i += 1; // consume ')'
+            match name {
+                "dir" => {
+                    let d = args.trim();
+                    if d.is_empty() {
+                        return Some("':dir' requires exactly one ident".to_string());
+                    }
+                    if d.contains(',') || d.contains('"') || d.contains('\'') {
+                        return Some(
+                            "':dir' accepts a single ident, not strings or lists".to_string(),
+                        );
+                    }
+                }
+                "lang" => {
+                    if args
+                        .split(',')
+                        .any(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').is_empty())
+                    {
+                        return Some("':lang' requires at least one language range".to_string());
+                    }
+                }
+                "nth-child" if args.trim().parse::<u32>().is_err() => {
+                    return Some("unsupported :nth-child argument".to_string());
+                }
+                _ => {}
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// M78: :lang 系列的 BCP47 range 匹配（与 css-engine selector.rs 同语义）。
+fn lang_range_matches_bridge(range: &str, tag: &str) -> bool {
+    let r = range.trim().to_lowercase();
+    let t = tag.trim().to_lowercase();
+    if t.is_empty() {
+        return false;
+    }
+    let prefix = r.strip_suffix('*').unwrap_or(&r);
+    let prefix = prefix.strip_suffix('-').unwrap_or(prefix);
+    if prefix.is_empty() {
+        return true;
+    }
+    t.starts_with(prefix) && (t.len() == prefix.len() || t.as_bytes()[prefix.len()] == b'-')
+}
+
+/// M78: 元素语言（自身向上最近 lang / xml:lang 属性）。
+fn element_lang_bridge(tree: &Tree, id: NodeId) -> Option<String> {
+    let mut cur = Some(id);
+    while let Some(nid) = cur {
+        if let NodeData::Element { attrs, .. } = tree.data(nid) {
+            for key in ["lang", "xml:lang"] {
+                if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
+                    return Some(v.clone());
+                }
+            }
+        }
+        cur = tree.get(nid).parent;
+    }
+    None
+}
+
+/// M78: 元素方向（自身向上最近 dir="ltr|rtl"；无 dir 祖先时 HTML 默认 ltr）。
+fn element_dir_bridge(tree: &Tree, id: NodeId) -> Option<String> {
+    let mut cur = Some(id);
+    while let Some(nid) = cur {
+        if let NodeData::Element { attrs, .. } = tree.data(nid) {
+            if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("dir")) {
+                let d = v.trim().to_lowercase();
+                if d == "ltr" || d == "rtl" {
+                    return Some(d);
+                }
+            }
+        }
+        cur = tree.get(nid).parent;
+    }
+    Some("ltr".to_string())
+}
+
+/// M78: 元素在父节点元素子节点中的 1-based 位置。
+fn element_child_index_bridge(tree: &Tree, id: NodeId) -> u32 {
+    let Some(pid) = tree.get(id).parent else {
+        return 1;
+    };
+    let mut idx = 0;
+    for &child in tree.children_of(pid) {
+        if matches!(tree.data(child), NodeData::Element { .. }) {
+            idx += 1;
+            if child == id {
+                return idx;
+            }
+        }
+    }
+    1
+}
+
+fn matches_selector(tree: &Tree, id: NodeId, node: &Node, tokens: &[SelectorToken]) -> bool {
     if let NodeData::Element { tag, attrs } = &node.data {
         for tok in tokens {
             let ok = match tok {
@@ -1457,6 +1657,15 @@ fn matches_selector(node: &Node, tokens: &[SelectorToken]) -> bool {
                 SelectorToken::AttrEquals(attr, value) => {
                     attrs.iter().any(|(k, v)| k == attr && v == value)
                 }
+                SelectorToken::Lang(ranges) => match element_lang_bridge(tree, id) {
+                    Some(lang) => ranges.iter().any(|r| lang_range_matches_bridge(r, &lang)),
+                    None => false,
+                },
+                SelectorToken::Dir(d) => match element_dir_bridge(tree, id) {
+                    Some(dir) => dir.eq_ignore_ascii_case(d),
+                    None => false,
+                },
+                SelectorToken::NthChild(n) => element_child_index_bridge(tree, id) == *n,
             };
             if !ok {
                 return false;
@@ -2840,7 +3049,7 @@ pub mod qjs_bridge {
             }
             let tokens = tokenize_selector(&selector);
             let node = t.get(id);
-            matches_selector(node, &tokens)
+            matches_selector(t, id, node, &tokens)
         })
     }
 
@@ -2855,7 +3064,7 @@ pub mod qjs_bridge {
             let tokens = tokenize_selector(&selector);
             loop {
                 let node = t.get(id);
-                if matches_selector(node, &tokens) {
+                if matches_selector(t, id, node, &tokens) {
                     return id as f64;
                 }
                 match node.parent {
@@ -2869,6 +3078,47 @@ pub mod qjs_bridge {
                 }
             }
             -1.0
+        })
+    }
+
+    /// M78: offsetWidth(id) -> f64 —— 经 css-engine mini 级联取元素 width。
+    /// 收集当前 tree 里所有 `<style>` 文本 → parse → compute_styles →
+    /// 取该元素最后一条 width 声明的 px 值（近似：仅显式 px 宽，无 px 返回 0）。
+    /// WPT :lang 系列测试靠它断言 `#box:lang(es){width:100px}` 生效。
+    pub fn offset_width(node_id: f64) -> f64 {
+        with_tree(|t| {
+            let id = node_id as usize;
+            if id >= t.len() || !matches!(t.data(id), NodeData::Element { .. }) {
+                return 0.0;
+            }
+            let mut css = String::new();
+            t.traverse(t.root(), |sid, node| {
+                if let NodeData::Element { tag, .. } = &node.data {
+                    if tag.eq_ignore_ascii_case("style") {
+                        css.push_str(&collect_text(t, sid));
+                        css.push('\n');
+                    }
+                }
+                true
+            });
+            if css.trim().is_empty() {
+                return 0.0;
+            }
+            let sheet = browser_css_engine::parse(&css);
+            let styles = browser_css_engine::compute_styles(t, &sheet);
+            styles
+                .get(&id)
+                .and_then(|decls| {
+                    decls
+                        .iter()
+                        .rev()
+                        .find(|d| d.property.eq_ignore_ascii_case("width"))
+                })
+                .and_then(|d| match browser_css_engine::parse_length(&d.value) {
+                    Some(browser_css_engine::Length::Px(v)) => Some(f64::from(v)),
+                    _ => None,
+                })
+                .unwrap_or(0.0)
         })
     }
 

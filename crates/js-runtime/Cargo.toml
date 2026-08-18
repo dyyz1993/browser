@@ -14,6 +14,8 @@ browser-cookie = { path = "../cookie" }
 browser-eventloop = { path = "../eventloop" }
 browser-net = { path = "../net" }
 browser-ws = { path = "../ws" }
+# M78: offsetWidth mini 级联（parse + compute_styles 取元素 width）。
+browser-css-engine = { path = "../css-engine" }
 # M62/M71.1: boa 引擎——M71.1 起降为 optional feature（默认 quickjs）。
 # 用 git main 分支（crates.io 0.21.1 的 Error.stack 未完整，main 已修）。
 boa_engine = { git = "https://github.com/boa-dev/boa", branch = "main", optional = true }
