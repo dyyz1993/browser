@@ -357,9 +357,11 @@ def do_lock():
         tests, excluded = [], 0
         for d in cfg["dirs"]:
             files = [f for f in iter_files(SUITES_ROOT(cfg), d) if keep(cfg, f)]
-            stride = max(1, len(files) // cfg["cap_per_dir"] + (1 if len(files) % cfg["cap_per_dir"] else 0))
-            files = files[::stride][: cfg["cap_per_dir"]]
-            excluded += stride_extra(len(files), stride, d)
+            # M78.10: 稳定均匀采样——索引 i*len//cap。旧 [::stride] 在排除少量
+            # 文件后步进变化，整个清单洗牌（77/109 页被换，分数不可跨版对比）。
+            if len(files) > cfg["cap_per_dir"]:
+                n = cfg["cap_per_dir"]
+                files = [files[i * len(files) // n] for i in range(n)]
             for f in files:
                 tests.append(f)
         manifest["categories"][cat] = {
