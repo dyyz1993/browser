@@ -227,6 +227,83 @@ iframe/form/button 等噪声子树（复用 extractor clean.rs 的 Firecrawl 思
 - 顺序断言 —— Posts: 必须在 Post A 前（防乱序）
 - `spa_shell_completeness_quantified` —— 多块完整度测试（6 个关键短语缺一不可）
 
+### 浏览器兼容性评分、优化闭环与停止条件
+
+**先区分三种问题，禁止用一个分数混在一起：**
+
+1. **标准正确性**：Web API/DOM/CSS/JavaScript 的行为是否符合标准。
+2. **项目任务成功率**：SPA 是否真正完成加载、路由、异步请求和最终内容提取。
+3. **性能与资源**：速度、峰值 RSS、二进制大小、并发吞吐和稳定性。
+
+#### 外部在线测试页面的定位
+
+用户可以直接让浏览器访问这些页面，页面会在浏览器内执行 JS 并显示结果：
+
+| 测试 | 用途 | 项目中的地位 |
+|------|------|--------------|
+| [HTML5test](https://html5test.co/) | 特性探测和直观分数 | 外部冒烟测试，不是最终门禁；它不保证每项功能语义正确，也不是 W3C 官方认证 |
+| [Acid3](https://www.webstandards.org/action/acid3/index.html) | 老的 DOM/CSS/ECMAScript 综合冒烟测试 | 只记录结果，不作为现代 Web 兼容性总分；100/100 也不代表完整浏览器兼容 |
+| [BrowserBench](https://browserbench.org/) | Speedometer/JetStream/MotionMark 性能 | 只用于性能报告，不计入标准兼容性分 |
+
+**外部网页分数不是本项目的最终目标。** 页面探测可能受测试版本、UA、视口、等待时间和缺失 API 影响；测试页面能显示分数，只说明它完成了自己的探测，不代表真实 SPA 一定可用。
+
+#### 最终标准：两条主线
+
+**A. 标准兼容性主线**
+
+- JavaScript 语言层使用锁定版本的 [Test262](https://github.com/tc39/test262) 子集。
+- HTML/DOM/CSS/Fetch/Storage/Events/Navigation 使用锁定 revision 的 [Web Platform Tests](https://web-platform-tests.org/) 子集。
+- WPT/Test262 只把项目 `target_profile=crawler-spa` 范围内的测试纳入分母；明确的非目标（WebGL 真渲染、WebRTC、Service Worker、媒体解码等）标记 `OUT_OF_SCOPE`，不能伪装成 PASS。
+- Chrome/Firefox/Safari 只作为差分和故障定位参考；标准测试的期望结果优先来自规范测试断言，不从 Chrome 输出反推标准。
+
+**B. 项目任务主线**
+
+每个 SPA fixture/真实站点必须有机器可验证的关键断言：最终文本、DOM 结构、请求结果、路由状态、Cookie/Storage 状态和错误数。关键断言失败即任务失败，不能用“输出了很多无关文字”抵消。
+
+#### 项目内部评分公式
+
+每项测试按以下结果计分：`PASS=1.0`、`PARTIAL=0.5`、`FAIL/TIMEOUT/CRASH=0`、`OUT_OF_SCOPE` 不入分母。`PARTIAL` 必须在 manifest 中预先说明，不能测试失败后临时降级。
+
+标准兼容性分固定为：
+
+```text
+20% JavaScript/Test262
+25% HTML/DOM
+15% CSS/Selector/Layout
+25% Web API/Network/EventLoop
+15% Storage/Navigation/CDP
+```
+
+项目任务分按关键断言和可选断言计算：
+
+```text
+SPA task score = critical_assertions × 0.7 + optional_assertions × 0.3
+```
+
+`tests/benchmarks/completeness.py` 的 `block_cov/sim_ratio/struct_jaccard/word_cov` 继续保留，但名称和结论必须理解为 **Content Completeness（内容完整度）**，不能称作浏览器标准兼容性分。`wc -c` 只能作为诊断信息，不能作为评分依据。
+
+#### 每轮开发的固定闭环
+
+1. 从 WPT/Test262、HTML5test/Acid3 或真实 SPA 采集失败现象。
+2. 将失败归因到 `html-parser`、`dom`、`css-engine`、`layout`、`js-runtime`、`eventloop`、`net`、`storage/cookie/navigation` 或 `cdp`。
+3. 先加最小回归测试，再修改实现；不能只补一个网站专用 hack。
+4. 重新跑：目标 profile 测试、SPA fixture、真实站点矩阵、Chrome 差分和性能基线。
+5. 记录分数变化、失败数变化、错误变化、RSS/耗时变化，并更新 `docs/JS-COVERAGE.md`、`FEATURES.md`、`PROGRESS.md`。
+6. 只有当改动改善了目标测试或修复了明确的回归，才进入下一个缺口。
+
+#### 什么时候可以停止一个阶段
+
+一个版本达到以下条件，才可以停止当前兼容性阶段并转入新能力：
+
+- 目标 profile 的关键 WPT/Test262 测试 **100% 通过**。
+- 目标 profile 的标准兼容性分 **≥95/100**；低于 95 的失败必须都有明确的非目标、上游缺陷或已记录的实现计划。
+- 核心 SPA 任务成功率 **≥95%**，且 fetch、Promise/Timer、DOM 更新、路由、Storage/Cookie 这类生命线场景 **100% 通过**。
+- 关键测试无 crash；新增改动不得让既有测试、核心 SPA 任务或 CDP 回归。
+- 内容完整度作为爬虫质量指标，核心站点综合分 **≥0.90**；不能只看字符总数。
+- 性能基线无未解释回退：峰值 RSS、冷启动和中位耗时任一项恶化超过 **10%**，不得直接宣布阶段完成。
+
+达到上述条件后，停止的是“当前 target profile 的兼容性补齐”，不是停止项目。后续只有在新增 Web 标准进入 target profile、真实 SPA 暴露新高频缺口、或出现回归时才重新开启该闭环。对明确的非目标和边际收益过低的深层 bundle 报错，记录原因后停止投入。
+
 ---
 
 ## 四、当前进度快照
@@ -444,7 +521,7 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
 3. **补 API** —— 在 `scripts.rs` 的 QuickJS shim 常量里补（纯 JS，不引 Rust 依赖）
 4. **GC 安全** —— 补的 API 不能存 JS 对象引用到全局变量
    （QuickJS GC 在 runtime drop 时会 assertion 检查泄漏对象）
-5. **验证** —— `browser fetch <url> --format text | wc -c` 看字符数是否提升
+5. **验证** —— 重跑目标 SPA 矩阵和 `tests/benchmarks/completeness.py`；`wc -c` 只能辅助观察，不能作为完整性评分
 
 > 完整对标报告见 [`docs/assessments/M66-quickjs-csr-comparison.md`](./docs/assessments/M66-quickjs-csr-comparison.md)。
 
@@ -460,7 +537,8 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
 - 「JS 报错走自愈循环，不凭猜测补 API」→ 第六章自愈循环
 - 「所有改动必须有例子、有引用、有测试」→ 第六章工作流程第 4 步
 - 「测试方法和步骤必须写入 AGENTS.md」→ 第三章 QuickJS 测试方法
-- 「对标 Chrome 是渲染质量的最终标准」→ 第三章 + M66 对标报告
+- 「标准正确性以 WPT/Test262、项目价值以 SPA 任务成功率为最终门禁；Chrome 只做差分参考」→ 第三章兼容性评分闭环
+- 「外部在线评分必须写清用途和停止条件」→ 第三章兼容性评分闭环
 
 ---
 
@@ -533,7 +611,7 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     - 引用：AGENTS.md 对应章节 + docs/assessments 报告链接
     - 测试：`integration_js_features.rs` 入库回归测试
 16. **测试方法和步骤必须写入 AGENTS.md**（第三章 QuickJS 测试方法）。
-17. **对标 Chrome 是渲染质量的最终标准**（见 `docs/assessments/M66-quickjs-csr-comparison.md`）。
+17. **标准正确性以 WPT/Test262 为最终标准，SPA 价值以任务成功率为最终标准**；Chrome 只用于内容/渲染差分，HTML5test/Acid3 只用于外部冒烟（见本章「浏览器兼容性评分、优化闭环与停止条件」）。
 18. **QuickJS bridge 函数必须走真实 DOM 操作，不能走 set_attr 当 attribute**（M66-fix）：
     - ❌ `__setBody` 不能注册成 `set_attr(body, "innerHTML", html)`——`set_attr_inner`
       把 innerHTML 当普通 attribute（只改属性表），**不替换子节点**，渲染仍读旧 DOM
