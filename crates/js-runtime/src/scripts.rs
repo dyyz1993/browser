@@ -1673,8 +1673,18 @@ window.history = (function() {
 window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
 
 // __makeElement 工厂
+// M78: 按 nodeId 缓存包装器——同一节点的两次 getElementById/querySelector/
+// 命名访问必须 === 相等（WPT assert_equals 用严格相等）。纯 JS 数据缓存，
+// 不持有原生引用（GC 安全，同 __cookieJar 模式）。
+window.__elCache = {};
 window.__makeElement = function(nodeId) {
-    if (typeof nodeId === 'number' && nodeId >= 0) return new Element(nodeId);
+    if (typeof nodeId === 'number' && nodeId >= 0) {
+        var key = String(nodeId);
+        if (!window.__elCache[key]) {
+            window.__elCache[key] = new Element(nodeId);
+        }
+        return window.__elCache[key];
+    }
     return undefined;
 };
 
@@ -2828,6 +2838,35 @@ Element.prototype.insertAdjacentHTML = function(pos, html) {
         __setAttr(this.__nodeId, 'innerHTML', (__getAttr(this.__nodeId, 'innerHTML') || '') + html);
     }
 };
+// M78: insertAdjacentText —— testharness.js 的输出渲染依赖它（4 个位置全支持）。
+Element.prototype.insertAdjacentText = function(pos, text) {
+    text = String(text == null ? '' : text);
+    if (!text) return;
+    var self = this;
+    function makeTextNode() { return document.createTextNode(text); }
+    function nextSiblingId(pid) {
+        var ids = (__children(pid) || '').split(',');
+        for (var i = 0; i < ids.length; i++) {
+            if (parseInt(ids[i], 10) === self.__nodeId) {
+                return (i + 1 < ids.length) ? parseInt(ids[i + 1], 10) : -1;
+            }
+        }
+        return -1;
+    }
+    try {
+        if (pos === 'beforeend') {
+            __appendChild(self.__nodeId, makeTextNode().__nodeId);
+        } else if (pos === 'afterbegin') {
+            var first = parseInt((__children(self.__nodeId) || '').split(',')[0], 10);
+            __insertBefore(self.__nodeId, makeTextNode().__nodeId, isNaN(first) ? -1 : first);
+        } else if (pos === 'beforebegin' || pos === 'afterend') {
+            var pid = __getParent(self.__nodeId);
+            if (pid < 0) return;
+            var ref = (pos === 'beforebegin') ? self.__nodeId : nextSiblingId(pid);
+            __insertBefore(pid, makeTextNode().__nodeId, ref);
+        }
+    } catch (e) { /* 静默：文本插入失败不阻断测试主流程 */ }
+};
 Element.prototype.getBoundingClientRect = function() {
     return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 };
 };
@@ -3001,6 +3040,22 @@ window.__drainDueTransitions = function() {
 window.__hasPendingTransitions = function() {
     return window.__pendingTransitions.length > 0;
 };
+// M78: window 命名访问 —— HTML 规范：带 id 的元素可在 window 上裸引用
+// （WPT 测试大量使用 `div2_3` 这类裸引用）。shim 安装时 DOM 已解析，
+// 为每个 id 惰性定义 getter。动态新建元素不覆盖（已知子集，记录于 PROGRESS）。
+try {
+    var __namedIds = (typeof __allIds === 'function') ? String(__allIds() || '') : '';
+    __namedIds.split(',').forEach(function(id) {
+        if (id && !(id in window)) {
+            try {
+                Object.defineProperty(window, id, {
+                    get: function() { return document.getElementById(id); },
+                    configurable: true, enumerable: false
+                });
+            } catch (e) {}
+        }
+    });
+} catch (e) {}
 undefined;
 "#;
 

@@ -80,6 +80,24 @@ webapi 0.000 / storage_nav_cdp 0.517）。
 
 门禁：fmt ✅ / clippy 0 warnings ✅ / **737 passed**（+12 新）。
 
+**M78.4 循环 3 —— 属性选择器 + window 命名访问 + 身份缓存（css_selector 0.000→0.915）**：
+
+- **css-engine 属性选择器**（M2 以来 out-of-scope 的缺口）：`[attr]` / `[attr="v"]` /
+  `[attr|="v"]`（dash-match）解析+匹配；lang/xml:lang 属性值比较大小写不敏感
+  （CSS Selectors 4 §4.2）；`:lang` 只看 lang 属性（HTML 语义，xml:lang 不参与）。
+- **offsetWidth 尊重 display:none**（WPT :lang 控制元素断言链路）。
+- **insertAdjacentText** 四位置实现（testharness.js 输出渲染依赖，之前 all_complete
+  中途崩掉导致 no-results）。
+- **window 命名访问**（`__allIds` 桥 + shim 惰性 getter）：WPT 大量裸引用元素 id。
+- **Element 包装器身份缓存**（`__elCache`，纯 JS 数据不持原生引用）：同一节点
+  getElementById/querySelector/命名访问必须 === 相等（WPT assert_equals 严格相等）。
+
+css_selector 类分变化：0.000 → 0.273（循环 2）→ **0.915**（43/47；剩 `+` 相邻
+组合器、dir=auto 内容探测两个已知非目标级缺口）。denominator 47→68 说明 dir
+测试从中途崩溃推进到逐断言。
+测试：css-engine +3 单测，cli +4 集成（dash-match 样式、display:none、
+insertAdjacentText、命名访问+身份）。741 passed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

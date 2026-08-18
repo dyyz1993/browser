@@ -40,6 +40,19 @@ pub struct CompoundSelector {
     pub id: Option<String>,
     /// M78: pseudo-classes（:lang/:dir/:nth-child 子集）。
     pub pseudos: Vec<Pseudo>,
+    /// M78: attribute selectors（[lang]、[lang="es"]、[lang|="es"]）。
+    pub attrs: Vec<AttrSelector>,
+}
+
+/// M78: 属性选择器（CSS Selectors L3 子集）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrSelector {
+    /// `[attr]` — 属性存在。
+    Exists(String),
+    /// `[attr="value"]` — 精确相等（属性名大小写不敏感，值区分大小写）。
+    Equals(String, String),
+    /// `[attr|="value"]` — dash-match：等于 value 或以 `value-` 开头（lang 经典用法）。
+    DashMatch(String, String),
 }
 
 /// M78: 支持的伪类子集（CSS Selectors L4 里爬虫/测试最高频的三个）。
@@ -73,6 +86,13 @@ impl fmt::Display for CompoundSelector {
                 }
                 Pseudo::Dir(d) => write!(f, ":dir({d})")?,
                 Pseudo::NthChild(n) => write!(f, ":nth-child({n})")?,
+            }
+        }
+        for a in &self.attrs {
+            match a {
+                AttrSelector::Exists(name) => write!(f, "[{name}]")?,
+                AttrSelector::Equals(name, value) => write!(f, "[{name}=\"{value}\"]")?,
+                AttrSelector::DashMatch(name, value) => write!(f, "[{name}|=\"{value}\"]")?,
             }
         }
         Ok(())
@@ -129,7 +149,7 @@ fn parse_compound(input: &str) -> Result<CompoundSelector, String> {
     // Optional tag at the start.
     let mut tag = String::new();
     while let Some(&c) = chars.peek() {
-        if c == '.' || c == '#' || c == ':' {
+        if c == '.' || c == '#' || c == ':' || c == '[' {
             break;
         }
         tag.push(c);
@@ -145,7 +165,7 @@ fn parse_compound(input: &str) -> Result<CompoundSelector, String> {
                 chars.next();
                 let mut name = String::new();
                 while let Some(&c) = chars.peek() {
-                    if c == '.' || c == '#' || c == ':' {
+                    if c == '.' || c == '#' || c == ':' || c == '[' {
                         break;
                     }
                     name.push(c);
@@ -160,7 +180,7 @@ fn parse_compound(input: &str) -> Result<CompoundSelector, String> {
                 chars.next();
                 let mut name = String::new();
                 while let Some(&c) = chars.peek() {
-                    if c == '.' || c == '#' || c == ':' {
+                    if c == '.' || c == '#' || c == ':' || c == '[' {
                         break;
                     }
                     name.push(c);
@@ -176,6 +196,11 @@ fn parse_compound(input: &str) -> Result<CompoundSelector, String> {
                 let pseudo = parse_pseudo(&mut chars, input)?;
                 out.pseudos.push(pseudo);
             }
+            '[' => {
+                chars.next();
+                let attr = parse_attr_selector(&mut chars, input)?;
+                out.attrs.push(attr);
+            }
             _ => {
                 return Err(format!(
                     "unexpected char {c:?} in compound selector {input:?}"
@@ -184,6 +209,85 @@ fn parse_compound(input: &str) -> Result<CompoundSelector, String> {
         }
     }
     Ok(out)
+}
+
+/// M78: 解析属性选择器 `[attr]` / `[attr="v"]` / `[attr|="v"]`（读入时已消费 '['）。
+fn parse_attr_selector(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    input: &str,
+) -> Result<AttrSelector, String> {
+    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+        chars.next();
+    }
+    let mut name = String::new();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            name.push(c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if name.is_empty() {
+        return Err(format!("empty attribute name in {input:?}"));
+    }
+    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+        chars.next();
+    }
+    // 无操作符 → [attr]
+    if matches!(chars.peek(), Some(']')) {
+        chars.next();
+        return Ok(AttrSelector::Exists(name));
+    }
+    // 操作符：= 或 |=
+    let dash_match = if matches!(chars.peek(), Some('|')) {
+        chars.next();
+        true
+    } else {
+        false
+    };
+    if !matches!(chars.peek(), Some('=')) {
+        return Err(format!("unsupported attribute operator in {input:?}"));
+    }
+    chars.next();
+    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+        chars.next();
+    }
+    let mut value = String::new();
+    match chars.peek() {
+        Some(&q) if q == '"' || q == '\'' => {
+            chars.next();
+            while let Some(&c) = chars.peek() {
+                if c == q {
+                    chars.next();
+                    break;
+                }
+                value.push(c);
+                chars.next();
+            }
+        }
+        _ => {
+            while let Some(&c) = chars.peek() {
+                if c == ']' || c.is_whitespace() {
+                    break;
+                }
+                value.push(c);
+                chars.next();
+            }
+        }
+    }
+    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+        chars.next();
+    }
+    if !matches!(chars.peek(), Some(']')) {
+        return Err(format!("unterminated attribute selector in {input:?}"));
+    }
+    chars.next();
+    Ok(if dash_match {
+        AttrSelector::DashMatch(name, value)
+    } else {
+        AttrSelector::Equals(name, value)
+    })
 }
 
 /// M78: 解析伪类 `:lang(...)` / `:dir(...)` / `:nth-child(n)`。
@@ -282,13 +386,12 @@ fn lang_range_matches(range: &str, tag: &str) -> bool {
 
 /// 元素的语言：从自身向上找最近的 lang / xml:lang 属性（HTML 语义）。
 fn element_lang(tree: &Tree, id: NodeId) -> Option<String> {
+    // HTML 文档语义：:lang 只看 lang 属性（xml:lang 不参与——WPT 有专项测试）。
     let mut cur = Some(id);
     while let Some(nid) = cur {
         if let NodeData::Element { attrs, .. } = tree.data(nid) {
-            for key in ["lang", "xml:lang"] {
-                if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
-                    return Some(v.clone());
-                }
+            if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("lang")) {
+                return Some(v.clone());
             }
         }
         cur = tree.get(nid).parent;
@@ -360,6 +463,46 @@ fn compound_matches(tree: &Tree, id: NodeId, sel: &CompoundSelector) -> bool {
             if !present.contains(c.as_str()) {
                 return false;
             }
+        }
+    }
+    for a in &sel.attrs {
+        let name = match a {
+            AttrSelector::Exists(n)
+            | AttrSelector::Equals(n, _)
+            | AttrSelector::DashMatch(n, _) => n.as_str(),
+        };
+        let found = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name));
+        // HTML 的 lang / xml:lang 属性值比较大小写不敏感（CSS Selectors 4 §4.2）。
+        let ci = name.eq_ignore_ascii_case("lang") || name.eq_ignore_ascii_case("xml:lang");
+        let ok = match (a, found) {
+            (AttrSelector::Exists(_), Some(_)) => true,
+            (AttrSelector::Exists(_), None) => false,
+            (AttrSelector::Equals(_, want), Some((_, v))) => {
+                if ci {
+                    v.eq_ignore_ascii_case(want)
+                } else {
+                    v == want
+                }
+            }
+            (AttrSelector::Equals(_, _), None) => false,
+            (AttrSelector::DashMatch(_, want), Some((_, v))) => {
+                let direct = if ci {
+                    v.eq_ignore_ascii_case(want)
+                } else {
+                    v == want
+                };
+                if direct {
+                    true
+                } else {
+                    let vl = v.to_lowercase();
+                    let wl = want.to_lowercase();
+                    vl.starts_with(&wl) && vl.as_bytes().get(wl.len()) == Some(&b'-')
+                }
+            }
+            (AttrSelector::DashMatch(_, _), None) => false,
+        };
+        if !ok {
+            return false;
         }
     }
     for p in &sel.pseudos {
@@ -704,6 +847,35 @@ mod tests {
         assert!(!Selector::parse("#in:lang(fr)")
             .unwrap()
             .matches(&tree, p_in));
+    }
+
+    #[test]
+    fn attr_selectors_parse_and_match() {
+        let (tree, p_in, p_out) = lang_fixture();
+        // p_in 无 lang（继承 div[lang=es]）→ 属性选择器只看自身属性，不继承。
+        // fixture 里 p#in 无 lang 属性；给 [lang|=es] 换个带属性的元素测：
+        // div[lang=es] 的 id 无关，直接对 div 匹配。
+        let body = tree.get(p_in).parent.unwrap(); // div
+        assert!(Selector::parse("[lang]").unwrap().matches(&tree, body));
+        assert!(Selector::parse("[lang=\"es\"]")
+            .unwrap()
+            .matches(&tree, body));
+        assert!(Selector::parse("[lang|=\"es\"]")
+            .unwrap()
+            .matches(&tree, body));
+        assert!(!Selector::parse("[lang|=\"e\"]")
+            .unwrap()
+            .matches(&tree, body));
+        // p#in 自身无 lang 属性 → [lang] 不匹配
+        assert!(!Selector::parse("[lang]").unwrap().matches(&tree, p_in));
+        // id 属性
+        assert!(Selector::parse("p[id=\"in\"]")
+            .unwrap()
+            .matches(&tree, p_in));
+        assert!(!Selector::parse("p[id=\"out\"]")
+            .unwrap()
+            .matches(&tree, p_in));
+        let _ = p_out;
     }
 
     #[test]

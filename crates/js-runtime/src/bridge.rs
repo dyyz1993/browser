@@ -1405,6 +1405,12 @@ fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
                     break;
                 }
             }
+            let dash_match = if let Some(&'|') = chars.peek() {
+                chars.next();
+                true
+            } else {
+                false
+            };
             if let Some(&'=') = chars.peek() {
                 chars.next();
                 while let Some(&space) = chars.peek() {
@@ -1450,7 +1456,11 @@ fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
                     chars.next();
                 }
                 if !attr.is_empty() {
-                    tokens.push(SelectorToken::AttrEquals(attr, value));
+                    if dash_match {
+                        tokens.push(SelectorToken::AttrDashMatch(attr, value));
+                    } else {
+                        tokens.push(SelectorToken::AttrEquals(attr, value));
+                    }
                 }
             } else {
                 while let Some(&ch) = chars.peek() {
@@ -1496,6 +1506,8 @@ enum SelectorToken {
     Id(String),
     AttrExists(String),
     AttrEquals(String, String),
+    /// M78: [attr|="v"] —— dash-match（lang 查询）。
+    AttrDashMatch(String, String),
     /// M78: :lang(en, fr-*) — BCP47 语言范围。
     Lang(Vec<String>),
     /// M78: :dir(ltr|rtl)。
@@ -1593,13 +1605,12 @@ fn lang_range_matches_bridge(range: &str, tag: &str) -> bool {
 
 /// M78: 元素语言（自身向上最近 lang / xml:lang 属性）。
 fn element_lang_bridge(tree: &Tree, id: NodeId) -> Option<String> {
+    // HTML 文档语义：:lang 只看 lang 属性。
     let mut cur = Some(id);
     while let Some(nid) = cur {
         if let NodeData::Element { attrs, .. } = tree.data(nid) {
-            for key in ["lang", "xml:lang"] {
-                if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
-                    return Some(v.clone());
-                }
+            if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("lang")) {
+                return Some(v.clone());
             }
         }
         cur = tree.get(nid).parent;
@@ -1655,7 +1666,35 @@ fn matches_selector(tree: &Tree, id: NodeId, node: &Node, tokens: &[SelectorToke
                     .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == id),
                 SelectorToken::AttrExists(attr) => attrs.iter().any(|(k, _)| k == attr),
                 SelectorToken::AttrEquals(attr, value) => {
-                    attrs.iter().any(|(k, v)| k == attr && v == value)
+                    let ci =
+                        attr.eq_ignore_ascii_case("lang") || attr.eq_ignore_ascii_case("xml:lang");
+                    attrs.iter().any(|(k, v)| {
+                        k == attr
+                            && (if ci {
+                                v.eq_ignore_ascii_case(value)
+                            } else {
+                                v == value
+                            })
+                    })
+                }
+                SelectorToken::AttrDashMatch(attr, value) => {
+                    let ci =
+                        attr.eq_ignore_ascii_case("lang") || attr.eq_ignore_ascii_case("xml:lang");
+                    attrs.iter().any(|(k, v)| {
+                        if !k.eq_ignore_ascii_case(attr) {
+                            return false;
+                        }
+                        if ci {
+                            if v.eq_ignore_ascii_case(value) {
+                                return true;
+                            }
+                            let vl = v.to_lowercase();
+                            let wl = value.to_lowercase();
+                            vl.starts_with(&wl) && vl.as_bytes().get(wl.len()) == Some(&b'-')
+                        } else {
+                            v == value || v.starts_with(&format!("{value}-"))
+                        }
+                    })
                 }
                 SelectorToken::Lang(ranges) => match element_lang_bridge(tree, id) {
                     Some(lang) => ranges.iter().any(|r| lang_range_matches_bridge(r, &lang)),
@@ -3106,19 +3145,47 @@ pub mod qjs_bridge {
             }
             let sheet = browser_css_engine::parse(&css);
             let styles = browser_css_engine::compute_styles(t, &sheet);
-            styles
-                .get(&id)
-                .and_then(|decls| {
-                    decls
-                        .iter()
-                        .rev()
-                        .find(|d| d.property.eq_ignore_ascii_case("width"))
-                })
+            let Some(decls) = styles.get(&id) else {
+                return 0.0;
+            };
+            // display:none → 元素不渲染，offsetWidth 为 0（WPT :lang 控制元素靠它断言）。
+            if let Some(d) = decls
+                .iter()
+                .rev()
+                .find(|d| d.property.eq_ignore_ascii_case("display"))
+            {
+                if d.value.trim().eq_ignore_ascii_case("none") {
+                    return 0.0;
+                }
+            }
+            decls
+                .iter()
+                .rev()
+                .find(|d| d.property.eq_ignore_ascii_case("width"))
                 .and_then(|d| match browser_css_engine::parse_length(&d.value) {
                     Some(browser_css_engine::Length::Px(v)) => Some(f64::from(v)),
                     _ => None,
                 })
                 .unwrap_or(0.0)
+        })
+    }
+
+    /// M78: allIds() -> 逗号分隔的所有 id 属性值（window 命名访问用）。
+    /// WPT 大量测试直接裸引用元素 id（`div2_3`）——HTML 规范的 named access。
+    pub fn all_ids() -> String {
+        with_tree(|t| {
+            let mut ids = Vec::new();
+            t.traverse(t.root(), |_, node| {
+                if let NodeData::Element { attrs, .. } = &node.data {
+                    if let Some((_, v)) = attrs.iter().find(|(k, _)| k == "id") {
+                        if !v.is_empty() {
+                            ids.push(v.clone());
+                        }
+                    }
+                }
+                true
+            });
+            ids.join(",")
         })
     }
 

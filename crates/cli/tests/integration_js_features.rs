@@ -1097,6 +1097,87 @@ document.getElementById('out').textContent =
     let _ = std::fs::remove_file(&path);
 }
 
+/// M78: [lang|="es"] 属性选择器样式匹配（dash-match）。
+#[test]
+fn attr_dash_match_selector_css() {
+    let html = r#"<!DOCTYPE html><html><body>
+<style>.test div { width: 50px; } #box[lang|='es'] { width: 100px; }</style>
+<div class="test"><div id="box" lang="es-MX">&#xA0;</div></div>
+<div id="out">FAIL</div>
+<script>
+document.getElementById('out').textContent = 'DASH_W_' + document.getElementById('box').offsetWidth;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DASH_W_100"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: display:none → offsetWidth 0（不渲染的元素）。
+#[test]
+fn offset_width_display_none_is_zero() {
+    let html = r#"<!DOCTYPE html><html><body>
+<style>#ctl { width: 400px; } #ctl:lang(xx) { display: none; }</style>
+<p lang="xx" id="ctl">x</p>
+<div id="out">FAIL</div>
+<script>
+document.getElementById('out').textContent = 'CTL_W_' + document.getElementById('ctl').offsetWidth;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CTL_W_0"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: insertAdjacentText 四个位置（testharness 输出渲染依赖）。
+#[test]
+fn insert_adjacent_text_positions() {
+    let html = r#"<!DOCTYPE html><html><body>
+<p id="p1"><b id="b1">mid</b></p>
+<div id="out">FAIL</div>
+<script>
+var b = document.getElementById('b1');
+b.insertAdjacentText('beforebegin', 'A');
+b.insertAdjacentText('afterbegin', 'B');
+b.insertAdjacentText('beforeend', 'C');
+b.insertAdjacentText('afterend', 'D');
+document.getElementById('out').textContent = 'ADJ_' + document.getElementById('p1').textContent;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADJ_ABmidCD"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: window 命名访问 —— 裸引用元素 id（WPT 大量使用）。
+#[test]
+fn window_named_access_by_element_id() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="div2_3" dir="rtl">x</div>
+<div id="out">FAIL</div>
+<script>
+// div2_3 是 window 的命名属性（HTML 规范 named access）
+var ok = (typeof div2_3 !== 'undefined') && div2_3.getAttribute('dir') === 'rtl';
+document.getElementById('out').textContent = 'NAMED_' + ok + '_' + (window.div2_3 === div2_3);
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NAMED_true_true"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

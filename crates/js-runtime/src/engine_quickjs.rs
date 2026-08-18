@@ -326,6 +326,8 @@ impl QuickJsEngine {
                 let _ = g.set("__qsCheck", Function::new(ctx.clone(), |s: String| crate::bridge::qs_syntax_error(&s).is_none()).unwrap());
                 // M78: __offsetWidth(id) —— 经 css-engine mini 级联取元素 width（WPT :lang 测试）。
                 let _ = g.set("__offsetWidth", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::offset_width(id)).unwrap());
+                // M78: __allIds() —— window 命名访问（WPT 裸引用元素 id）。
+                let _ = g.set("__allIds", Function::new(ctx.clone(), bridge::qjs_bridge::all_ids).unwrap());
                 let _ = g.set("__getBody", Function::new(ctx.clone(), |_: f64| bridge::qjs_bridge::get_body()).unwrap());
                 let _ = g.set("__setTitle", Function::new(ctx.clone(), |t: String| bridge::qjs_bridge::set_title(t)).unwrap());
                 let _ = g.set("__getParent", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_parent(id)).unwrap());
