@@ -1416,6 +1416,27 @@ fn run_scripts_quickjs(
                     window.dispatchEvent(ev1);
                     window.dispatchEvent(ev2);
                 }
+                // M78.14: 静态 iframe 的 load 派发——WPT iframe 页在
+                // iframe.onload 里跑断言（子文档 script 执行超目标，属性近似）。
+                if (typeof __qsAll === 'function') {
+                    var _ifrIds = __qsAll('iframe');
+                    (_ifrIds || '').split(',').forEach(function(_sid) {
+                        if (!_sid) return;
+                        var _nid = parseInt(_sid, 10);
+                        setTimeout(function() {
+                            try {
+                                var _el = __makeElement(_nid);
+                                var _on = _el.onload;
+                                if (typeof _on === 'function') _on.call(_el, { type: 'load', target: _el });
+                                if (_el.__listeners && _el.__listeners['load']) {
+                                    for (var _i = 0; _i < _el.__listeners['load'].length; _i++) {
+                                        try { _el.__listeners['load'][_i].call(_el, { type: 'load', target: _el }); } catch (e) {}
+                                    }
+                                }
+                            } catch (e) {}
+                        }, 0);
+                    });
+                }
             }
         } catch(e) {}"#,
     );
@@ -2037,11 +2058,39 @@ if (typeof window.HTMLIFrameElement === 'undefined') { window.HTMLIFrameElement 
 // 需 contentDocument/contentWindow 返回可用对象。M71.3 iframe 69%→高。
 Object.defineProperty(Element.prototype, 'contentDocument', {
     get: function() {
-        // iframe 的 contentDocument：返回一个简易 document（含 body），
-        // 这样页面可往里写内容。非 iframe 返回 null。
+        // iframe 的 contentDocument：简易 document（含 body），页面可写内容。
+        // M78.14: 惰性加载 src——data: URI 解析出 contentType（WPT
+        // contentType 系列）；URL 记录解析后的地址（Document-URL 系列）。
+        // 子文档 script 不执行（跨 realm 基建超 crawler-spa 目标）。
         if (this.tagName !== 'IFRAME') return null;
         if (!this.__contentDoc) {
-            this.__contentDoc = { body: null, documentElement: null };
+            var doc = { body: null, documentElement: null,
+                        URL: 'about:blank', documentURI: 'about:blank',
+                        contentType: 'text/html',
+                        write: function() {}, open: function() {}, close: function() {} };
+            var src = __getAttr(this.__nodeId, 'src');
+            if (src) {
+                if (src.indexOf('data:') === 0) {
+                    var dm = /data:([^;,]*)/i.exec(src);
+                    if (dm && dm[1]) doc.contentType = dm[1];
+                    doc.URL = src; doc.documentURI = src;
+                } else if (typeof __fetchSync === 'function') {
+                    var html = null;
+                    try { html = __fetchSync(src); } catch (e) {}
+                    // 扩展名近似 MIME（fetchSync 只回 body 拿不到头）
+                    var em = /\.[a-z0-9]+$/i.exec(src.split('?')[0]);
+                    if (em) {
+                        var extMime = { '.txt': 'text/plain', '.html': 'text/html',
+                            '.htm': 'text/html', '.xml': 'application/xml', '.xhtml': 'application/xhtml+xml',
+                            '.svg': 'image/svg+xml', '.js': 'text/javascript', '.css': 'text/css' };
+                        if (extMime[em[0].toLowerCase()]) doc.contentType = extMime[em[0].toLowerCase()];
+                    }
+                    try { doc.URL = new URL(src, location.href).href; } catch (e) { doc.URL = src; }
+                    doc.documentURI = doc.URL;
+                    this.__contentHtml = html;
+                }
+            }
+            this.__contentDoc = doc;
         }
         return this.__contentDoc;
     },

@@ -275,6 +275,18 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - **insertAdjacentElement**（四位置，镜像 insertAdjacentText）。
 - html_dom 80→82；webapi 持平。757 passed 0 failed。
 
+**M78.14 循环 14 —— iframe contentDocument 惰性加载（收益未达，停手记录）**：
+
+- contentDocument getter 惰性加载 src：data: URI 解析 contentType、扩展名
+  近似 MIME、URL/documentURI 记录解析后地址、write/open/close 方法。
+- DCL 时对静态 iframe 派发 load（onload 属性 + addEventListener 监听器）。
+- **三轮实测 html_dom 持平 82/481**——WPT iframe 页多等 contentWindow 的
+  跨 realm 事件链（子文档 testharness → postMessage 回父页），属性近似
+  不够解锁。跨 realm iframe 基建超出 crawler-spa 目标（AGENTS 非目标精神），
+  按"边际收益递减停手"记录：**iframe 簇定性为基建级，不再投入**。
+- 剩余大簇（html_dom no-results 13 + harness-not-run 11）同源 iframe 或
+  长尾单行，下一杠杆转向 storage 的 history 导航语义。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新
