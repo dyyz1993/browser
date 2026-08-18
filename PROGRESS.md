@@ -139,6 +139,24 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   单页复现不稳定（同字节同旗标时过时不过），指向事件循环退出时序与
   testharness load→done 链路的竞态，需插桩 event loop 逐 tick 追踪。
 
+**M78.7 循环 7 —— window.onload 属性处理器 + location 语义 + 注入修复**：
+
+- **window.dispatchEvent 调用 on* 处理器**（浏览器标准行为）：旧实现只回调
+  addEventListener 监听器，`window.onload = fn`（WPT 测试的标准启动方式）
+  永远不触发——大面积 no-results 的共性根因之一。
+- **location 语义补齐**：href/hash setter（赋值触发导航语义）、相对 URL
+  解析（pushState('/x#y') 后 location.href 是绝对地址）、search/hash 解析、
+  hash 变化异步派发 hashchange 事件。
+- **Range 构造器** + document.createRange（WPT dom/ranges 系列依赖）。
+- **history.length 从函数改为 getter**（WPT 断言它是数字）。
+- **harness 修复**：wpt_inject 兼容无引号 src（Range 系列页面的采集器曾
+  被前置到 doctype 之前的非法位置，导致解析错乱）。
+- **测量方差记录**：storage 类同二进制两次全跑分差可达 29/196 vs 102/269
+  ——iframe 重型页面的完成呈双峰。评分结论需多次取均值（下轮改进 harness
+  加 --repeat）。
+
+回归测试 3 项入库（onload 属性/hashchange/Range）。738 passed 0 failed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

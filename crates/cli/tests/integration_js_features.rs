@@ -1178,6 +1178,66 @@ document.getElementById('out').textContent = 'NAMED_' + ok + '_' + (window.div2_
     let _ = std::fs::remove_file(&path);
 }
 
+/// M78: window.onload 属性处理器必须随 load 派发被调用（WPT 测试标准启动方式）。
+#[test]
+fn window_onload_property_handler_fires() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+window.onload = function() {
+    document.getElementById('out').textContent = 'ONLOAD_PROP_FIRED';
+};
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ONLOAD_PROP_FIRED"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: location.hash 赋值 → hashchange 事件（WPT history 系列依赖）。
+#[test]
+fn location_hash_setter_fires_hashchange() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var got = '';
+window.addEventListener('hashchange', function() { got = 'HASH_' + location.hash; });
+setTimeout(function() {
+    document.getElementById('out').textContent = got || 'NO_HASHCHANGE';
+}, 300);
+location.hash = 'foo';
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("HASH_#foo"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: Range 构造器 + document.createRange（WPT dom/ranges 依赖）。
+#[test]
+fn range_constructor_basics() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var r = (typeof Range === 'function') ? new Range() : document.createRange();
+document.getElementById('out').textContent =
+    'RANGE_' + (r.startContainer === document) + '_' + r.startOffset + '_' + r.collapsed + '_' + (r.commonAncestorContainer === document);
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RANGE_true_0_true_true"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

@@ -1694,33 +1694,72 @@ function __parseLoc(href) {
     var afterProto = colonIdx >= 0 ? href.slice(colonIdx + 1) : href;
     // 去除可能的 //
     if (afterProto.indexOf('//') === 0) afterProto = afterProto.slice(2);
-    var host = afterProto.split('/')[0] || '';
+    var hashIdx = afterProto.indexOf('#');
+    var hashPart = hashIdx >= 0 ? afterProto.slice(hashIdx) : '';
+    var noHash = hashIdx >= 0 ? afterProto.slice(0, hashIdx) : afterProto;
+    var searchIdx = noHash.indexOf('?');
+    var searchPart = searchIdx >= 0 ? noHash.slice(searchIdx) : '';
+    var noSearch = searchIdx >= 0 ? noHash.slice(0, searchIdx) : noHash;
+    var host = noSearch.split('/')[0] || '';
     var hostNoPort = host.split(':')[0];
     var pathname;
     if (proto === 'about:') {
-        pathname = afterProto; // 'blank'
+        pathname = noSearch; // 'blank'
     } else if (host) {
-        pathname = '/' + afterProto.split('/').slice(1).join('/');
+        pathname = '/' + noSearch.split('/').slice(1).join('/');
     } else {
-        pathname = '/' + afterProto;
+        pathname = '/' + noSearch;
     }
-    return {
-        href: href,
+    var loc = {
         protocol: proto,
         host: host,
         hostname: hostNoPort,
         pathname: pathname,
-        search: '', hash: '',
+        search: searchPart,
         origin: proto + (host ? '//' + host : ''),
         reload: function() {},
         replace: function(u) { __setLocHref(u); },
         assign: function(u) { __setLocHref(u); },
         toString: function() { return __locHref; }
     };
+    // M78: href/hash setter——赋值触发导航语义（相对解析 + hashchange）。
+    Object.defineProperty(loc, 'href', {
+        get: function() { return __locHref; },
+        set: function(u) { __setLocHref(u); },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(loc, 'hash', {
+        get: function() { return hashPart; },
+        set: function(h) {
+            var v = String(h);
+            if (v.charAt(0) !== '#') v = '#' + v;
+            __setLocHref(__locHref.split('#')[0] + v);
+        },
+        enumerable: true, configurable: true
+    });
+    return loc;
 }
 function __setLocHref(u) {
-    __locHref = u;
-    window.location = __parseLoc(u);
+    // M78: 相对 URL 解析（pushState('/x?y#z') 后 location.href 必须是绝对地址）。
+    var resolved = String(u);
+    if (typeof URL === 'function' && __locHref && __locHref.indexOf('about:') !== 0) {
+        try { resolved = new URL(String(u), __locHref).href; } catch (e) {}
+    }
+    // M78: hash 变化 → 异步派发 hashchange（WPT history 系列依赖）。
+    var oldHash = '';
+    try { oldHash = window.location ? (window.location.hash || '') : ''; } catch (e) {}
+    __locHref = resolved;
+    window.location = __parseLoc(resolved);
+    var newHash = window.location.hash || '';
+    if (oldHash !== newHash) {
+        setTimeout(function() {
+            try {
+                var ev = new Event('hashchange');
+                ev.oldURL = oldHash; ev.newURL = resolved;
+                window.dispatchEvent(ev);
+            } catch (e) {}
+        }, 0);
+    }
 }
 window.location = __parseLoc(__locHref);
 
@@ -1729,8 +1768,8 @@ window.location = __parseLoc(__locHref);
 window.history = (function() {
     var stack = [__locHref];
     var state = null;
-    return {
-        length: function() { return stack.length; },
+    // M78: length 必须是 getter 属性（WPT history 断言 history.length 是数字）。
+    var h = {
         get state() { return state; },
         pushState: function(s, title, url) {
             state = s;
@@ -1746,6 +1785,8 @@ window.history = (function() {
         go: function(n) {},
         scrollRestoration: 'auto'
     };
+    Object.defineProperty(h, 'length', { get: function() { return stack.length; }, enumerable: true });
+    return h;
 })();
 
 // document 占位（完整 document 在 document shim 里填充）
@@ -1815,6 +1856,14 @@ window.dispatchEvent = function(ev) {
         var cbs = __winListeners[ev.type];
         for (var i = 0; i < cbs.length; i++) {
             try { cbs[i].call(window, ev); } catch(e) {}
+        }
+    }
+    // M78: on* 事件处理器属性——浏览器标准行为：派发事件时除 addEventListener
+    // 监听器外还要调用 window['on'+type]（WPT 大量测试用 window.onload = fn 启动）。
+    if (ev && ev.type) {
+        var __onh = window['on' + ev.type];
+        if (typeof __onh === 'function') {
+            try { __onh.call(window, ev); } catch(e) {}
         }
     }
 };
@@ -3369,6 +3418,46 @@ document.createEvent = function(type) {
     return new Event('');
 };
 document.createComment = document.createComment || function(text) { return document.createElement('div'); };
+// M78: Range —— WPT dom/ranges 系列依赖（构造器四属性 + 常用方法桩）。
+function Range() {
+    this.startContainer = document;
+    this.endContainer = document;
+    this.startOffset = 0;
+    this.endOffset = 0;
+    this.collapsed = true;
+    this.commonAncestorContainer = document;
+}
+Range.prototype.setStart = function(node, offset) {
+    this.startContainer = node; this.startOffset = offset; this.collapsed = this._recalc();
+};
+Range.prototype.setEnd = function(node, offset) {
+    this.endContainer = node; this.endOffset = offset; this.collapsed = this._recalc();
+};
+Range.prototype._recalc = function() {
+    return this.startContainer === this.endContainer && this.startOffset === this.endOffset;
+};
+Range.prototype.collapse = function(toStart) {
+    if (toStart) { this.endContainer = this.startContainer; this.endOffset = this.startOffset; }
+    else { this.startContainer = this.endContainer; this.startOffset = this.endOffset; }
+    this.collapsed = true;
+};
+Range.prototype.cloneRange = function() {
+    var r = new Range();
+    r.startContainer = this.startContainer; r.endContainer = this.endContainer;
+    r.startOffset = this.startOffset; r.endOffset = this.endOffset; r.collapsed = this.collapsed;
+    return r;
+};
+Range.prototype.selectNodeContents = function(node) {
+    this.startContainer = node; this.endContainer = node; this.startOffset = 0; this.endOffset = 0;
+};
+Range.prototype.deleteContents = function() { this.collapse(true); };
+Range.prototype.cloneContents = function() { return document.createDocumentFragment(); };
+Range.prototype.extractContents = function() { return document.createDocumentFragment(); };
+Range.prototype.insertNode = function() {};
+Range.prototype.getBoundingClientRect = function() { return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 }; };
+Range.prototype.detach = function() {};
+window.Range = Range;
+document.createRange = function() { return new Range(); };
 document.createNodeIterator = function(root, whatToShow) { return new TreeWalker(root, whatToShow); };
 // document.createHTMLDocument：独立 document 对象（元素挂到根，不进 body）。
 document.createHTMLDocument = function(title) {

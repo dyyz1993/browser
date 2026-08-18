@@ -199,10 +199,15 @@ COLLECTOR = (
 
 
 def wpt_inject(src):
-    """在 testharness.js script 标签后注入结果采集器。"""
-    m = re.search(r"<script[^>]*src=\"[^\"]*testharness\.js[^\"]*\"[^>]*>\s*</script>", src)
-    if not m:
-        m = re.search(r"<script[^>]*src='[^']*testharness\.js[^']*'[^>]*>\s*</script>", src)
+    """在 testharness.js script 标签后注入结果采集器。
+
+    M78: 兼容无引号 src（`src=/resources/testharness.js`——WPT Range 系列）。
+    旧正则只认带引号的 → 无引号页面采集器被前置到 <!doctype> 之前的非法
+    位置，解析错乱（结果 div 重复、探针脚本错位）。
+    """
+    m = re.search(
+        r"<script[^>]*src=[\"']?[^\"'> ]*testharness\.js[^\"'> ]*[\"']?[^>]*>\s*</script>",
+        src, re.I)
     if m:
         return src[:m.end()] + COLLECTOR + src[m.end():]
     hm = re.search(r"<head[^>]*>", src, re.I)
