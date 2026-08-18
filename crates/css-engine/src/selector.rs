@@ -7,10 +7,11 @@
 //! - `#id`                identifier
 //! - `tag.cls#id`         compound (any combination)
 //! - `A B`                descendant (whitespace combinator)
+//! - `A + B`              adjacent sibling combinator
 //! - `A, B`               selector list
 //!
 //! Explicitly out of scope:
-//! attribute selectors, pseudo-classes/elements, `>`, `+`, `~`.
+//! pseudo-classes beyond the M78 subset, `>`, `~`.
 
 use std::fmt;
 
@@ -25,11 +26,24 @@ pub struct Selector {
     pub selectors: Vec<SelectorChain>,
 }
 
-/// A chain of compound selectors connected by descendant combinators,
-/// e.g. `body p.title`.
+/// A chain of compound selectors connected by combinators,
+/// e.g. `body p.title + a.link`.
 #[derive(Debug, Clone)]
 pub struct SelectorChain {
     pub parts: Vec<CompoundSelector>,
+    /// `combinators[i]` 描述 `parts[i]` 与 `parts[i+1]` 之间的关系，
+    /// 长度恒为 `parts.len() - 1`（单 compound 的链为空）。
+    pub combinators: Vec<Combinator>,
+}
+
+/// 链上相邻两个复合选择器之间的组合器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Combinator {
+    /// `A B`（空白）—— B 是 A 的后代（任意深度）。
+    Descendant,
+    /// `A + B` —— B 是 A 紧邻的后一个元素兄弟（中间无其他元素节点，
+    /// 文本等非元素节点不破坏相邻性，CSS Selectors L4 §13.2）。
+    Adjacent,
 }
 
 /// A single compound selector with no whitespace, e.g. `p.title#main`.
@@ -130,17 +144,64 @@ impl Selector {
 }
 
 fn parse_chain(input: &str) -> Result<SelectorChain, String> {
-    let mut parts = Vec::new();
-    for chunk in input.split_whitespace() {
-        if chunk.is_empty() {
+    // 顶层（depth 0）扫描：空白是 Descendant 组合器，'+' 是 Adjacent（两侧空格可省略）。
+    // 方括号/圆括号内的空白与 '+' 属于 compound 自身（如 `[title="a + b"]`、`:lang(en, fr)`）。
+    let mut parts: Vec<CompoundSelector> = Vec::new();
+    let mut combinators: Vec<Combinator> = Vec::new();
+    let mut chunk = String::new();
+    let mut depth: usize = 0;
+    // 已见到但尚未落到 parts 之间的组合器；空白先预设 Descendant，
+    // 其后出现 '+' 则升级为 Adjacent（`div + p` / `div+p` 等价）。
+    let mut pending: Option<Combinator> = None;
+
+    for c in input.chars() {
+        if depth == 0 && c.is_whitespace() {
+            if !chunk.is_empty() {
+                parts.push(parse_compound(&chunk)?);
+                chunk.clear();
+                pending = Some(Combinator::Descendant);
+            }
             continue;
         }
-        parts.push(parse_compound(chunk)?);
+        if depth == 0 && c == '+' {
+            if !chunk.is_empty() {
+                parts.push(parse_compound(&chunk)?);
+                chunk.clear();
+            }
+            if parts.is_empty() {
+                return Err(format!("selector chain starts with '+' in {input:?}"));
+            }
+            if pending == Some(Combinator::Adjacent) {
+                return Err(format!("doubled '+' combinator in {input:?}"));
+            }
+            pending = Some(Combinator::Adjacent);
+            continue;
+        }
+        if matches!(c, '[' | '(') {
+            depth += 1;
+        } else if matches!(c, ']' | ')') {
+            depth = depth.saturating_sub(1);
+        }
+        // 新 compound 的第一个字符：落定它与上一个 part 之间的组合器。
+        if chunk.is_empty() {
+            if let Some(comb) = pending.take() {
+                combinators.push(comb);
+            }
+        }
+        chunk.push(c);
+    }
+    if !chunk.is_empty() {
+        parts.push(parse_compound(&chunk)?);
     }
     if parts.is_empty() {
         return Err(format!("empty selector chain: {input:?}"));
     }
-    Ok(SelectorChain { parts })
+    // 末尾悬空的 '+'（后面没有 compound）非法；悬空的空白无所谓。
+    if pending == Some(Combinator::Adjacent) {
+        return Err(format!("trailing '+' combinator in {input:?}"));
+    }
+    debug_assert_eq!(combinators.len(), parts.len() - 1);
+    Ok(SelectorChain { parts, combinators })
 }
 
 fn parse_compound(input: &str) -> Result<CompoundSelector, String> {
@@ -524,29 +585,54 @@ fn compound_matches(tree: &Tree, id: NodeId, sel: &CompoundSelector) -> bool {
     true
 }
 
+/// 紧邻的前一个元素兄弟：遍历父节点的 children，跳过 text 等非元素节点
+/// （CSS `+` 只看元素兄弟；html 的 parent 是 Document 节点时同样照常处理）。
+fn prev_element_sibling(tree: &Tree, id: NodeId) -> Option<NodeId> {
+    let parent = tree.get(id).parent?;
+    let mut prev: Option<NodeId> = None;
+    for &child in tree.children_of(parent) {
+        if child == id {
+            return prev;
+        }
+        if matches!(tree.data(child), NodeData::Element { .. }) {
+            prev = Some(child);
+        }
+    }
+    None
+}
+
 fn chain_matches(tree: &Tree, id: NodeId, chain: &SelectorChain) -> bool {
-    // The last part matches `id`; each preceding part must match some
-    // ancestor (descendant combinator).
+    // The last part matches `id`; 从右往左按组合器归约：
+    // Descendant 沿祖先链找任意匹配祖先，Adjacent 只看紧邻的前一个元素兄弟。
     let parts = &chain.parts;
+    let combinators = &chain.combinators;
     let last_idx = parts.len() - 1;
     if !compound_matches(tree, id, &parts[last_idx]) {
         return false;
     }
     let mut current_id = id;
-    for part in parts[..last_idx].iter().rev() {
-        // Walk ancestors until we find one that matches `part`.
-        let mut ancestor = tree.get(current_id).parent;
-        let mut found = false;
-        while let Some(aid) = ancestor {
-            if compound_matches(tree, aid, part) {
-                current_id = aid;
-                found = true;
-                break;
+    for i in (0..last_idx).rev() {
+        match combinators[i] {
+            Combinator::Adjacent => match prev_element_sibling(tree, current_id) {
+                Some(prev) if compound_matches(tree, prev, &parts[i]) => current_id = prev,
+                _ => return false,
+            },
+            Combinator::Descendant => {
+                // Walk ancestors until we find one that matches `part`.
+                let mut ancestor = tree.get(current_id).parent;
+                let mut found = false;
+                while let Some(aid) = ancestor {
+                    if compound_matches(tree, aid, &parts[i]) {
+                        current_id = aid;
+                        found = true;
+                        break;
+                    }
+                    ancestor = tree.get(aid).parent;
+                }
+                if !found {
+                    return false;
+                }
             }
-            ancestor = tree.get(aid).parent;
-        }
-        if !found {
-            return false;
         }
     }
     true
@@ -885,5 +971,159 @@ mod tests {
         assert!(Selector::parse(":dir('ltr')").is_err());
         assert!(Selector::parse(":lang()").is_err());
         assert!(Selector::parse(":hover").is_err());
+    }
+
+    // ---- 相邻兄弟组合器 `+` ----
+
+    /// 相邻兄弟 fixture：
+    /// ```text
+    /// Document
+    ///   └─ html
+    ///      └─ body
+    ///         ├─ div.container
+    ///         │  ├─ p#first    ("one")   ┐ p#first 的紧邻元素兄弟
+    ///         │  └─ span#inner ("in")    ┘ （div 内部）
+    ///         ├─ p#second      ("two")   ← div 的紧邻元素兄弟
+    ///         ├─ span#tail     ("three") ← p#second 的紧邻元素兄弟
+    ///         └─ section
+    ///            ├─ b          ("bold")
+    ///            ├─ Text " sep "       ← 文本不破坏相邻性
+    ///            └─ i          ("italic")
+    /// ```
+    fn sibling_fixture() -> (Tree, NodeId, NodeId, NodeId, NodeId, NodeId, NodeId) {
+        let el = |tag: &str, attrs: Vec<(&str, &str)>| NodeData::Element {
+            tag: tag.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let html = t.insert(Some(root), el("html", vec![]));
+        let body = t.insert(Some(html), el("body", vec![]));
+        let div = t.insert(Some(body), el("div", vec![("class", "container")]));
+        let p_first = t.insert(Some(div), el("p", vec![("id", "first")]));
+        let _ = t.insert(Some(p_first), NodeData::Text("one".into()));
+        let span_inner = t.insert(Some(div), el("span", vec![("id", "inner")]));
+        let _ = t.insert(Some(span_inner), NodeData::Text("in".into()));
+        let p_second = t.insert(Some(body), el("p", vec![("id", "second")]));
+        let _ = t.insert(Some(p_second), NodeData::Text("two".into()));
+        let span = t.insert(Some(body), el("span", vec![("id", "tail")]));
+        let _ = t.insert(Some(span), NodeData::Text("three".into()));
+        let section = t.insert(Some(body), el("section", vec![]));
+        let b = t.insert(Some(section), el("b", vec![]));
+        let _ = t.insert(Some(b), NodeData::Text("bold".into()));
+        let _ = t.insert(Some(section), NodeData::Text(" sep ".into()));
+        let i = t.insert(Some(section), el("i", vec![]));
+        let _ = t.insert(Some(i), NodeData::Text("italic".into()));
+        (t, p_first, span_inner, p_second, span, b, i)
+    }
+
+    #[test]
+    fn adjacent_matches_immediate_predecessor_only() {
+        let (tree, p_first, _, p_second, span, _, _) = sibling_fixture();
+        // div + p：p#second 紧跟 div（同父 body，中间无其他元素）→ 命中。
+        let sel = Selector::parse("div + p").unwrap();
+        assert!(sel.matches(&tree, p_second));
+        // p#first 在 div 内部（div 是它的父亲不是兄弟）→ 不命中。
+        assert!(!sel.matches(&tree, p_first));
+        // span#tail 被 p#second 隔开 → 不命中。
+        assert!(!sel.matches(&tree, span));
+        // p + span：span#tail 的前一元素兄弟正是 p#second → 命中。
+        assert!(Selector::parse("p + span").unwrap().matches(&tree, span));
+    }
+
+    #[test]
+    fn adjacent_skips_text_nodes() {
+        // b 与 i 之间有 Text 节点；CSS 相邻兄弟只看元素兄弟 → 仍命中。
+        let (tree, _, _, _, _, b, i) = sibling_fixture();
+        assert!(Selector::parse("b + i").unwrap().matches(&tree, i));
+        // 顺序反过来不成立（b 在 i 前面，i 不是 b 的前兄弟）。
+        assert!(!Selector::parse("i + b").unwrap().matches(&tree, b));
+    }
+
+    #[test]
+    fn adjacent_no_space_and_mixed_spacing() {
+        // '+' 两侧空格可省略：div+p / div+ p / div +p 与 div + p 等价。
+        let (tree, _, _, p_second, _, _, _) = sibling_fixture();
+        for src in ["div+p", "div+ p", "div +p", "div   +   p"] {
+            let sel = Selector::parse(src).unwrap();
+            assert!(sel.matches(&tree, p_second), "expected {src:?} to match");
+        }
+    }
+
+    #[test]
+    fn adjacent_parses_into_chain_structure() {
+        // 源顺序：parts[0] combinators[0] parts[1] combinators[1] parts[2]。
+        let sel = Selector::parse("div p + span").unwrap();
+        let chain = &sel.selectors[0];
+        let tags: Vec<Option<&str>> = chain.parts.iter().map(|p| p.tag.as_deref()).collect();
+        assert_eq!(tags, vec![Some("div"), Some("p"), Some("span")]);
+        assert_eq!(
+            chain.combinators,
+            vec![Combinator::Descendant, Combinator::Adjacent]
+        );
+        // 单 compound：无组合器。
+        let single = Selector::parse("p").unwrap();
+        assert!(single.selectors[0].combinators.is_empty());
+    }
+
+    #[test]
+    fn adjacent_mixed_chain_descendant_then_adjacent() {
+        // div p + span：目标的紧邻前元素兄弟匹配 p，且该 p 的祖先链上有 div。
+        let (tree, _, span_inner, p_second, span_tail, _, _) = sibling_fixture();
+        assert!(Selector::parse("div p + span")
+            .unwrap()
+            .matches(&tree, span_inner));
+        // 换成 html（p#first 的祖先）也应命中 —— Descendant 部分照常走祖先链。
+        assert!(Selector::parse("html p + span")
+            .unwrap()
+            .matches(&tree, span_inner));
+        // 祖先没有 section → 不命中。
+        assert!(!Selector::parse("section p + span")
+            .unwrap()
+            .matches(&tree, span_inner));
+        // span#tail 的前兄弟是 p#second，其祖先链无 div → 归约锚定紧邻兄弟，不命中。
+        assert!(!Selector::parse("div p + span")
+            .unwrap()
+            .matches(&tree, span_tail));
+        // div span + p：p#second 的前一元素兄弟是 div 不是 span → 不命中。
+        assert!(!Selector::parse("div span + p")
+            .unwrap()
+            .matches(&tree, p_second));
+    }
+
+    #[test]
+    fn adjacent_universal_and_no_prev_sibling() {
+        let (tree, p_first, _, p_second, _, _, _) = sibling_fixture();
+        // * + p：任意前元素兄弟（div）都行 → 命中。
+        assert!(Selector::parse("* + p").unwrap().matches(&tree, p_second));
+        // p#first 是 div 的第一个元素子节点，无前元素兄弟 → 任何 X + p 都不命中。
+        assert!(!Selector::parse("* + p").unwrap().matches(&tree, p_first));
+    }
+
+    #[test]
+    fn adjacent_malformed_chains_return_err() {
+        assert!(Selector::parse("div +").is_err()); // 尾部悬空 '+'
+        assert!(Selector::parse("+ p").is_err()); // 开头 '+'
+        assert!(Selector::parse("div + + p").is_err()); // 连续 '+'
+    }
+
+    #[test]
+    fn adjacent_plus_inside_brackets_is_not_combinator() {
+        // '+' 在属性选择器内部不是组合器（depth 跟踪）。
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let p = t.insert(
+            Some(root),
+            NodeData::Element {
+                tag: "p".into(),
+                attrs: vec![("title".into(), "a + b".into())],
+            },
+        );
+        assert!(Selector::parse(r#"p[title="a + b"]"#)
+            .unwrap()
+            .matches(&t, p));
     }
 }

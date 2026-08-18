@@ -22,7 +22,7 @@ use std::rc::Rc;
 #[cfg(feature = "boa")]
 use boa_engine::{object::JsObject, Context, JsArgs, JsResult, JsValue, NativeFunction};
 use browser_cookie::CookieHandle;
-use browser_dom::{Node, NodeData, NodeId, Tree};
+use browser_dom::{NodeData, NodeId, Tree};
 #[allow(unused_imports)]
 use browser_eventloop::{TimerId, TimerWheel};
 use browser_navigation::NavigationHandle;
@@ -1213,27 +1213,21 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     // id 选择器短路：仅当选择器是纯 id（#xxx，不含空格/组合器）时才走快路径。
     // 否则 "#dyn1 .p" 这种后代选择器会被误判：strip_prefix('#')="dyn1 .p"
     // 再当 id 去找，必然落空。M71.3 GAP-I。
-    if !sel.contains(' ') {
+    if !sel.contains(' ') && !sel.contains('+') {
         if let Some(tag) = sel.strip_prefix('#') {
             return find_by_id(tree, tag);
         }
     }
-    let segments: Vec<&str> = sel
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    let tokens = if segments.len() > 1 {
-        tokenize_selector(segments.last().copied().unwrap_or(sel))
-    } else {
-        tokenize_selector(sel)
+    // M78.7: 委托 css-engine 选择器——完整后代/相邻(`+`)组合器 + 属性 + 伪类
+    // 子集，与样式管线共享单一实现（替代旧"只匹配最后一段"的近似）。
+    // 解析失败（不支持的语法）按"无匹配"处理，与历史行为一致。
+    let parsed = match browser_css_engine::Selector::parse(sel) {
+        Ok(s) => s,
+        Err(_) => return None,
     };
-    // M7.2.4: universal selector (*), class selector (.foo), id, tag, and
-    // limited attribute selector ([foo], [foo=value]).
-    // For 简化版 descendant 选择器，仅匹配最后一段 selector。
     let mut found = None;
-    tree.traverse(tree.root(), |id, node| {
-        if matches_selector(tree, id, node, &tokens) {
+    tree.traverse(tree.root(), |id, _node| {
+        if parsed.matches(tree, id) {
             found = Some(id);
             return false;
         }
@@ -1245,9 +1239,9 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
 /// M62: find_all_by_selector —— 返回所有匹配节点（querySelectorAll 后端）。
 fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
     let sel = sel.trim();
-    // id 选择器短路：仅当选择器是纯 id（不含空格）时走快路径。
+    // id 选择器短路：仅当选择器是纯 id（不含空格/组合器）时走快路径。
     // 含空格的复合选择器（如 "#dyn1 .p"）不能走 id 快路径，否则误判。M71.3 GAP-I。
-    if !sel.contains(' ') {
+    if !sel.contains(' ') && !sel.contains('+') {
         if let Some(tag) = sel.strip_prefix('#') {
             // id 选择器最多一个
             if let Some(id) = find_by_id(tree, tag) {
@@ -1256,264 +1250,19 @@ fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
             return vec![];
         }
     }
-    let segments: Vec<&str> = sel
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    let tokens = if segments.len() > 1 {
-        tokenize_selector(segments.last().copied().unwrap_or(sel))
-    } else {
-        tokenize_selector(sel)
+    // M78.7: 同 find_by_selector——委托 css-engine 完整匹配。
+    let parsed = match browser_css_engine::Selector::parse(sel) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
     };
     let mut found = Vec::new();
-    tree.traverse(tree.root(), |id, node| {
-        if matches_selector(tree, id, node, &tokens) {
+    tree.traverse(tree.root(), |id, _node| {
+        if parsed.matches(tree, id) {
             found.push(id);
         }
         true // 不提前退出，收集全部
     });
     found
-}
-
-/// Simple tokenizer for M7.2.4 selectors. Splits into:
-/// - "*" (universal)
-/// - "div", "p", "h1" (tags)
-/// - ".container", ".red" (class)
-///
-/// – no support for combinators (space, >, +) yet (deferred to M7.2.5).
-fn tokenize_selector(sel: &str) -> Vec<SelectorToken> {
-    let mut tokens = Vec::new();
-    let mut chars = sel.chars().peekable();
-    while let Some(&c) = chars.peek() {
-        if c.is_ascii_whitespace() {
-            chars.next();
-            continue;
-        } else if c == '*' {
-            tokens.push(SelectorToken::Universal);
-            chars.next();
-        } else if c == '#' {
-            chars.next();
-            let mut id = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_ascii_alphanumeric() || next == '-' || next == '_' {
-                    id.push(next);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            if !id.is_empty() {
-                tokens.push(SelectorToken::Id(id));
-            } else {
-                // 无效 id 选择器，丢弃该符号防止死循环
-                tokens.push(SelectorToken::Universal);
-            }
-        } else if c == '.' {
-            chars.next();
-            let mut cls = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_ascii_alphanumeric() || next == '-' {
-                    cls.push(next);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            if !cls.is_empty() {
-                tokens.push(SelectorToken::Class(cls));
-            }
-        } else if c == ':' {
-            // M78: 伪类子集 :lang/:dir/:nth-child。未知伪类只消费 ':'，
-            // 后续 ident 落入 Tag 分支 → 永不匹配（与历史行为一致）。
-            chars.next();
-            let mut name = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_ascii_alphanumeric() || next == '-' {
-                    name.push(next);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let reads_args = matches!(chars.peek(), Some('('));
-            if !reads_args {
-                continue;
-            }
-            chars.next(); // '('
-            let mut args = String::new();
-            let mut depth = 1;
-            while let Some(&next) = chars.peek() {
-                if next == '(' {
-                    depth += 1;
-                } else if next == ')' {
-                    depth -= 1;
-                    if depth == 0 {
-                        chars.next();
-                        break;
-                    }
-                }
-                args.push(next);
-                chars.next();
-            }
-            match name.as_str() {
-                "lang" => {
-                    let ranges: Vec<String> = args
-                        .split(',')
-                        .map(|p| p.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
-                        .filter(|p| !p.is_empty())
-                        .collect();
-                    if !ranges.is_empty() {
-                        tokens.push(SelectorToken::Lang(ranges));
-                    }
-                }
-                "dir" => {
-                    let d = args.trim().to_string();
-                    if !d.is_empty() && !d.contains(',') && !d.contains('"') && !d.contains('\'') {
-                        tokens.push(SelectorToken::Dir(d));
-                    }
-                }
-                "nth-child" => {
-                    if let Ok(n) = args.trim().parse::<u32>() {
-                        tokens.push(SelectorToken::NthChild(n));
-                    }
-                }
-                _ => {}
-            }
-        } else if c == '[' {
-            chars.next();
-            while let Some(&space) = chars.peek() {
-                if space.is_ascii_whitespace() {
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let mut attr = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_ascii_alphanumeric() || next == '-' || next == '_' {
-                    attr.push(next);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            while let Some(&space) = chars.peek() {
-                if space.is_ascii_whitespace() {
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let dash_match = if let Some(&'|') = chars.peek() {
-                chars.next();
-                true
-            } else {
-                false
-            };
-            if let Some(&'=') = chars.peek() {
-                chars.next();
-                while let Some(&space) = chars.peek() {
-                    if space.is_ascii_whitespace() {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                let mut value = String::new();
-                if let Some(&quote) = chars.peek() {
-                    if quote == '\'' || quote == '"' {
-                        let q = quote;
-                        chars.next();
-                        while let Some(&next) = chars.peek() {
-                            if next == q {
-                                break;
-                            }
-                            value.push(next);
-                            chars.next();
-                        }
-                        if let Some(&_q) = chars.peek() {
-                            chars.next();
-                        }
-                    } else {
-                        while let Some(&next) = chars.peek() {
-                            if next.is_ascii_whitespace() || next == ']' {
-                                break;
-                            }
-                            value.push(next);
-                            chars.next();
-                        }
-                    }
-                }
-                while let Some(&space) = chars.peek() {
-                    if space.is_ascii_whitespace() {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if let Some(&']') = chars.peek() {
-                    chars.next();
-                }
-                if !attr.is_empty() {
-                    if dash_match {
-                        tokens.push(SelectorToken::AttrDashMatch(attr, value));
-                    } else {
-                        tokens.push(SelectorToken::AttrEquals(attr, value));
-                    }
-                }
-            } else {
-                while let Some(&ch) = chars.peek() {
-                    if ch == ']' {
-                        break;
-                    }
-                    chars.next();
-                }
-                if let Some(&']') = chars.peek() {
-                    chars.next();
-                }
-                if !attr.is_empty() {
-                    tokens.push(SelectorToken::AttrExists(attr));
-                }
-            }
-        } else {
-            // Tag name.
-            let mut tag = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_ascii_alphanumeric() || next == '-' {
-                    tag.push(next);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            if !tag.is_empty() {
-                tokens.push(SelectorToken::Tag(tag));
-            } else {
-                // 其他字符（如 ':'、'['、']'）不应停滞，直接消费避免死循环。
-                let _ = chars.next();
-            }
-        }
-    }
-    tokens
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum SelectorToken {
-    Universal,
-    Tag(String),
-    Class(String),
-    Id(String),
-    AttrExists(String),
-    AttrEquals(String, String),
-    /// M78: [attr|="v"] —— dash-match（lang 查询）。
-    AttrDashMatch(String, String),
-    /// M78: :lang(en, fr-*) — BCP47 语言范围。
-    Lang(Vec<String>),
-    /// M78: :dir(ltr|rtl)。
-    Dir(String),
-    /// M78: :nth-child(n)（仅整数）。
-    NthChild(u32),
 }
 
 /// M78: querySelector 语法校验（WPT 要求非法选择器抛 SYNTAX_ERR）。
@@ -1586,134 +1335,6 @@ pub fn qs_syntax_error(sel: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// M78: :lang 系列的 BCP47 range 匹配（与 css-engine selector.rs 同语义）。
-fn lang_range_matches_bridge(range: &str, tag: &str) -> bool {
-    let r = range.trim().to_lowercase();
-    let t = tag.trim().to_lowercase();
-    if t.is_empty() {
-        return false;
-    }
-    let prefix = r.strip_suffix('*').unwrap_or(&r);
-    let prefix = prefix.strip_suffix('-').unwrap_or(prefix);
-    if prefix.is_empty() {
-        return true;
-    }
-    t.starts_with(prefix) && (t.len() == prefix.len() || t.as_bytes()[prefix.len()] == b'-')
-}
-
-/// M78: 元素语言（自身向上最近 lang / xml:lang 属性）。
-fn element_lang_bridge(tree: &Tree, id: NodeId) -> Option<String> {
-    // HTML 文档语义：:lang 只看 lang 属性。
-    let mut cur = Some(id);
-    while let Some(nid) = cur {
-        if let NodeData::Element { attrs, .. } = tree.data(nid) {
-            if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("lang")) {
-                return Some(v.clone());
-            }
-        }
-        cur = tree.get(nid).parent;
-    }
-    None
-}
-
-/// M78: 元素方向（自身向上最近 dir="ltr|rtl"；无 dir 祖先时 HTML 默认 ltr）。
-fn element_dir_bridge(tree: &Tree, id: NodeId) -> Option<String> {
-    let mut cur = Some(id);
-    while let Some(nid) = cur {
-        if let NodeData::Element { attrs, .. } = tree.data(nid) {
-            if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("dir")) {
-                let d = v.trim().to_lowercase();
-                if d == "ltr" || d == "rtl" {
-                    return Some(d);
-                }
-            }
-        }
-        cur = tree.get(nid).parent;
-    }
-    Some("ltr".to_string())
-}
-
-/// M78: 元素在父节点元素子节点中的 1-based 位置。
-fn element_child_index_bridge(tree: &Tree, id: NodeId) -> u32 {
-    let Some(pid) = tree.get(id).parent else {
-        return 1;
-    };
-    let mut idx = 0;
-    for &child in tree.children_of(pid) {
-        if matches!(tree.data(child), NodeData::Element { .. }) {
-            idx += 1;
-            if child == id {
-                return idx;
-            }
-        }
-    }
-    1
-}
-
-fn matches_selector(tree: &Tree, id: NodeId, node: &Node, tokens: &[SelectorToken]) -> bool {
-    if let NodeData::Element { tag, attrs } = &node.data {
-        for tok in tokens {
-            let ok = match tok {
-                SelectorToken::Universal => true,
-                SelectorToken::Tag(t) => t.eq_ignore_ascii_case(tag),
-                SelectorToken::Class(cls) => attrs.iter().any(|(k, v)| {
-                    k.eq_ignore_ascii_case("class") && v.split_whitespace().any(|c| c == cls)
-                }),
-                SelectorToken::Id(id) => attrs
-                    .iter()
-                    .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == id),
-                SelectorToken::AttrExists(attr) => attrs.iter().any(|(k, _)| k == attr),
-                SelectorToken::AttrEquals(attr, value) => {
-                    let ci =
-                        attr.eq_ignore_ascii_case("lang") || attr.eq_ignore_ascii_case("xml:lang");
-                    attrs.iter().any(|(k, v)| {
-                        k == attr
-                            && (if ci {
-                                v.eq_ignore_ascii_case(value)
-                            } else {
-                                v == value
-                            })
-                    })
-                }
-                SelectorToken::AttrDashMatch(attr, value) => {
-                    let ci =
-                        attr.eq_ignore_ascii_case("lang") || attr.eq_ignore_ascii_case("xml:lang");
-                    attrs.iter().any(|(k, v)| {
-                        if !k.eq_ignore_ascii_case(attr) {
-                            return false;
-                        }
-                        if ci {
-                            if v.eq_ignore_ascii_case(value) {
-                                return true;
-                            }
-                            let vl = v.to_lowercase();
-                            let wl = value.to_lowercase();
-                            vl.starts_with(&wl) && vl.as_bytes().get(wl.len()) == Some(&b'-')
-                        } else {
-                            v == value || v.starts_with(&format!("{value}-"))
-                        }
-                    })
-                }
-                SelectorToken::Lang(ranges) => match element_lang_bridge(tree, id) {
-                    Some(lang) => ranges.iter().any(|r| lang_range_matches_bridge(r, &lang)),
-                    None => false,
-                },
-                SelectorToken::Dir(d) => match element_dir_bridge(tree, id) {
-                    Some(dir) => dir.eq_ignore_ascii_case(d),
-                    None => false,
-                },
-                SelectorToken::NthChild(n) => element_child_index_bridge(tree, id) == *n,
-            };
-            if !ok {
-                return false;
-            }
-        }
-        true
-    } else {
-        false
-    }
 }
 
 #[cfg(feature = "boa")]
@@ -3086,9 +2707,11 @@ pub mod qjs_bridge {
             if id >= t.len() {
                 return false;
             }
-            let tokens = tokenize_selector(&selector);
-            let node = t.get(id);
-            matches_selector(t, id, node, &tokens)
+            // M78.7: 委托 css-engine（完整组合器/属性/伪类；解析失败=不匹配）。
+            match browser_css_engine::Selector::parse(selector.trim()) {
+                Ok(s) => s.matches(t, id),
+                Err(_) => false,
+            }
         })
     }
 
@@ -3100,13 +2723,16 @@ pub mod qjs_bridge {
             if id >= t.len() {
                 return -1.0;
             }
-            let tokens = tokenize_selector(&selector);
+            // M78.7: 委托 css-engine 选择器（解析失败=不匹配）。
+            let parsed = match browser_css_engine::Selector::parse(selector.trim()) {
+                Ok(s) => s,
+                Err(_) => return -1.0,
+            };
             loop {
-                let node = t.get(id);
-                if matches_selector(t, id, node, &tokens) {
+                if parsed.matches(t, id) {
                     return id as f64;
                 }
-                match node.parent {
+                match t.get(id).parent {
                     Some(p) => {
                         if p == id {
                             break;

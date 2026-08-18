@@ -166,6 +166,33 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 32↔105 双峰摆动——iframe 重型页面的完成与否是主要噪声源，也是下一轮
 的最大目标（112 页 no-results 的根因预计同源）。
 
+**M78.8 循环 8 —— 事件循环双峰根治 + `+` 组合器 + querySelector 统一（并发子任务模式）**：
+
+本轮用 3 个并发子任务（iframe 诊断 / 失败分析 / css 实现）+ 主线程实现。
+
+- **双峰根因**（子任务 A 诊断，未改码）：idle 退出两缺陷——①grace 后 3 个
+  idle tick（~15-20ms kill 窗口）**无视 pending 未到期 timer**，100ms 链式
+  timer 被拦腰杀；②grace 语义是比较 idle 起点绝对时刻而非"连续 idle"，
+  <300ms 起点的页面永不早退白烧 2s。kill 窗口随 OS 调度档位（QoS）漂移
+  → 整族 WPT 页面完成与否同翻（storage 32↔105 的双峰机制）。
+- **主修**（scripts.rs 事件循环）：`__nextTimerDueInMs()` JS helper +
+  **500ms 地平线内有 pending timer 视为活动**（analytics 60s 长 timer 不
+  阻塞退出，保 M70.13 意图）；grace 改"连续 idle ≥300ms"语义；
+  `BROWSER_EL_MAX_MS` 环境变量可配（默认 2s 不变）。
+- **harness**：`--repeat N` 每类跑 N 轮取中位数；透传 BROWSER_EL_MAX_MS=12000
+  ——testharness 页内 10s timeout 真正触发，死测试产出规范 TIMEOUT 入分母
+  （更诚实的测量，不再 no-results）。wall 超时放宽到 25s。
+- **`+` 相邻兄弟组合器**（子任务 C）：css-engine `Combinator` 枚举 +
+  深度感知 parse_chain（`div+p`/`div + p` 等价、`[title="a + b"]` 不误判）
+  + prev_element_sibling（跳过 Text）+ 8 个单测。
+- **querySelector 统一**（bridge.rs）：find_by_selector/find_all/qs_match/
+  qs_closest 全部委托 `css_engine::Selector`——与样式管线共享单一实现，
+  顺带修掉 M7.2.4 以来"后代选择器只匹配最后一段"的近似；删除 300 行旧
+  tokenizer/matcher 死代码。
+- **验证**：6×100ms timer 链回归测试（修复前正常 QoS 必红）；
+  **storage 三轮完全一致（33/199，方差归零）**；每轮 27s→14s（缺陷 B
+  修复）；css_selector 0.632→0.647；749 passed 0 failed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

@@ -116,3 +116,29 @@ setTimeout(function() {{
         "cherry should be rendered. stdout={stdout:?}"
     );
 }
+
+/// M78.8: 6×100ms 链式 timer 必须完整跑完——idle 退出不得无视 pending timer。
+/// 修复前的 kill 窗口（grace 后 3 idle tick ≈15-20ms）在 ~320ms 拦腰杀链，
+/// 且窗口随 OS 调度档位漂移导致行为双峰。
+#[test]
+fn timer_chain_6x100ms_completes() {
+    let html = r#"<!DOCTYPE html><html><body><div id="out">START</div>
+<script>
+var step = 0;
+function next() {
+    step++;
+    if (step < 6) { setTimeout(next, 100); }
+    else { document.getElementById('out').textContent = 'CHAIN_DONE_6'; }
+}
+setTimeout(next, 100);
+</script></body></html>"#;
+    let path = std::env::temp_dir().join(format!("m78_chain_{}.html", std::process::id()));
+    std::fs::write(&path, html).unwrap();
+    Command::cargo_bin("browser")
+        .expect("binary")
+        .args(["render-script", path.to_str().unwrap(), "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CHAIN_DONE_6"));
+    let _ = std::fs::remove_file(&path);
+}

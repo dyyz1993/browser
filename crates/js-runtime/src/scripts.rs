@@ -1438,12 +1438,19 @@ fn run_scripts_quickjs(
     let _ = engine.eval_i32("__drainDueTimers()");
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
-    // 直到 pending timer 清空或动态 script 队列清空，或超时（3s 上限）。
+    // 直到 pending timer 清空或动态 script 队列清空，或超时。
     // M70.13: 事件循环参数——缩短超时 + 更快 idle 退出。
-    const EL_MAX_TOTAL: std::time::Duration = std::time::Duration::from_secs(2);
+    // M78.8: BROWSER_EL_MAX_MS 环境变量可配（默认 2s）。评分 harness 设
+    // 12s——testharness 页内 10s harness timeout 才能真正触发，死测试
+    // 产出规范的 TIMEOUT 状态而非 no-results（语义对齐 WPT）。
     const EL_TICK_MS: u64 = 5;
     const EL_IDLE_ROUNDS: u32 = 3;
     const EL_IDLE_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+    let el_max_total = std::env::var("BROWSER_EL_MAX_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| std::time::Duration::from_secs(2));
     let el_start = std::time::Instant::now();
     let mut idle_rounds: u32 = 0;
     let mut idle_start: Option<std::time::Duration> = None;
@@ -1473,31 +1480,41 @@ fn run_scripts_quickjs(
             idle_rounds = 0;
         } else {
             // 无活动 → idle 检测 + DOM 稳定检测
-            // M72.4: 但有活动 WebSocket 连接时不 idle 退出（等 onopen/onmessage）
+            // M72.4: 有活动 WebSocket 连接时不 idle 退出（等 onopen/onmessage）
             let has_ws = crate::bridge::ws_connection_count() > 0;
-            if idle_start.is_none() {
+            // M78.8: 500ms 地平线内有待到期 timer → 视为活动，不推进 idle。
+            // 修复双峰：旧逻辑 grace 后 3 个 idle tick（~15-20ms kill 窗口）无视
+            // pending 未到期 timer，100ms 链式 timer 被拦腰杀；窗口宽度随 OS
+            // 调度档位漂移，导致整族 WPT 页面完成与否同翻（storage 32↔105）。
+            // analytics 的 60s 长 timer 不在地平线内，不阻塞退出（保 M70.13 意图）。
+            let pending_soon = engine
+                .eval_js_bool("__nextTimerDueInMs()<=500")
+                .unwrap_or(false);
+            if has_ws || pending_soon {
+                idle_start = None;
+                idle_rounds = 0;
+            } else if idle_start.is_none() {
                 idle_start = Some(el_start.elapsed());
-            }
-            if !has_ws {
-                if idle_start.unwrap() >= EL_IDLE_GRACE {
+            } else {
+                // M78.8: 修正 grace 语义——"连续 idle ≥300ms"。
+                // 旧实现比较 idle 起点的绝对时刻：最后活动停在 <300ms 的页面
+                // idle_start 永不达标，白烧到 EL_MAX_TOTAL（每页浪费 ~1.7s）。
+                let idle_for = el_start.elapsed() - idle_start.unwrap();
+                if idle_for >= EL_IDLE_GRACE {
                     idle_rounds += 1;
                     if idle_rounds >= EL_IDLE_ROUNDS {
                         break;
                     }
-                } else {
-                    idle_rounds = 0;
-                }
-                // M77: DOM 稳定检测——body 内有**可见文本**（非空 div 占位）则内容已就绪。
-                // CSR SPA 的 body 初始就有 <div id="root">，老的 `children.length>0` 检测
-                // 把占位元素当成内容，导致事件循环 7ms 就退出，React 来不及渲染。
-                // 新方案：只在 idle grace 后才检测 dom_ready（给 React 至少 300ms 渲染时间）。
-                if idle_start.unwrap() >= EL_IDLE_GRACE {
+                    // M77: DOM 稳定检测——body 内有**可见文本**（非空 div 占位）
+                    // 则内容已就绪。只在 idle grace 后检测（给 React 至少 300ms）。
                     let dom_ready = engine
                         .eval_js_bool("__findTag('body')>0&&__visibleBodyTextLen()>80")
                         .unwrap_or(false);
                     if dom_ready {
                         break;
                     }
+                } else {
+                    idle_rounds = 0;
                 }
             }
         }
@@ -1505,7 +1522,7 @@ fn run_scripts_quickjs(
         // CSR 框架（React/Vue）的异步渲染不依赖我们的 setTimeout shim，
         // 无 pending timer 不代表渲染完成。让 idle 检测链
         // （grace → rounds → dom_ready → max_total）决定退出时机。
-        if el_start.elapsed() >= EL_MAX_TOTAL {
+        if el_start.elapsed() >= el_max_total {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(EL_TICK_MS));
@@ -1571,6 +1588,16 @@ if (!Promise.allSettled) {
 // 这样 Promise.then 微任务能正确 drain，框架的异步渲染流程完整。
 var __timerSeq = 0;
 var __pendingTimers = [];
+// M78.8: 下一个 timer 的到期倒计时（ms；无 pending 返回 Infinity）。
+// event loop 的 idle 判定用它区分"真静默"与"还有 timer 在等"。
+window.__nextTimerDueInMs = function() {
+    var now = Date.now(), min = Infinity;
+    for (var i = 0; i < __pendingTimers.length; i++) {
+        var d = __pendingTimers[i].fireAt - now;
+        if (d < min) min = d;
+    }
+    return min;
+};
 window.setTimeout = function(cb, delay) {
     if (typeof cb !== 'function') return 0;
     __timerSeq++;

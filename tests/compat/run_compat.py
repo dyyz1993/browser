@@ -399,10 +399,14 @@ def run_one(job):
     cat, suite, url_path, wall = job
     url = "http://127.0.0.1:%d/%s" % (PORT, url_path)
     t0 = time.time()
+    # M78.8: 放宽事件循环上限到 12s——testharness 页内 10s harness timeout
+    # 才能触发，死测试产出 TIMEOUT 状态（入分母）而非 no-results。
+    env = dict(os.environ)
+    env["BROWSER_EL_MAX_MS"] = "12000"
     try:
         proc = subprocess.run(
             [BINARY, "fetch", url, "--format", "html", "--timeout-ms", "9000"],
-            capture_output=True, text=True, timeout=wall)
+            capture_output=True, text=True, timeout=wall, env=env)
         ms = int((time.time() - t0) * 1000)
     except subprocess.TimeoutExpired:
         return (cat, url_path, TIMEOUT, "wall-timeout", int((time.time() - t0) * 1000))
@@ -447,9 +451,9 @@ def run_category(manifest, cat, jobs):
         if info["suite"] == "test262":
             gen = os.path.join(BUILD, cat, rel + ".html")
             if os.path.isfile(gen):
-                tasks.append((cat, "test262", "gen/%s/%s.html" % (cat, rel.replace(os.sep, "/")), 20))
+                tasks.append((cat, "test262", "gen/%s/%s.html" % (cat, rel.replace(os.sep, "/")), 25))
         else:
-            tasks.append((cat, "wpt", rel.replace(os.sep, "/"), 18))
+            tasks.append((cat, "wpt", rel.replace(os.sep, "/"), 25))
     rows = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
         for r in ex.map(run_one, tasks):
@@ -571,6 +575,7 @@ def main():
     ap.add_argument("--category", help="只跑一个类别（循环用）")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--verdict", action="store_true", help="目标判定")
+    ap.add_argument("--repeat", type=int, default=1, help="每类跑 N 次取中位数轮（消方差）")
     args = ap.parse_args()
 
     if args.lock:
@@ -592,11 +597,19 @@ def main():
         cats = [args.category] if args.category else list(manifest["categories"])
         rows = []
         for cat in cats:
-            t0 = time.time()
-            r = run_category(manifest, cat, args.jobs)
-            rows.extend(r)
-            a = score_rows(r).get(cat, {"pass": 0, "total": 0})
-            print("[run] %-28s %d/%d (%.1fs)" % (cat, a["pass"], a["total"], time.time() - t0))
+            # M78: --repeat N —— 每类跑 N 次取中位数通过率的那轮（iframe 双峰
+            # 方差下单次结果不可靠；中位数轮的 rows 作为该类代表进入报告）。
+            rounds = []
+            for i in range(max(1, args.repeat)):
+                t0 = time.time()
+                r = run_category(manifest, cat, args.jobs)
+                a = score_rows(r).get(cat, {"pass": 0, "total": 0})
+                ratio = a["pass"] / a["total"] if a["total"] else 0.0
+                rounds.append((ratio, r))
+                print("[run] %-28s 第%d轮 %d/%d (%.1fs)" % (
+                    cat, i + 1, a["pass"], a["total"], time.time() - t0))
+            rounds.sort(key=lambda x: x[0])
+            rows.extend(rounds[len(rounds) // 2][1])
         # storage_nav_cdp 类并入 CDP 代理分（占该类一半权重）
         if (not args.category) or args.category == "storage_nav_cdp":
             cdp = cdp_proxy_score()
