@@ -18,3 +18,4 @@ tests/e2e/node_modules/
 tests/compat/suites/
 tests/compat/build/
 tests/compat/results/
+tests/compat/__pycache__/
