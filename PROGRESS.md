@@ -118,6 +118,27 @@ insertAdjacentText、命名访问+身份）。741 passed。
 0.292→**0.395**（DOMTokenList）；storage_nav_cdp 0.437（WPT 部分 14/126 +
 CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 
+**M78.6 循环 5 —— WPT 高频 DOM API 批量补齐 + 可见文本探针修正**：
+
+- **Event 家族升级**：Symbol.toStringTag（`[object Event]`）+ phase 常量
+  （NONE/CAPTURING/AT_TARGET/BUBBLING，构造器与 prototype 双暴露）+
+  bubbles/cancelable/composed/defaultPrevented/timeStamp/initEvent/
+  stopImmediatePropagation；新增 MouseEvent/KeyboardEvent/FocusEvent 构造器。
+- **Node 完整常量**（12 个 nodeType + 7 个 DOCUMENT_POSITION，构造器与
+  prototype 双暴露）；`webkitMatchesSelector` 别名。
+- **新 API**：document.createTreeWalker（DFS nextNode/previousNode）、
+  createNodeIterator、createHTMLDocument、createEvent、contentType、
+  images/scripts；element.attributes → NamedNodeMap（length/item/
+  getNamedItem/setNamedItem，`__attrsOf` 桥反射）。
+- **M77 dom_ready 探针修正**：`__visibleBodyTextLen()` 桥跳过 script/style/
+  noscript/template 文本——旧探针 `__getText(body)` 把 inline script 源码当
+  可见文本，body 内嵌大段 JS 的页面被误判"内容就绪"提前退出事件循环。
+- **诊断记录**（下次循环的地图）：html_dom 剩 40 NOT_RUN 分两簇——
+  harness-not-run（Range/TreeWalker/insertion-removing 系列，testharness
+  未完成）与 no-results（reflection/contentType 系列，测试注册后不完成）。
+  单页复现不稳定（同字节同旗标时过时不过），指向事件循环退出时序与
+  testharness load→done 链路的竞态，需插桩 event loop 逐 tick 追踪。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

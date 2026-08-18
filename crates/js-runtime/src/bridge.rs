@@ -3170,6 +3170,37 @@ pub mod qjs_bridge {
         })
     }
 
+    /// M78: visibleBodyTextLen() —— body 可见文本长度（跳过 script/style/noscript/
+    /// textarea 的文本）。M77 的 dom_ready 早退用 __getText(body) 把 inline script
+    /// 源码也当可见文本，WPT 页面（body 内嵌大段 JS）被误判"内容已就绪"而提前
+    /// 退出事件循环，testharness 完成链路被掐断（跨类别 no-results 的根因之一）。
+    pub fn visible_body_text_len() -> f64 {
+        fn walk(t: &Tree, id: NodeId, out: &mut usize) {
+            for &child in t.children_of(id) {
+                match t.data(child) {
+                    NodeData::Text(s) => *out += s.trim().len(),
+                    NodeData::Element { tag, .. } => {
+                        let skip = tag.eq_ignore_ascii_case("script")
+                            || tag.eq_ignore_ascii_case("style")
+                            || tag.eq_ignore_ascii_case("noscript")
+                            || tag.eq_ignore_ascii_case("template");
+                        if !skip {
+                            walk(t, child, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        with_tree(|t| {
+            let mut len = 0usize;
+            if let Some(body) = find_first_element(t, "body") {
+                walk(t, body, &mut len);
+            }
+            len as f64
+        })
+    }
+
     /// M78: allIds() -> 逗号分隔的所有 id 属性值（window 命名访问用）。
     /// WPT 大量测试直接裸引用元素 id（`div2_3`）——HTML 规范的 named access。
     pub fn all_ids() -> String {
@@ -3186,6 +3217,21 @@ pub mod qjs_bridge {
                 true
             });
             ids.join(",")
+        })
+    }
+
+    /// M78: attrsOf(id) -> "k=v\nk=v" —— element.attributes（NamedNodeMap）反射。
+    pub fn attrs_of(node_id: f64) -> String {
+        with_tree(|t| {
+            if let NodeData::Element { attrs, .. } = t.data(node_id as usize) {
+                attrs
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                String::new()
+            }
         })
     }
 

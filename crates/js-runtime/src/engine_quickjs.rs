@@ -330,6 +330,10 @@ impl QuickJsEngine {
                 let _ = g.set("__allIds", Function::new(ctx.clone(), bridge::qjs_bridge::all_ids).unwrap());
                 // M78: __fetchScriptMimeOk(url) —— 动态 script MIME 强制（WPT block-mime）。
                 let _ = g.set("__fetchScriptMimeOk", Function::new(ctx.clone(), |u: String| crate::scripts::fetch_script_mime_ok(u)).unwrap());
+                // M78: __attrsOf(id) —— element.attributes（NamedNodeMap）反射。
+                let _ = g.set("__attrsOf", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::attrs_of(id)).unwrap());
+                // M78: __visibleBodyTextLen() —— DOM 稳定检测的"可见文本"（跳过 script/style）。
+                let _ = g.set("__visibleBodyTextLen", Function::new(ctx.clone(), bridge::qjs_bridge::visible_body_text_len).unwrap());
                 let _ = g.set("__getBody", Function::new(ctx.clone(), |_: f64| bridge::qjs_bridge::get_body()).unwrap());
                 let _ = g.set("__setTitle", Function::new(ctx.clone(), |t: String| bridge::qjs_bridge::set_title(t)).unwrap());
                 let _ = g.set("__getParent", Function::new(ctx.clone(), |id: f64| bridge::qjs_bridge::get_parent(id)).unwrap());

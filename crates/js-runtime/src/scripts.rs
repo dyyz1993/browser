@@ -1490,9 +1490,7 @@ fn run_scripts_quickjs(
                 // 新方案：只在 idle grace 后才检测 dom_ready（给 React 至少 300ms 渲染时间）。
                 if idle_start.unwrap() >= EL_IDLE_GRACE {
                     let dom_ready = engine
-                        .eval_js_bool(
-                            "__findTag('body')>0&&__getText(__findTag('body')).trim().length>80",
-                        )
+                        .eval_js_bool("__findTag('body')>0&&__visibleBodyTextLen()>80")
                         .unwrap_or(false);
                     if dom_ready {
                         break;
@@ -2315,14 +2313,27 @@ document.createElementNS = function(ns, tag) {
     return el;
 };
 
-// Node 常量（框架常用 nodeType 判断）
-window.Node = window.Node || {};
-window.Node.ELEMENT_NODE = 1;
-window.Node.TEXT_NODE = 3;
-window.Node.COMMENT_NODE = 8;
-window.Node.DOCUMENT_NODE = 9;
-window.Node.DOCUMENT_FRAGMENT_NODE = 11;
-window.Node.DOCUMENT_POSITION_CONTAINED_BY = 16;
+// Node 常量（框架常用 nodeType 判断；WPT 要求构造器与 prototype 双暴露）
+window.Node = window.Node || function Node() {};
+(function() {
+    var consts = {
+        ELEMENT_NODE: 1, ATTRIBUTE_NODE: 2, TEXT_NODE: 3, CDATA_SECTION_NODE: 4,
+        ENTITY_REFERENCE_NODE: 5, ENTITY_NODE: 6, PROCESSING_INSTRUCTION_NODE: 7,
+        COMMENT_NODE: 8, DOCUMENT_NODE: 9, DOCUMENT_TYPE_NODE: 10,
+        DOCUMENT_FRAGMENT_NODE: 11, NOTATION_NODE: 12,
+        DOCUMENT_POSITION_DISCONNECTED: 1, DOCUMENT_POSITION_PRECEDING: 2,
+        DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_CONTAINS: 8,
+        DOCUMENT_POSITION_CONTAINED_BY: 16, DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32
+    };
+    for (var k in consts) {
+        window.Node[k] = consts[k];
+        window.Node.prototype[k] = consts[k];
+    }
+    Object.defineProperty(window.Node.prototype, Symbol.toStringTag, { value: 'Node' });
+    Object.defineProperty(window.Node, Symbol.toStringTag, { value: 'Node' });
+    window.Node.prototype.nodeType = 0;
+})();
+Element.prototype.webkitMatchesSelector = Element.prototype.matches;
 
 // AbortSignal（React/Next.js 在 GitHub 检查）
 if (typeof AbortSignal === 'undefined') {
@@ -3309,21 +3320,168 @@ document.dispatchEvent = function(ev) {
         }
     }
 };
+// ===== M78: WPT 高频 DOM API 补齐（html_dom 类循环 5）=====
+// document.contentType（Document-contentType 系列）
+if (document.contentType === undefined) {
+    Object.defineProperty(document, 'contentType', {
+        get: function() { return 'text/html'; }, enumerable: true, configurable: true
+    });
+}
+// document.images / document.scripts（dom-tree-accessors）
+document.images = document.querySelectorAll('img');
+document.scripts = document.querySelectorAll('script');
+// document.createTreeWalker：DFS 顺序的基本实现（NodeIterator 同理最小桩）。
+function TreeWalker(root, whatToShow) {
+    this.root = root; this.currentNode = root;
+    this.whatToShow = whatToShow === undefined ? 0xFFFFFFFF : whatToShow;
+    this.__seq = [];
+    (function collect(node, out) {
+        if (!node || typeof node.__nodeId !== 'number') return;
+        out.push(node);
+        var s = __children(node.__nodeId);
+        if (!s) return;
+        var ids = s.split(',');
+        for (var i = 0; i < ids.length; i++) {
+            if (ids[i]) collect(__makeElement(parseInt(ids[i], 10)), out);
+        }
+    })(root, this.__seq);
+    this.__idx = 0;
+}
+TreeWalker.prototype.nextNode = function() {
+    if (this.__idx + 1 >= this.__seq.length) return null;
+    this.__idx++;
+    this.currentNode = this.__seq[this.__idx];
+    return this.currentNode;
+};
+TreeWalker.prototype.previousNode = function() {
+    if (this.__idx <= 0) return null;
+    this.__idx--;
+    this.currentNode = this.__seq[this.__idx];
+    return this.currentNode;
+};
+document.createTreeWalker = function(root, whatToShow) { return new TreeWalker(root, whatToShow); };
+// M78: document.createEvent —— WPT Event-constants/老式 API 依赖。
+document.createEvent = function(type) {
+    var t = String(type || 'Event');
+    if (t === 'MouseEvents') return new MouseEvent('click');
+    if (t === 'UIEvents' || t === 'HTMLEvents') return new Event('load');
+    if (t === 'CustomEvent') return new CustomEvent('');
+    return new Event('');
+};
+document.createComment = document.createComment || function(text) { return document.createElement('div'); };
+document.createNodeIterator = function(root, whatToShow) { return new TreeWalker(root, whatToShow); };
+// document.createHTMLDocument：独立 document 对象（元素挂到根，不进 body）。
+document.createHTMLDocument = function(title) {
+    var d = Object.create(Object.getPrototypeOf(document));
+    d.createElement = function(tag) { return __makeElement(__createEl(String(tag || 'div'))); };
+    d.createTextNode = function(t) { var n = document.createTextNode(t); return n; };
+    d.createDocumentFragment = function() { return document.createDocumentFragment(); };
+    d.createEvent = function(t) { return new Event(t === 'UIEvents' ? 'UIEvent' : (t || '')); };
+    d.createTextNode = document.createTextNode;
+    d.body = d.createElement('body');
+    d.documentElement = d.createElement('html');
+    d.title = String(title || '');
+    d.addEventListener = function() {};
+    d.removeEventListener = function() {};
+    d.getElementsByTagName = function(tag) { return []; };
+    d.getElementById = function() { return null; };
+    d.querySelector = function() { return null; };
+    d.querySelectorAll = function() { return []; };
+    return d;
+};
+// element.attributes：基本 NamedNodeMap（length/item/getNamedItem）。
+function NamedNodeMap(nodeId) { this.__nodeId = nodeId; }
+Object.defineProperty(NamedNodeMap.prototype, Symbol.toStringTag, { value: 'NamedNodeMap' });
+NamedNodeMap.prototype.__pairs = function() {
+    var out = [];
+    var s = (typeof __attrsOf === 'function') ? __attrsOf(this.__nodeId) : '';
+    (s || '').split('\n').forEach(function(line) {
+        var eq = line.indexOf('=');
+        if (eq > 0) out.push({ name: line.slice(0, eq), value: line.slice(eq + 1), specified: true });
+    });
+    return out;
+};
+NamedNodeMap.prototype.getNamedItem = function(name) {
+    var ps = this.__pairs();
+    for (var i = 0; i < ps.length; i++) if (ps[i].name === String(name)) return ps[i];
+    return null;
+};
+NamedNodeMap.prototype.item = function(i) { return this.__pairs()[i] || null; };
+NamedNodeMap.prototype.setNamedItem = function(attr) {
+    if (attr && attr.name) __setAttr(this.__nodeId, attr.name, attr.value || '');
+    return attr || null;
+};
+NamedNodeMap.prototype.removeNamedItem = function(name) { __removeAttr(this.__nodeId, String(name)); return null; };
+Object.defineProperty(NamedNodeMap.prototype, 'length', { get: function() { return this.__pairs().length; } });
+Object.defineProperty(Element.prototype, 'attributes', {
+    get: function() {
+        if (!this.__attrs) this.__attrs = new NamedNodeMap(this.__nodeId);
+        return this.__attrs;
+    },
+    enumerable: true, configurable: true
+});
+window.NamedNodeMap = NamedNodeMap;
 undefined;
 "#;
 
 /// M66-B: QuickJS XHR + Event + fetch shim（docsify 核心依赖）。
 #[cfg(feature = "quickjs")]
 const QUICKJS_XHR_SHIM: &str = r#"
-// Event 构造器
-function Event(type, opts) { this.type = type; this.target = null; this.currentTarget = null; }
-Event.prototype.preventDefault = function() {};
-Event.prototype.stopPropagation = function() {};
+// Event 构造器（M78: 对齐 WPT 断言——Symbol.toStringTag/常量/phase 属性）
+function Event(type, opts) {
+    opts = opts || {};
+    this.type = String(type);
+    this.target = null;
+    this.currentTarget = null;
+    this.bubbles = !!opts.bubbles;
+    this.cancelable = !!opts.cancelable;
+    this.composed = !!opts.composed;
+    this.eventPhase = Event.AT_TARGET;
+    this.defaultPrevented = false;
+    this.isTrusted = false;
+    this.cancelBubble = false;
+    this.returnValue = true;
+    this.timeStamp = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+Object.defineProperty(Event.prototype, Symbol.toStringTag, { value: 'Event' });
+Event.NONE = 0; Event.CAPTURING_PHASE = 1; Event.AT_TARGET = 2; Event.BUBBLING_PHASE = 3;
+Event.prototype.NONE = 0; Event.prototype.CAPTURING_PHASE = 1;
+Event.prototype.AT_TARGET = 2; Event.prototype.BUBBLING_PHASE = 3;
+Event.prototype.preventDefault = function() { this.defaultPrevented = true; };
+Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
+Event.prototype.stopImmediatePropagation = function() { this.cancelBubble = true; this.__immediate = true; };
+Event.prototype.initEvent = function(type, bubbles, cancelable) {
+    this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable;
+};
 function CustomEvent(type, opts) {
-    Event.call(this, type);
-    this.detail = (opts && opts.detail) || null;
+    Event.call(this, type, opts);
+    this.detail = (opts && opts.detail !== undefined) ? opts.detail : null;
 }
 CustomEvent.prototype = Object.create(Event.prototype);
+Object.defineProperty(CustomEvent.prototype, Symbol.toStringTag, { value: CustomEvent.name || 'CustomEvent' });
+function MouseEvent(type, opts) {
+    Event.call(this, type, opts);
+    opts = opts || {};
+    this.clientX = opts.clientX || 0; this.clientY = opts.clientY || 0;
+    this.button = (opts.button === undefined) ? 0 : opts.button;
+    this.buttons = opts.buttons || 0;
+}
+MouseEvent.prototype = Object.create(Event.prototype);
+Object.defineProperty(MouseEvent.prototype, Symbol.toStringTag, { value: 'MouseEvent' });
+window.MouseEvent = MouseEvent;
+function KeyboardEvent(type, opts) {
+    Event.call(this, type, opts);
+    opts = opts || {};
+    this.key = opts.key || ''; this.code = opts.code || '';
+    this.ctrlKey = !!opts.ctrlKey; this.altKey = !!opts.altKey;
+    this.shiftKey = !!opts.shiftKey; this.metaKey = !!opts.metaKey;
+}
+KeyboardEvent.prototype = Object.create(Event.prototype);
+Object.defineProperty(KeyboardEvent.prototype, Symbol.toStringTag, { value: 'KeyboardEvent' });
+window.KeyboardEvent = KeyboardEvent;
+function FocusEvent(type, opts) { Event.call(this, type, opts); }
+FocusEvent.prototype = Object.create(Event.prototype);
+window.FocusEvent = FocusEvent;
 
 // XMLHttpRequest（同步 fetch 版——docsify 用它加载 markdown）
 var __xhrSeq = 0;
