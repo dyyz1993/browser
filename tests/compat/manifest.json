@@ -34,6 +34,7 @@
    "-manual.html",
    "test-rerun",
    ".sub.html",
+   "original-harness.js",
    "moveBefore/",
    "render-blocking",
    "/partial-updates/",
@@ -1904,17 +1905,7 @@
     "html/dom/elements/images/bypass-cache-revalidation.html",
     "html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html",
     "html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html",
-    "html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html",
-    "html/dom/reflection-embedded.html",
-    "html/dom/reflection-forms-weekmonth.html",
-    "html/dom/reflection-forms.html",
-    "html/dom/reflection-grouping.html",
-    "html/dom/reflection-metadata.html",
-    "html/dom/reflection-misc.html",
-    "html/dom/reflection-obsolete.html",
-    "html/dom/reflection-sections.html",
-    "html/dom/reflection-tabular.html",
-    "html/dom/reflection-text.html"
+    "html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html"
    ]
   },
   "css_selector": {

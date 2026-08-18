@@ -250,6 +250,20 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 遗留：reflection-* 8 页 log 空（testharness 未装上，B 报告线索：输出挂
   在第二个 <html> 子树、event_loop 302ms 早退）——下轮单独深挖。
 
+**M78.12 循环 12 —— reflection 之谜收案 + dom_ready 测试环境保护**：
+
+- **reflection-* 8 页诊断收案**：最小组合（th.js/collector/threport + 探针）
+  全通过、6/6 script 全部执行——"探针没执行"是 replace 带引号串没匹配页面
+  **无引号 src** 的假象。真相：reflection 系列用 **original-harness.js**
+  （页面自带的"原始版测试框架"），不走 testharness 完成链，collector
+  永远采不到 → **基建不兼容而非引擎缺口**，登记 manifest 排除
+  （html_dom 100→90 页）。
+- **dom_ready 早退加测试环境保护**：WPT 页天然有大量静态文本（>80 字符），
+  M77 的"内容已就绪"检测把"测试还没跑"误判为渲染完成而 ~301ms 早退。
+  现在要求 `typeof test!=='function' && typeof setup!=='function'`——
+  test/setup 是 testharness 装的全局，CSR 页面不会有（语义安全）。
+- 门禁：757 passed 0 failed（debug 全量）。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

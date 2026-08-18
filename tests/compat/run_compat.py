@@ -85,6 +85,9 @@ WPT_EXCLUDE_PATTERNS = [
     ".any.window", ".any.worker", "crossOriginIsolated", "reporting",
     # M78: testdriver 自动化（需要 WebDriver/CDP 驱动的合成输入）与人工测试
     "/resources/testdriver", "-manual.html", "test-rerun", ".sub.html",
+    # M78.12: reflection-* 系列用 original-harness.js（页面自带"原始版测试
+    # 框架"，不走 testharness 完成链，collector 采不到——基建不兼容）。
+    "original-harness.js",
     # M78.9: OUT_OF_SCOPE 簇登记（对齐 AGENTS.md 非目标——与 target_profile=
     # crawler-spa 无关，不排除会以 0 分进分母虚降兼容性分）
     "moveBefore/",                      # Chrome 133+ moveBefore 新 API

@@ -1510,7 +1510,15 @@ fn run_scripts_quickjs(
                     // M77: DOM 稳定检测——body 内有**可见文本**（非空 div 占位）
                     // 则内容已就绪。只在 idle grace 后检测（给 React 至少 300ms）。
                     let dom_ready = engine
-                        .eval_js_bool("__findTag('body')>0&&__visibleBodyTextLen()>80")
+                        // M78.12: 排除测试框架环境——WPT 测试页天然有大量静态
+                        // 文本（>80 字符），dom_ready 会把"测试还没跑"误判为
+                        // "渲染完成"而 ~301ms 早退，杀掉 testharness 完成链
+                        // （reflection-* 8 页 no-results 的根因）。test/setup 是
+                        // testharness.js 装的全局，CSR 页面不会有。
+                        .eval_js_bool(
+                            "__findTag('body')>0&&__visibleBodyTextLen()>80\
+                             &&typeof test!=='function'&&typeof setup!=='function'",
+                        )
                         .unwrap_or(false);
                     if dom_ready {
                         break;
