@@ -758,18 +758,92 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
 /// M66: QuickJS TypeScript 检测——QuickJS 不支持 TS 语法。
-/// M66: QuickJS TypeScript 检测——QuickJS 不支持 TS 语法。
 /// M69: 移出 quickjs feature 门控——boa pump 的动态 script drain 也用它跳过 TS chunk。
+/// M78: 探测前先剥离注释——WPT testharness.js 的文档注释含 `interface TestEnvironment`
+/// 被子串匹配误杀（整个 script 静默跳过）。注释里提到 TS 关键字的普通 JS 必须照常执行。
 fn has_ts_syntax(code: &str) -> bool {
-    code.contains(": string")
-        || code.contains(": number")
-        || code.contains(": boolean")
-        || code.contains(": void")
-        || code.contains(": any")
-        || code.contains(" as const")
-        || code.contains(": ReturnType<")
-        || (code.contains(": \"") && code.contains(" | "))
-        || code.contains("interface ")
+    let stripped = strip_js_comments(code);
+    stripped.contains(": string")
+        || stripped.contains(": number")
+        || stripped.contains(": boolean")
+        || stripped.contains(": void")
+        || stripped.contains(": any")
+        || stripped.contains(" as const")
+        || stripped.contains(": ReturnType<")
+        || (stripped.contains(": \"") && stripped.contains(" | "))
+        || stripped.contains("interface ")
+}
+
+/// M78: 剥离 JS 源码的行/块注释（保守状态机）。仅用于 TS 启发式探测：
+/// 不识别正则字面量（`/a\/\/b/` 尾部 `//` 可能被当注释起点），误隐藏
+/// 少量内容的代价远小于现状的误杀正常 JS。
+fn strip_js_comments(code: &str) -> String {
+    let b = code.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    // 0 普通 | 1 单引号串 | 2 双引号串 | 3 模板串 | 4 行注释 | 5 块注释
+    let mut state = 0u8;
+    while i < b.len() {
+        let c = b[i];
+        match state {
+            1..=3 => {
+                out.push(c);
+                if c == b'\\' && i + 1 < b.len() {
+                    out.push(b[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                let quote = match state {
+                    1 => b'\'',
+                    2 => b'"',
+                    _ => b'`',
+                };
+                if c == quote {
+                    state = 0;
+                }
+                i += 1;
+            }
+            4 => {
+                if c == b'\n' {
+                    out.push(c);
+                    state = 0;
+                }
+                i += 1;
+            }
+            5 => {
+                if c == b'*' && i + 1 < b.len() && b[i + 1] == b'/' {
+                    out.push(b' ');
+                    i += 2;
+                    state = 0;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => {
+                if c == b'\'' || c == b'"' || c == b'`' {
+                    state = if c == b'\'' {
+                        1
+                    } else if c == b'"' {
+                        2
+                    } else {
+                        3
+                    };
+                    out.push(c);
+                    i += 1;
+                } else if c == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+                    state = 4;
+                    i += 2;
+                } else if c == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+                    state = 5;
+                    i += 2;
+                } else {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// M66: 跳过分析/追踪脚本 + TypeScript 文件

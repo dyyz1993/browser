@@ -29,6 +29,32 @@
 
 ## 最近变更（倒序）
 
+### M78 — 兼容性评分基线 + 自优化循环（进行中）🎯
+
+**目标**（[docs/plans/M78-compat-score-loop.md](./docs/plans/M78-compat-score-loop.md)）：
+标准兼容性分 ≥0.85（五类加权：20% Test262 + 25% HTML/DOM + 15% CSS/Selector +
+25% WebAPI/Network/EventLoop + 15% Storage/Nav/CDP），每类 ≥0.50，SPA task 保持 1.0，
+性能护栏 <10% 回退。**循环不停直到达标**（对齐 AGENTS.md 评分闭环章节）。
+
+**M78.1 评分 harness**：
+- `tests/compat/run_compat.py`：test262（1556 用例，三段式 wrapper + 负向测试页内判定）
+  + WPT（281 用例，testharness.js 注入 add_completion_callback 采集器）+ CDP 代理分。
+- 锁定版本：test262 `3655e74` / wpt `7b4ed9f`（manifest.json 记录，`--lock` 可重建）。
+- 计分对齐 AGENTS：PASS=1 / FAIL=TIMEOUT=CRASH=NOT_RUN=0，OUT_OF_SCOPE 不入分母。
+
+**M78.2 循环 1 —— has_ts_syntax 注释误杀（WPT 全军覆没根因）**：
+- 现象：testharness.js 加载但什么都没定义、无报错（`test is not defined`）。
+- 根因：testharness.js 第 28 行文档注释含 `interface TestEnvironment {`，
+  `has_ts_syntax` 子串匹配命中 → 整个 script 被**静默跳过**。任何注释里提到
+  TS 关键字的普通 JS 都会被误杀（`: string`/`interface ` 等）。
+- 修复：探测前先 `strip_js_comments`（保守状态机，处理字符串/转义/行块注释）。
+- 回归测试：`ts_detection_ignores_keywords_in_comments`（先红后绿）+
+  `ts_detection_still_skips_real_ts`（真 TS 仍跳过）。
+- 效果：WPT testharness 链路全通，css_selector 类从"全部 harness-not-run"变为
+  逐断言真实结果（暴露 :lang/:dir 伪类缺口 → 循环 2）。
+
+门禁：fmt ✅ / clippy 0 warnings ✅ / **725 passed**（baseline 723 + 2 新）。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新

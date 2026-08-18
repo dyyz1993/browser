@@ -941,6 +941,53 @@ fn quickjs_bare_global_assignment_cross_script() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// M78: TS 检测不能误杀含 "interface "/": string" 字样的注释。
+/// 根因：WPT testharness.js 第 28 行注释 `interface TestEnvironment {` 被
+/// has_ts_syntax 子串匹配命中 → 整个 script 被静默跳过（无报错）。
+/// 标准兼容性影响面：任何在注释/文档里提到 TS 关键字的普通 JS 都会被跳过。
+#[test]
+fn ts_detection_ignores_keywords_in_comments() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+/*
+ * interface TestEnvironment {
+ *   name: string;
+ * }
+ */
+// : string : number : void as const
+var __ok = 1;
+document.getElementById('out').textContent = 'TS_COMMENT_OK ' + __ok;
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("TS_COMMENT_OK 1"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// M78: 真正的 TypeScript 源码仍应跳过（QuickJS 不支持 TS 语法）。
+#[test]
+fn ts_detection_still_skips_real_ts() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+document.getElementById('out').textContent = 'BEFORE';
+</script>
+<script>
+var x: string = "hello";
+</script></body></html>"#;
+    let path = write_tmp(html);
+    bin()
+        .args(["render-script", &path, "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BEFORE"));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// 辅助：写临时 HTML 文件，返回路径。用计数器保证并发安全（不依赖纳秒时间戳）。
 fn write_tmp(html: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
