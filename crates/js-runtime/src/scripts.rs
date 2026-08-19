@@ -2591,6 +2591,39 @@ window.Node = window.Node || function Node() {};
     window.Node.prototype.nodeType = 0;
 })();
 Element.prototype.webkitMatchesSelector = Element.prototype.matches;
+// M78.32: 反射属性批量（lang/dir/className/title/hidden/tabIndex/draggable）。
+(function() {
+    var refl = ['lang', 'dir', 'title', 'draggable'];
+    for (var i = 0; i < refl.length; i++) {
+        (function(name) {
+            Object.defineProperty(Element.prototype, name, {
+                get: function() { return __getAttr(this.__nodeId, name) || ''; },
+                set: function(v) { __setAttr(this.__nodeId, name, String(v)); },
+                enumerable: true, configurable: true
+            });
+        })(refl[i]);
+    }
+    Object.defineProperty(Element.prototype, 'className', {
+        get: function() { return __getAttr(this.__nodeId, 'class') || ''; },
+        set: function(v) { __setAttr(this.__nodeId, 'class', String(v)); },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'hidden', {
+        get: function() { return __getAttr(this.__nodeId, 'hidden') !== null; },
+        set: function(v) { if (v) __setAttr(this.__nodeId, 'hidden', ''); else __removeAttr(this.__nodeId, 'hidden'); },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'tabIndex', {
+        get: function() { var t = __getAttr(this.__nodeId, 'tabindex'); return t !== null ? parseInt(t, 10) : -1; },
+        set: function(v) { __setAttr(this.__nodeId, 'tabindex', String(v)); },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'accessKey', {
+        get: function() { return __getAttr(this.__nodeId, 'accesskey') || ''; },
+        set: function(v) { __setAttr(this.__nodeId, 'accesskey', String(v)); },
+        enumerable: true, configurable: true
+    });
+})();
 // M78.18: Text/Comment 全局构造器（insertion-removing-steps 系列依赖
 // `new Text(...)`）。
 function Text(data) { var n = document.createTextNode(data); return n; }
