@@ -2235,23 +2235,54 @@ Object.defineProperty(document, 'currentScript', {
 });
 
 // localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
+// M78.22: setItem/removeItem/clear 派发 StorageEvent（WPT webstorage
+// 事件测试依赖；key/oldValue/newValue/url 齐全）。
 var __localStorage = {};
-window.localStorage = {
-    getItem: function(k) { return (k in __localStorage) ? __localStorage[k] : null; },
-    setItem: function(k, v) { __localStorage[k] = String(v); },
-    removeItem: function(k) { delete __localStorage[k]; },
-    clear: function() { __localStorage = {}; },
-    key: function(i) { var keys = Object.keys(__localStorage); return keys[i] || null; },
-    get length() { return Object.keys(__localStorage).length; }
-};
-window.sessionStorage = {
-    getItem: function(k) { return null; },
-    setItem: function(k, v) {},
-    removeItem: function(k) {},
-    clear: function() {},
-    key: function(i) { return null; },
-    get length() { return 0; }
-};
+function __StorageEvent(type, opts) {
+    opts = opts || {};
+    Event.call(this, type, opts);
+    this.key = ('key' in opts) ? opts.key : null;
+    this.oldValue = ('oldValue' in opts) ? opts.oldValue : null;
+    this.newValue = ('newValue' in opts) ? opts.newValue : null;
+    this.url = ('url' in opts) ? opts.url : '';
+    this.storageArea = opts.storageArea || null;
+}
+__StorageEvent.prototype = Object.create(Event.prototype);
+Object.defineProperty(__StorageEvent.prototype, Symbol.toStringTag, { value: 'StorageEvent' });
+window.StorageEvent = __StorageEvent;
+function __fireStorage(area, key, oldV, newV) {
+    setTimeout(function() {
+        try {
+            var ev = new __StorageEvent('storage', { key: key, oldValue: oldV,
+                newValue: newV, url: (typeof location !== 'undefined' ? location.href : ''),
+                storageArea: area });
+            window.dispatchEvent(ev);
+        } catch (e) {}
+    }, 0);
+}
+function __makeStorageArea(store, storeName) {
+    return {
+        getItem: function(k) { k = String(k); return (k in store) ? store[k] : null; },
+        setItem: function(k, v) {
+            k = String(k); v = String(v);
+            var old = (k in store) ? store[k] : null;
+            store[k] = v;
+            __fireStorage(this, k, old, v);
+        },
+        removeItem: function(k) {
+            k = String(k);
+            var old = (k in store) ? store[k] : null;
+            delete store[k];
+            __fireStorage(this, k, old, null);
+        },
+        clear: function() { store = {}; __fireStorage(this, null, null, null); },
+        key: function(i) { return Object.keys(store)[i] || null; },
+        get length() { return Object.keys(store).length; }
+    };
+}
+window.localStorage = __makeStorageArea(__localStorage, 'local');
+var __sessionStore = {};
+window.sessionStorage = __makeStorageArea(__sessionStore, 'session');
 
 // URL 构造器（简化版——避免 QuickJS 不支持的复杂正则）
 window.URL = function(input, base) {
