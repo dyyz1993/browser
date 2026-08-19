@@ -4285,7 +4285,24 @@ function Response(body, init) {
     this.statusText = init.statusText || '';
     this.ok = this.status >= 200 && this.status < 300;
     this.bodyUsed = false;
-    this.headers = { get: function() { return null; }, forEach: function() {}, has: function() { return false; } };
+    // M78.19: 构造 headers 近似对象——init.headers 的 Content-Type 供
+    // formData() 取 boundary（普通对象/Headers-like 都读）。
+    var __hdrMap = {};
+    var ih = init.headers;
+    if (ih) {
+        if (typeof ih.forEach === 'function') {
+            try { ih.forEach(function(v, k) { __hdrMap[String(k).toLowerCase()] = String(v); }); } catch (e) {}
+        } else {
+            for (var hk in ih) { if (ih.hasOwnProperty(hk)) __hdrMap[String(hk).toLowerCase()] = String(ih[hk]); }
+        }
+    }
+    var self2 = this;
+    this.headers = {
+        get: function(k) { return __hdrMap[String(k).toLowerCase()] !== undefined ? __hdrMap[String(k).toLowerCase()] : null; },
+        has: function(k) { return __hdrMap[String(k).toLowerCase()] !== undefined; },
+        forEach: function(fn) { for (var k in __hdrMap) fn(__hdrMap[k], k); }
+    };
+    this.__multipartBoundary = __hdrMap['content-type'] || '';
     this.__body = (body === undefined || body === null) ? '' : String(body);
 }
 Object.defineProperty(Response.prototype, Symbol.toStringTag, { value: 'Response' });
@@ -4299,7 +4316,8 @@ Response.prototype.formData = function() {
     var self = this;
     return Promise.resolve().then(function() {
         var fd = new FormData();
-        var m = /boundary="?([^";\s]+)"?/i.exec(self.__multipartBoundary || '');
+        var ct = self.__multipartBoundary || '';
+        var m = /boundary="?([^";\s]+)"?/i.exec(ct);
         if (!m) {
             // body 自带 preamble：--boundary
             var bm = /--([^\r\n]+)/.exec(self.__body.slice(0, 200));
