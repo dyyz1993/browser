@@ -1827,23 +1827,45 @@ window.location = __parseLoc(__locHref);
 // history API（docsify 路由需要 pushState/replaceState）
 // length 是函数（对齐 boa navigation_shim：history.length() 返回栈深度）
 window.history = (function() {
-    var stack = [__locHref];
+    // M78.17: 条目存 {url, state}——back/forward 恢复 state 并异步派发
+    // popstate（浏览器语义：popstate 由跨条目导航触发，pushState 不触发）。
+    var stack = [{ url: __locHref, state: null }];
+    var cur = 0;
     var state = null;
+    function firePopstate(st) {
+        setTimeout(function() {
+            try { window.dispatchEvent(new Event('popstate')); } catch (e) {}
+        }, 0);
+    }
+    function goEntry(idx) {
+        var from = cur;
+        cur = Math.max(0, Math.min(idx, stack.length - 1));
+        if (cur === from) return;
+        state = stack[cur].state;
+        __setLocHref(stack[cur].url);
+        firePopstate(state);
+    }
     // M78: length 必须是 getter 属性（WPT history 断言 history.length 是数字）。
     var h = {
         get state() { return state; },
         pushState: function(s, title, url) {
+            stack = stack.slice(0, cur + 1);
             state = s;
-            if (url) { stack.push(url); __setLocHref(url); }
-            else { stack.push(stack[stack.length-1]); }
+            if (url) { __setLocHref(url); stack.push({ url: url, state: s }); }
+            else { stack.push({ url: stack[cur].url, state: s }); }
+            cur = stack.length - 1;
         },
         replaceState: function(s, title, url) {
             state = s;
-            if (url) { stack[stack.length-1] = url; __setLocHref(url); }
+            if (url) { __setLocHref(url); stack[cur] = { url: url, state: s }; }
+            else { stack[cur] = { url: stack[cur].url, state: s }; }
         },
-        back: function() { if (stack.length > 1) { stack.pop(); __setLocHref(stack[stack.length-1]); } },
-        forward: function() {},
-        go: function(n) {},
+        back: function() { goEntry(cur - 1); },
+        forward: function() { goEntry(cur + 1); },
+        go: function(n) {
+            if (n === undefined || n === 0) { return; }
+            goEntry(cur + n);
+        },
         scrollRestoration: 'auto'
     };
     // 兼容：旧调用式 history.length()（M57 前 fixture/老站点写法）——getter 返回
