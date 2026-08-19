@@ -3918,6 +3918,18 @@ document.images = document.querySelectorAll('img');
 // （不改每次返回的数组，挂在 Array.prototype 由 name/id 反射）。
 window.HTMLCollection = function() {};
 Object.defineProperty(window.HTMLCollection.prototype, Symbol.toStringTag, { value: 'HTMLCollection' });
+// M78.30: NodeList 近似——querySelectorAll 返回数组的 item/valueOf 语义。
+window.NodeList = function() {};
+Object.defineProperty(window.NodeList.prototype, Symbol.toStringTag, { value: 'NodeList' });
+Array.prototype.item = function(i) { return (i >= 0 && i < this.length) ? this[i] : null; };
+Array.prototype.entries = Array.prototype.entries || function() {
+    var self = this, i = 0;
+    return { next: function() { return i < self.length ? { value: [i, self[i++]], done: false } : { value: undefined, done: true }; } };
+};
+document.styleSheets = [];
+document.currentScript = null;
+document.alinkColor = ''; document.linkColor = ''; document.vlinkColor = '';
+document.bgColor = ''; document.fgColor = '';
 Array.prototype.namedItem = function(name) {
     if (name === undefined || name === null) return null;
     name = String(name);
