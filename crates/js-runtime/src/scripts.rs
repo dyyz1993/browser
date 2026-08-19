@@ -2560,6 +2560,44 @@ window.Node = window.Node || function Node() {};
     window.Node.prototype.nodeType = 0;
 })();
 Element.prototype.webkitMatchesSelector = Element.prototype.matches;
+// M78.18: Text/Comment 全局构造器（insertion-removing-steps 系列依赖
+// `new Text(...)`）。
+function Text(data) { var n = document.createTextNode(data); return n; }
+Text.prototype = Object.create(Element.prototype);
+Object.defineProperty(Text.prototype, Symbol.toStringTag, { value: 'Text' });
+window.Text = Text;
+function Comment(data) { var n = document.createComment(data); return n; }
+Comment.prototype = Object.create(Element.prototype);
+Object.defineProperty(Comment.prototype, Symbol.toStringTag, { value: 'Comment' });
+window.Comment = Comment;
+// M78.18: nodeValue/data 反射（textNode 的读写）。
+Object.defineProperty(Element.prototype, 'nodeValue', {
+    get: function() {
+        var tag = __getTag(this.__nodeId);
+        if (!tag || tag === '__text__') return __getText(this.__nodeId);
+        return null;
+    },
+    set: function(v) {
+        var tag = __getTag(this.__nodeId);
+        if (!tag || tag === '__text__') __setText(this.__nodeId, String(v));
+    },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'data', {
+    get: function() { return this.nodeValue; },
+    set: function(v) { this.nodeValue = v; },
+    enumerable: true, configurable: true
+});
+// M78.18: document.domain（读写近似——同源恒等于 location.hostname）。
+try {
+    Object.defineProperty(document, 'domain', {
+        get: function() {
+            try { return location.hostname || 'localhost'; } catch (e) { return 'localhost'; }
+        },
+        set: function(v) { /* no-op 近似 */ },
+        enumerable: true, configurable: true
+    });
+} catch (e) {}
 // M78.15: nodeName/nodeType 按节点类型映射（#text/#comment/#document）。
 Object.defineProperty(Element.prototype, 'nodeName', {
     get: function() { return this.tagName; },
