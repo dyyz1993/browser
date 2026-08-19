@@ -304,6 +304,20 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 终态 **0.457**（js 0.927 / html 97/481 新高 / css 0.647 / webapi 0.258 /
   storage ~0.40）；757 passed 0 failed；二进制 9.6MB 冷启动 337ms。
 
+**M78.37-40 长尾冲刺（0.457→0.509，破 0.5）**：
+
+- **37**：MIME 门相对 URL 解析（fetch_script_mime_ok 无 host → reqwest 失败 →
+  M78.7-fix"网络错误放行"误放行非 JS MIME——**block-mime 22 子测试隐性回退
+  根治**，webapi 17→27）。教训：防回退优先于赚新分。
+- **38**：innerHTML getter 文本节点 __textData fallback（M78.21 重写时丢失，
+  innerText 断言 got '<br>' 丢文本）。html_dom 97→109。
+- **39**：innerText setter 换行集扩展（LF/CRLF/CR 全转 <br>，HTML 序列化
+  标准）。html_dom 109→**125**。
+- **40 收口**：≥2 行簇全网采光；单行尾样本核查全为 Proxy 深语义/iframe/
+  引擎级（三块已定性）——**当前策略可修项已尽**。
+- 终态 **0.509**（js 0.927 / html 0.26 / css 0.647 / webapi 0.409 /
+  storage ~0.40）；757 passed；二进制 9.6MB 冷启动 356ms。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
