@@ -335,6 +335,17 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - html_dom 125→**131**；css 44→45；release 757 passed（spa_task 修复）；
   总分 **0.514**。
 
+**M78.43 —— 反射重写批 2（0.514→0.518）**：
+
+- HTMLCollection Proxy 补 ownKeys（索引键+named 键+length）与
+  getOwnPropertyDescriptor（named/length 不可写）。
+- NamedNodeMap 补 Symbol.iterator/forEach/toStringTag。
+- **dataset ownKeys 键名截断 bug 修复**（M78.42 首版 slice(5) 取到
+  "foo=1" 而非 "foo"——ownKeys 泄漏了值）。
+- html_dom 131→**138**；757 passed；总分 **0.518**。
+- 批 3 首项：domstringmap-supported-property-names 页面挂起（M78.43 后
+  新挂，待查）；"read property 'name' of undefined" 新型 harness 过敏。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
