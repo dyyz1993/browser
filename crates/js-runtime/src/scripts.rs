@@ -3120,7 +3120,10 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
             // M78.10: 真 Text 节点（__parseHtml/html5ever 插入）getTag 返回空串，
             // 与 shim 的 '__text__' 伪标签同等按文本输出。
             if (!tag || tag === '__text__') {
-                out += text;
+                // M78.38: 文本值优先 __textData（节点自身 data）；__getText 聚合
+                // 子树对文本节点本身返回空（M78.21 重写时曾丢失此 fallback）。
+                var td = (typeof __textData === 'function') ? __textData(id) : '';
+                out += td || text;
             } else {
                 // M78.21: 属性序列化 + void 元素无闭合（innerText setter 断言
                 // innerHTML === 'abc<br>def'）。
