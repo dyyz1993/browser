@@ -3353,7 +3353,17 @@ Element.prototype.querySelectorAll = function(sel) {
     if (!ids) return [];
     return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
 };
-Element.prototype.contains = function(node) { return false; };
+Element.prototype.contains = function(node) {
+    // M78.31: 子树包含判定（自含或后代）。沿 parent 链上溯。
+    if (!node || typeof node.__nodeId !== 'number') return false;
+    var cur = node.__nodeId;
+    while (cur >= 0 && cur !== undefined) {
+        if (cur === this.__nodeId) return true;
+        try { cur = __getParent(cur); } catch (e) { return false; }
+        if (typeof cur !== 'number' || cur < 0) return false;
+    }
+    return false;
+};
 // M78: DOMException —— WPT testharness 的 assert_throws_dom 检查
 // e.constructor === window.DOMException 且 name/code 正确（SyntaxError=12）。
 function DOMException(message, name) {
