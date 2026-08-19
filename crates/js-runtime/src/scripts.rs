@@ -2591,6 +2591,25 @@ window.Node = window.Node || function Node() {};
     window.Node.prototype.nodeType = 0;
 })();
 Element.prototype.webkitMatchesSelector = Element.prototype.matches;
+// M78.35: 节点等同（isSameNode 身份；isEqualNode tag+文本近似）+ composedPath。
+Element.prototype.isSameNode = function(other) { return !!other && other.__nodeId === this.__nodeId; };
+Element.prototype.isEqualNode = function(other) {
+    if (!other || other.__nodeId === undefined) return false;
+    if (other.__nodeId === this.__nodeId) return true;
+    if (__getTag(other.__nodeId) !== __getTag(this.__nodeId)) return false;
+    return __getText(other.__nodeId) === __getText(this.__nodeId);
+};
+Event.prototype.composedPath = function() {
+    var path = [];
+    var t = this.target;
+    while (t && t.__nodeId !== undefined) {
+        path.push(t);
+        var pid = __getParent(t.__nodeId);
+        if (typeof pid !== 'number' || pid < 0) break;
+        t = __makeElement(pid);
+    }
+    return path;
+};
 // M78.32: 反射属性批量（lang/dir/className/title/hidden/tabIndex/draggable）。
 (function() {
     var refl = ['lang', 'dir', 'title', 'draggable'];
