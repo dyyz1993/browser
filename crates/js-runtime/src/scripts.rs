@@ -1026,6 +1026,27 @@ fn run_scripts_quickjs(
         .join("\n;\n");
     if let Err(e) = engine.eval(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
+        // M78.36-debug: 逐段定位 + 段内二分找首个失败行。
+        for (name, js) in &shims {
+            if let Err(se) = engine.eval(js) {
+                eprintln!("[js-runtime] shim 段 [{name}] 失败: {se}");
+                let lines: Vec<&str> = js.split('\n').collect();
+                let (mut lo, mut hi) = (0usize, lines.len() - 1);
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if engine.eval(&lines[..=mid].join("\n")).is_ok() {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                eprintln!(
+                    "[js-runtime] [{name}] 首个失败行 ≈ {}: {}",
+                    hi + 1,
+                    lines[hi].trim()
+                );
+            }
+        }
     }
     // M66: 设置裸全局变量——QuickJS 的 globalThis.xxx 不会被解析为裸变量 xxx。
     // 用 eval 设置 var 让后续 eval 能用裸 document/window/navigator 等。
@@ -3925,6 +3946,7 @@ Object.defineProperty(document, 'title', {
     },
     enumerable: true, configurable: true
 });
+
 var __cookieJar = {};
 Object.defineProperty(document, 'cookie', {
     get: function() {
@@ -3989,7 +4011,6 @@ Array.prototype.entries = Array.prototype.entries || function() {
     return { next: function() { return i < self.length ? { value: [i, self[i++]], done: false } : { value: undefined, done: true }; } };
 };
 document.styleSheets = [];
-document.currentScript = null;
 document.alinkColor = ''; document.linkColor = ''; document.vlinkColor = '';
 document.bgColor = ''; document.fgColor = '';
 Array.prototype.namedItem = function(name) {
@@ -5032,6 +5053,27 @@ fn eval_in_tree_quickjs(
         .join("\n;\n");
     if let Err(e) = engine.eval(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
+        // M78.36-debug: 逐段定位 + 段内二分找首个失败行。
+        for (name, js) in &shims {
+            if let Err(se) = engine.eval(js) {
+                eprintln!("[js-runtime] shim 段 [{name}] 失败: {se}");
+                let lines: Vec<&str> = js.split('\n').collect();
+                let (mut lo, mut hi) = (0usize, lines.len() - 1);
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if engine.eval(&lines[..=mid].join("\n")).is_ok() {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                eprintln!(
+                    "[js-runtime] [{name}] 首个失败行 ≈ {}: {}",
+                    hi + 1,
+                    lines[hi].trim()
+                );
+            }
+        }
     }
     // 裸变量声明（globalThis.xxx 不会被解析为裸变量 xxx）。
     let _ = engine.eval(
