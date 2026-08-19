@@ -3795,7 +3795,11 @@ Object.defineProperty(document, 'documentElement', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'head', {
-    get: function() { return document.body; },
+    // M78.23: 返回真实 <head>（旧实现误返回 body）。
+    get: function() {
+        var n = (typeof __findTag === 'function') ? __findTag('head') : -1;
+        return (typeof n === 'number' && n >= 0) ? __makeElement(n) : null;
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(document, 'title', {
