@@ -798,7 +798,9 @@ pub fn fetch_script_mime_ok(url: String) -> bool {
             return true;
         }
     }
-    let url_owned = url.clone();
+    // M78.37-fix: 相对 URL 先解析（reqwest 需绝对 URL；无 host 的 fetch 失败
+    // 曾被 M78.7-fix 的"网络错误放行"误放行——block-mime 回退根因）。
+    let url_owned = crate::bridge::resolve_url(&url);
     let handle = std::thread::spawn(move || {
         let client = SCRIPT_FETCH_CLIENT.get_or_init(browser_net::HttpClient::new);
         let rt = tokio::runtime::Builder::new_current_thread()
