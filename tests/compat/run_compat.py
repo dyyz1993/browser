@@ -157,6 +157,17 @@ def t262_build_wrapper(rel_path):
         if os.path.exists(p):
             with open(p, encoding="utf-8", errors="replace") as f:
                 inc_code.append("// include: %s\n%s" % (inc, t262_js_safe(f.read())))
+    # M78.20: $262 宿主桩（test262 agent API——浏览器宿主职责，非引擎缺口）。
+    stub262 = (
+        "var $262={global:globalThis,evalScript:function(s){return eval(s)},"
+        "detachArrayBuffer:function(){},codePointRange:function(a,b){var o=[];"
+        "for(var i=a;i<=b;i++)o.push(i);return o},"
+        "createRealm:function(){var g={};g.global=g;g.evalScript=function(){return undefined};"
+        "g.eval=function(){return undefined};"
+        "Object.defineProperty(g, Symbol.toStringTag, {value:'global'});return {global:g};},"
+        "agent:{start:function(){},receive:function(){},broadcast:function(){return ''},"
+        "getReport:function(){return ''},leaving:function(){},monotonicNow:function(){return Date.now()}}};"
+    )
     strict = "onlyStrict" in meta["flags"]
     test_code = t262_js_safe(body)
     if strict:
@@ -168,6 +179,7 @@ def t262_build_wrapper(rel_path):
         "<div id=\"__t262__\" data-outcome=\"NOT_RUN\">NOT_RUN</div>",
         "<script>window.__NEG__=%s;window.__OUTCOME__=\"NOT_RUN\";</script>" % neg_js,
         "<script>",
+        stub262,
         "\n".join(inc_code),
         "try{\n%s\nwindow.__OUTCOME__=\"PASS\";\n}catch(e){"
         "window.__OUTCOME__=\"FAIL:\"+(e&&e.name?e.name+\":\":\"\")+(e&&e.message!==undefined?String(e.message):String(e));}" % test_code,
