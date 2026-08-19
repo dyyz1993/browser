@@ -2515,6 +2515,66 @@ window.Node = window.Node || function Node() {};
     window.Node.prototype.nodeType = 0;
 })();
 Element.prototype.webkitMatchesSelector = Element.prototype.matches;
+// M78.15: nodeName/nodeType 按节点类型映射（#text/#comment/#document）。
+Object.defineProperty(Element.prototype, 'nodeName', {
+    get: function() { return this.tagName; },
+    enumerable: true, configurable: true
+});
+// M78.15: 元素级导航（firstElementChild/lastElementChild/childElementCount）。
+(function() {
+    function elementChildrenOf(id) {
+        var cs = __children(id);
+        if (!cs) return [];
+        var out = [];
+        var ids = cs.split(',');
+        for (var i = 0; i < ids.length; i++) {
+            if (!ids[i]) continue;
+            var cid = parseInt(ids[i], 10);
+            var tag = __getTag(cid);
+            if (tag && tag !== '__text__') out.push(cid);
+        }
+        return out;
+    }
+    Object.defineProperty(Element.prototype, 'firstElementChild', {
+        get: function() { var c = elementChildrenOf(this.__nodeId); return c.length ? __makeElement(c[0]) : null; },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'lastElementChild', {
+        get: function() { var c = elementChildrenOf(this.__nodeId); return c.length ? __makeElement(c[c.length - 1]) : null; },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'childElementCount', {
+        get: function() { return elementChildrenOf(this.__nodeId).length; },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'previousElementSibling', {
+        get: function() {
+            var pid = __getParent(this.__nodeId);
+            if (pid < 0) return null;
+            var sibs = elementChildrenOf(pid), prev = null;
+            for (var i = 0; i < sibs.length; i++) {
+                if (sibs[i] === this.__nodeId) return prev ? __makeElement(prev) : null;
+                prev = sibs[i];
+            }
+            return null;
+        },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(Element.prototype, 'nextElementSibling', {
+        get: function() {
+            var pid = __getParent(this.__nodeId);
+            if (pid < 0) return null;
+            var sibs = elementChildrenOf(pid);
+            for (var i = 0; i < sibs.length; i++) {
+                if (sibs[i] === this.__nodeId) {
+                    return (i + 1 < sibs.length) ? __makeElement(sibs[i + 1]) : null;
+                }
+            }
+            return null;
+        },
+        enumerable: true, configurable: true
+    });
+})();
 
 // AbortSignal（React/Next.js 在 GitHub 检查）
 if (typeof AbortSignal === 'undefined') {
@@ -2727,9 +2787,19 @@ Element.prototype.insertBefore = function(child, ref) {
     return child;
 };
 Element.prototype.removeChild = function(child) {
-    if (child && typeof child.__nodeId === 'number') {
-        __removeChild(this.__nodeId, child.__nodeId);
+    // M78.15: 规范语义——null/非节点 TypeError；非本节点子节点 NotFoundError。
+    if (child === null || child === undefined || typeof child.__nodeId !== 'number') {
+        throw new TypeError('Argument 1 is not an object.');
     }
+    var cs = (__children(this.__nodeId) || '').split(',');
+    var mine = false;
+    for (var i = 0; i < cs.length; i++) {
+        if (parseInt(cs[i], 10) === child.__nodeId) { mine = true; break; }
+    }
+    if (!mine) {
+        throw new DOMException('The object can not be found here.', 'NotFoundError');
+    }
+    __removeChild(this.__nodeId, child.__nodeId);
     return child;
 };
 Element.prototype.append = function() {

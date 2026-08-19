@@ -287,6 +287,16 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 剩余大簇（html_dom no-results 13 + harness-not-run 11）同源 iframe 或
   长尾单行，下一杠杆转向 storage 的 history 导航语义。
 
+**M78.15 循环 15 —— 长尾批量（html_dom +10）**：
+
+- **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
+  NotFoundError DOMException（code 8）。
+- **元素导航五件套**：firstElementChild / lastElementChild /
+  childElementCount / previousElementSibling / nextElementSibling
+  （过滤文本节点）。
+- **nodeName getter**（映射 tagName）。
+- html_dom 82→**92**；757 passed 0 failed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新
