@@ -78,6 +78,8 @@ pub enum Pseudo {
     Dir(String),
     /// `:nth-child(n)` — 仅整数形式。
     NthChild(u32),
+    /// `:not(compound)` — 复合选择器取反。
+    Not(Box<CompoundSelector>),
 }
 
 impl fmt::Display for CompoundSelector {
@@ -100,6 +102,7 @@ impl fmt::Display for CompoundSelector {
                 }
                 Pseudo::Dir(d) => write!(f, ":dir({d})")?,
                 Pseudo::NthChild(n) => write!(f, ":nth-child({n})")?,
+                Pseudo::Not(inner) => write!(f, ":not({inner})")?,
             }
         }
         for a in &self.attrs {
@@ -412,6 +415,10 @@ fn parse_pseudo(
             }
             Ok(Pseudo::Dir(d.to_string()))
         }
+        "not" => {
+            let inner = parse_compound(args.trim())?;
+            Ok(Pseudo::Not(Box::new(inner)))
+        }
         "nth-child" => {
             let n: u32 = args.trim().parse().map_err(|_| {
                 format!(
@@ -577,6 +584,7 @@ fn compound_matches(tree: &Tree, id: NodeId, sel: &CompoundSelector) -> bool {
                 None => false,
             },
             Pseudo::NthChild(n) => element_child_index(tree, id) == *n,
+            Pseudo::Not(inner) => !compound_matches(tree, id, inner),
         };
         if !ok {
             return false;
