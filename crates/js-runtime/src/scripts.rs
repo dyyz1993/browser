@@ -3203,7 +3203,8 @@ Object.defineProperty(Element.prototype, 'innerText', {
         function esc(s) {
             return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
-        var lines = text.split('\n');
+        // M78.39: 规范换行集——LF / CRLF / CR 都转为 <br>（HTML 序列化标准）。
+        var lines = text.split(/\r\n|\r|\n/);
         var html = '';
         for (var i = 0; i < lines.length; i++) {
             if (i > 0) html += '<br>';
