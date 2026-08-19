@@ -287,6 +287,23 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 剩余大簇（html_dom no-results 13 + harness-not-run 11）同源 iframe 或
   长尾单行，下一杠杆转向 storage 的 history 导航语义。
 
+**M78.16-36 二十轮连跑速记（0.445→0.457）**：
+
+- 16 URL query 百分号编码+相对引用（raw string 内注释禁 `"#` 组合的教训）。
+- 17 history 条目栈 {url,state}+popstate；18 Text/Comment/nodeValue/domain。
+- 19 Response headers 透传；20 **test262 $262 宿主桩**（1555→1563）。
+- 21 innerHTML 序列化精度；22 **StorageEvent+sessionStorage 真实现**。
+- 23 document.head 修复（旧误返 body）；24 stopImmediatePropagation。
+- 25 AbortSignal.timeout/any+AbortController。
+- 27 `:not()`；28 namedItem；29 键位常量；30 Array.item；31 **contains 真实现**；
+  32 反射属性批量；33 **`~` 兄弟组合器**；34 **`>` 子组合器**；35 isEqualNode。
+- 36 **shim strict 事故根治**：M78.30 `document.currentScript = null` 裸赋值
+  撞 getter-only defineProperty，strict eval 抛 Exception → combined shim
+  中段断裂（XHR 等失效，3 测试回归）。装载器已加分段+二分定位打印（失败时
+  才执行）。**教训：shim 内禁对 getter-only 属性裸赋值**。
+- 终态 **0.457**（js 0.927 / html 97/481 新高 / css 0.647 / webapi 0.258 /
+  storage ~0.40）；757 passed 0 failed；二进制 9.6MB 冷启动 337ms。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
