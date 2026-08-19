@@ -2234,6 +2234,23 @@ window.sessionStorage = {
 // URL 构造器（简化版——避免 QuickJS 不支持的复杂正则）
 window.URL = function(input, base) {
     input = String(input);
+    // M78.16: 纯 query / 纯 hash 的相对引用（WPT url-encoding）。
+    function __encPart(str) {
+        var out = '';
+        for (var ci = 0; ci < str.length; ci++) {
+            var ch = str.charAt(ci);
+            var code = str.charCodeAt(ci);
+            var safe = (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+                || (code >= 48 && code <= 57)
+                || '-_.!~*\'()/?:@&=+$,#'.indexOf(ch) >= 0;
+            out += safe ? ch : encodeURIComponent(ch);
+        }
+        return out;
+    }
+    if (base && (input.charAt(0) === '?' || input.charAt(0) === '#')) {
+        var b0 = String(base);
+        input = b0.split('?')[0].split('#')[0] + input;
+    }
     if (base && input.indexOf('://') < 0) {
         var baseURL = String(base);
         if (input.charAt(0) === '.') {
@@ -2259,7 +2276,13 @@ window.URL = function(input, base) {
     var afterHost = afterProto.substring(afterProto.indexOf('/') + 1);
     this.pathname = '/' + afterHost.split('?')[0].split('#')[0];
     var q = input.split('?')[1];
-    this.search = q ? '?' + q.split('#')[0] : '';
+    var rawSearch = q ? q.split('#')[0] : '';
+    // M78.16: query 非 ASCII 百分号编码（ß→%C3%9F，WHATWG 近似）。
+    this.search = rawSearch ? '?' + __encPart(rawSearch) : '';
+    // M78.16: href 同步编码后的 query（测试断言 .href）。
+    if (rawSearch) {
+        this.href = input.split('?')[0] + this.search + (input.indexOf('#') >= 0 ? '#' + input.split('#')[1] : '');
+    }
     this.searchParams = new URLSearchParams(q || '');
     this.hash = input.indexOf('#') >= 0 ? '#' + input.split('#')[1] : '';
     this.origin = this.protocol + '//' + this.host;

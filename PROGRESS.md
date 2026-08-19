@@ -297,6 +297,15 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - **nodeName getter**（映射 tagName）。
 - html_dom 82→**92**；757 passed 0 failed。
 
+**M78.16 循环 16 —— URL query 百分号编码**：
+
+- URL 构造器：纯 query/hash 相对引用（`new URL('?x', base)` 基于 base 拼）
+  + query 非 ASCII 百分号编码（WHATWG 近似，safe 子集外逐字符
+  encodeURIComponent）+ href 同步编码结果。
+- storage 34→**37**（连带增益）；URL 正则坑记录：Rust raw string 里注释含
+  `/"#` 序列会提前终止定界——教训：shim 字符串内注释禁用双引号+井号组合。
+- 757 passed 0 failed。
+
 ### M57 — 文档更新 + browser fetch --wait-strategy/--timeout flags（2026-07-05）✅
 
 **M57.1-M57.4**：文档四件套更新
