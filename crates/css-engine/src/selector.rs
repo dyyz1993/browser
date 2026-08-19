@@ -44,6 +44,8 @@ pub enum Combinator {
     /// `A + B` —— B 是 A 紧邻的后一个元素兄弟（中间无其他元素节点，
     /// 文本等非元素节点不破坏相邻性，CSS Selectors L4 §13.2）。
     Adjacent,
+    /// `A ~ B` —— B 是 A 之后的任意元素兄弟。
+    LaterSibling,
 }
 
 /// A single compound selector with no whitespace, e.g. `p.title#main`.
@@ -180,6 +182,17 @@ fn parse_chain(input: &str) -> Result<SelectorChain, String> {
             pending = Some(Combinator::Adjacent);
             continue;
         }
+        if depth == 0 && c == '~' {
+            if !chunk.is_empty() {
+                parts.push(parse_compound(&chunk)?);
+                chunk.clear();
+            }
+            if parts.is_empty() {
+                return Err(format!("selector chain starts with '~' in {input:?}"));
+            }
+            pending = Some(Combinator::LaterSibling);
+            continue;
+        }
         if matches!(c, '[' | '(') {
             depth += 1;
         } else if matches!(c, ']' | ')') {
@@ -202,6 +215,9 @@ fn parse_chain(input: &str) -> Result<SelectorChain, String> {
     // 末尾悬空的 '+'（后面没有 compound）非法；悬空的空白无所谓。
     if pending == Some(Combinator::Adjacent) {
         return Err(format!("trailing '+' combinator in {input:?}"));
+    }
+    if pending == Some(Combinator::LaterSibling) {
+        return Err(format!("trailing '~' combinator in {input:?}"));
     }
     debug_assert_eq!(combinators.len(), parts.len() - 1);
     Ok(SelectorChain { parts, combinators })
@@ -625,6 +641,22 @@ fn chain_matches(tree: &Tree, id: NodeId, chain: &SelectorChain) -> bool {
                 Some(prev) if compound_matches(tree, prev, &parts[i]) => current_id = prev,
                 _ => return false,
             },
+            // M78.33: `A ~ B` —— 沿前向兄弟链找任意匹配 A 的兄弟。
+            Combinator::LaterSibling => {
+                let mut cur = current_id;
+                let mut found = false;
+                while let Some(prev) = prev_element_sibling(tree, cur) {
+                    if compound_matches(tree, prev, &parts[i]) {
+                        current_id = prev;
+                        found = true;
+                        break;
+                    }
+                    cur = prev;
+                }
+                if !found {
+                    return false;
+                }
+            }
             Combinator::Descendant => {
                 // Walk ancestors until we find one that matches `part`.
                 let mut ancestor = tree.get(current_id).parent;
