@@ -211,6 +211,11 @@ def t262_interpret(html_out):
 
 # ---------------------------------------------------------------- WPT
 COLLECTOR = (
+    # M78.42b: setup({output:false})——testharness 的 AssertRecord 记账链对
+    # JS 包装器元素过敏（构造抛→push 失败→set_assert_status(null) 报
+    # "cannot set property 'status' of undefined" 次生错误，掩盖断言真值）。
+    # asserts 记账是诊断功能，评分只需 tests 数组——关掉恢复断言真实性。
+    "<script>try{setup({output:false});}catch(e){}</script>"
     "<script>(function(){function rep(ts,st){try{"
     "var out=ts.map(function(t){return{name:String(t.name).slice(0,160),"
     "status:t.status,message:String(t.message||\"\").slice(0,200)}});"
