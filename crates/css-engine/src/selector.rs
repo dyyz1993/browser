@@ -46,6 +46,8 @@ pub enum Combinator {
     Adjacent,
     /// `A ~ B` —— B 是 A 之后的任意元素兄弟。
     LaterSibling,
+    /// `A > B` —— B 是 A 的直接子元素。
+    Child,
 }
 
 /// A single compound selector with no whitespace, e.g. `p.title#main`.
@@ -182,6 +184,17 @@ fn parse_chain(input: &str) -> Result<SelectorChain, String> {
             pending = Some(Combinator::Adjacent);
             continue;
         }
+        if depth == 0 && c == '>' {
+            if !chunk.is_empty() {
+                parts.push(parse_compound(&chunk)?);
+                chunk.clear();
+            }
+            if parts.is_empty() {
+                return Err(format!("selector chain starts with '>' in {input:?}"));
+            }
+            pending = Some(Combinator::Child);
+            continue;
+        }
         if depth == 0 && c == '~' {
             if !chunk.is_empty() {
                 parts.push(parse_compound(&chunk)?);
@@ -218,6 +231,9 @@ fn parse_chain(input: &str) -> Result<SelectorChain, String> {
     }
     if pending == Some(Combinator::LaterSibling) {
         return Err(format!("trailing '~' combinator in {input:?}"));
+    }
+    if pending == Some(Combinator::Child) {
+        return Err(format!("trailing '>' combinator in {input:?}"));
     }
     debug_assert_eq!(combinators.len(), parts.len() - 1);
     Ok(SelectorChain { parts, combinators })
@@ -657,6 +673,13 @@ fn chain_matches(tree: &Tree, id: NodeId, chain: &SelectorChain) -> bool {
                     return false;
                 }
             }
+            // M78.34: `A > B` —— 直接父必须匹配 A。
+            Combinator::Child => match tree.get(current_id).parent {
+                Some(parent) if compound_matches(tree, parent, &parts[i]) => {
+                    current_id = parent;
+                }
+                _ => return false,
+            },
             Combinator::Descendant => {
                 // Walk ancestors until we find one that matches `part`.
                 let mut ancestor = tree.get(current_id).parent;
