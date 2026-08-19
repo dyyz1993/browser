@@ -318,6 +318,23 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 终态 **0.509**（js 0.927 / html 0.26 / css 0.647 / webapi 0.409 /
   storage ~0.40）；757 passed；二进制 9.6MB 冷启动 356ms。
 
+**M78.42-42b —— 反射重写批 1 + AssertRecord 过敏根治（0.509→0.514）**：
+
+- 用户解锁"反射系统重写"工程（渐进路线，~3 个十轮）。
+- **批 1**：live HTMLCollection（getElementsBy* 返回 Proxy——named property
+  语义用 set trap 返回 false 精确复刻 WebIDL：sloppy 静默/strict TypeError）
+  + dataset ownKeys 枚举（data-* 驼峰，属性树顺序）。
+- **42b（本轮最大发现）**：testharness 的 AssertRecord 记账链对 JS 包装器
+  元素过敏——构造抛 → push 失败 → set_assert_status(null 索引) 报
+  "cannot set property 'status' of undefined" **次生错误掩盖断言真值**，
+  影响所有"元素入 assert_equals"的测试。collector 注入
+  setup({output:false}) 关掉记账（评分只需 tests 数组）。
+- **事故记录**：git 冲突误拿 M78.35 旧版 scripts.rs，引发 88 分假象 +
+  unclosed delimiter 误判，浪费多轮排查——教训：**多 stash 环境下 stash pop
+  失败必须立刻核对 stash list 与目标文件版本**。
+- html_dom 125→**131**；css 44→45；release 757 passed（spa_task 修复）；
+  总分 **0.514**。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
