@@ -2966,6 +2966,8 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
         if (!cs) return '';
         var ids = cs.split(',').filter(function(s) { return s; });
         var out = '';
+        var __voidTags = { br:1, hr:1, img:1, input:1, meta:1, link:1, area:1,
+            base:1, col:1, embed:1, source:1, track:1, wbr:1 };
         for (var i = 0; i < ids.length; i++) {
             var id = parseInt(ids[i], 10);
             var tag = __getTag(id);
@@ -2975,7 +2977,22 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
             if (!tag || tag === '__text__') {
                 out += text;
             } else {
-                out += '<' + tag + '>' + text + '</' + tag + '>';
+                // M78.21: 属性序列化 + void 元素无闭合（innerText setter 断言
+                // innerHTML === 'abc<br>def'）。
+                var attrsStr = '';
+                if (typeof __attrsOf === 'function') {
+                    var raw = __attrsOf(id);
+                    (raw || '').split('\n').forEach(function(line) {
+                        var eq = line.indexOf('=');
+                        if (eq > 0) attrsStr += ' ' + line.slice(0, eq) + '="' + line.slice(eq + 1) + '"';
+                    });
+                }
+                var low = tag.toLowerCase();
+                if (__voidTags[low]) {
+                    out += '<' + low + attrsStr + '>';
+                } else {
+                    out += '<' + low + attrsStr + '>' + text + '</' + low + '>';
+                }
             }
         }
         return out;
