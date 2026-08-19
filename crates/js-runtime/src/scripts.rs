@@ -3707,7 +3707,8 @@ Object.defineProperty(Element.prototype, 'dataset', {
                         (raw || '').split('\n').forEach(function(line) {
                             var eq = line.indexOf('=');
                             if (eq > 0 && line.slice(0, 5) === 'data-') {
-                                keys.push(line.slice(5).replace(/-([a-z])/g, function(_, ch) { return ch.toUpperCase(); }));
+                                var dk = line.slice(5, eq);
+                                keys.push(dk.replace(/-([a-z])/g, function(_, ch) { return ch.toUpperCase(); }));
                             }
                         });
                     } catch (e) {}
@@ -3975,6 +3976,31 @@ window.__makeLiveCollection = function(queryFn) {
         has: function(t, k) {
             if (Object.prototype.hasOwnProperty.call(t.__own, k)) return true;
             return !!lookup(k);
+        },
+        // M78.43: ownKeys——索引键(0..len-1) + named 键 + length。
+        ownKeys: function(t) {
+            var arr = queryFn();
+            var keys = [];
+            for (var i = 0; i < arr.length; i++) keys.push(String(i));
+            var seen = {};
+            for (var j = 0; j < arr.length; j++) {
+                var el = arr[j];
+                var id = (typeof el.getAttribute === 'function') ? el.getAttribute('id') : null;
+                var nm = (typeof el.getAttribute === 'function') ? el.getAttribute('name') : null;
+                if (id && !seen[id]) { keys.push(id); seen[id] = 1; }
+                if (nm && !seen[nm]) { keys.push(nm); seen[nm] = 1; }
+            }
+            keys.push('length');
+            return keys;
+        },
+        getOwnPropertyDescriptor: function(t, k) {
+            if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t.__own, k)) {
+                return Object.getOwnPropertyDescriptor(t.__own, k);
+            }
+            var r = lookup(k);
+            if (r) return { value: r.el, writable: false, enumerable: true, configurable: true };
+            if (k === 'length') return { value: queryFn().length, writable: false, enumerable: true, configurable: true };
+            return undefined;
         }
     });
 };
@@ -4229,6 +4255,16 @@ NamedNodeMap.prototype.setNamedItem = function(attr) {
 };
 NamedNodeMap.prototype.removeNamedItem = function(name) { __removeAttr(this.__nodeId, String(name)); return null; };
 Object.defineProperty(NamedNodeMap.prototype, 'length', { get: function() { return this.__pairs().length; } });
+// M78.43: ownKeys/gOPD——Object.getOwnPropertyNames(attrs) 枚举属性名。
+Object.defineProperty(NamedNodeMap.prototype, Symbol.toStringTag, { value: 'NamedNodeMap' });
+NamedNodeMap.prototype[Symbol.iterator] = function() {
+    var pairs = this.__pairs(), i = 0;
+    return { next: function() { return i < pairs.length ? { value: pairs[i++], done: false } : { value: undefined, done: true }; } };
+};
+NamedNodeMap.prototype.forEach = function(fn, thisArg) {
+    var pairs = this.__pairs();
+    for (var i = 0; i < pairs.length; i++) fn.call(thisArg, pairs[i], String(i), this);
+};
 Object.defineProperty(Element.prototype, 'attributes', {
     get: function() {
         if (!this.__attrs) this.__attrs = new NamedNodeMap(this.__nodeId);
