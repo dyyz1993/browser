@@ -2692,14 +2692,53 @@ Object.defineProperty(Element.prototype, 'nodeName', {
 
 // AbortSignal（React/Next.js 在 GitHub 检查）
 if (typeof AbortSignal === 'undefined') {
-    window.AbortSignal = function() {};
+    window.AbortSignal = function() {
+        this.aborted = false;
+        this.reason = undefined;
+        this.onabort = null;
+        this.__listeners = {};
+    };
     window.AbortSignal.prototype = Object.create(Object.prototype);
-    AbortSignal.prototype.aborted = false;
-    AbortSignal.prototype.reason = undefined;
-    AbortSignal.prototype.throwIfAborted = function() {};
-    AbortSignal.prototype.addEventListener = function() {};
-    AbortSignal.prototype.removeEventListener = function() {};
+    AbortSignal.prototype.throwIfAborted = function() {
+        if (this.aborted) throw this.reason;
+    };
+    AbortSignal.prototype.abort = function(reason) {
+        if (this.aborted) return;
+        this.aborted = true;
+        this.reason = (reason !== undefined) ? reason : new DOMException('signal is aborted without reason', 'AbortError');
+        var self = this;
+        setTimeout(function() {
+            if (typeof self.onabort === 'function') { try { self.onabort.call(self, new Event('abort')); } catch (e) {} }
+            var cbs = self.__listeners && self.__listeners['abort'];
+            if (cbs) { for (var i = 0; i < cbs.length; i++) { try { cbs[i].call(self, new Event('abort')); } catch (e) {} } }
+        }, 0);
+    };
+    AbortSignal.prototype.addEventListener = function(t, cb) {
+        (this.__listeners[t] = this.__listeners[t] || []).push(cb);
+    };
+    AbortSignal.prototype.removeEventListener = function(t, cb) {
+        var a = this.__listeners[t];
+        if (a) { var i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); }
+    };
     AbortSignal.prototype.dispatchEvent = function() { return true; };
+    // M78.25: AbortSignal.timeout(ms)——定时自动 abort。
+    AbortSignal.timeout = function(ms) {
+        var sig = new AbortSignal();
+        var err = new DOMException('signal timed out', 'TimeoutError');
+        setTimeout(function() { sig.abort(err); }, Number(ms) || 0);
+        return sig;
+    };
+    AbortSignal.any = function(signals) {
+        var combined = new AbortSignal();
+        (signals || []).forEach(function(s) {
+            if (!s) return;
+            if (s.aborted) { combined.abort(s.reason); return; }
+            s.addEventListener('abort', function() { combined.abort(s.reason); });
+        });
+        return combined;
+    };
+    window.AbortController = function() { this.signal = new AbortSignal(); };
+    window.AbortController.prototype.abort = function(reason) { this.signal.abort(reason); };
 }
 
 // EventTarget（Webpack chunk 加载器检查）
