@@ -4126,6 +4126,17 @@ function KeyboardEvent(type, opts) {
 KeyboardEvent.prototype = Object.create(Event.prototype);
 Object.defineProperty(KeyboardEvent.prototype, Symbol.toStringTag, { value: 'KeyboardEvent' });
 window.KeyboardEvent = KeyboardEvent;
+// M78.29: KeyboardEvent DOM_KEY_LOCATION 常量（构造器与 prototype 双暴露）。
+(function() {
+    var loc = { DOM_KEY_LOCATION_STANDARD: 0, DOM_KEY_LOCATION_LEFT: 1,
+        DOM_KEY_LOCATION_RIGHT: 2, DOM_KEY_LOCATION_NUMPAD: 3 };
+    for (var k in loc) {
+        window.KeyboardEvent[k] = loc[k];
+        window.KeyboardEvent.prototype[k] = loc[k];
+    }
+})();
+// MouseEvent 常量（button 掩码）。
+window.MouseEvent.NONE = 0; window.MouseEvent.LEFT = 1; window.MouseEvent.MIDDLE = 2; window.MouseEvent.RIGHT = 3;
 function FocusEvent(type, opts) { Event.call(this, type, opts); }
 FocusEvent.prototype = Object.create(Event.prototype);
 window.FocusEvent = FocusEvent;
