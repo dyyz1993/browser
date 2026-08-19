@@ -69,6 +69,17 @@ python3 tests/compat/run_compat.py            # 输出五类分数 + 总分 + �
 python3 tests/compat/run_compat.py --verdict  # 总分≥0.85 且每类≥0.50 且 spa_task=1.0
 ```
 
+## 决策记录：跨 realm iframe 定性为非目标（2026-08-19，用户决策）
+
+- **决策**：拒绝"每个 iframe 一个独立 JS realm + postMessage 跨上下文路由"的工程投入。
+- **理由**：与 North Star（SPA 爬虫渲染）不符——真实 SPA 站点极少依赖 iframe 双向
+  通信完成内容渲染；该能力是完整浏览器的架构件而非爬虫必需。对齐 AGENTS.md
+  决策原则 1（爬虫价值优先：否）与 3（复杂度门槛：3-5 个十轮成本超收益）。
+- **影响面**：~55-110 页 WPT no-results（storage 30 / html_dom 20 / webapi 5）
+  定性 OUT_OF_SCOPE，不计入后续修复目标；评分天花板相应锁定在
+  ~0.55-0.60 区间（长尾 + 已修复项的守护）。
+- **替代策略**：循环转长尾扫荡 + 回归守护（每轮跑评分确认无退化）。
+
 ## 五、风险与边界
 
 - WPT 体量大：`--depth 1 --filter=blob:none --sparse` 只拉选例目录的 blob。
