@@ -3699,6 +3699,28 @@ Object.defineProperty(Element.prototype, 'dataset', {
                     }
                     return false;
                 },
+                // M78.42: ownKeys——枚举 data-* 属性（驼峰，属性树顺序）。
+                ownKeys: function(t) {
+                    var keys = Object.keys(t);
+                    try {
+                        var raw = (typeof __attrsOf === 'function') ? __attrsOf(self.__nodeId) : '';
+                        (raw || '').split('\n').forEach(function(line) {
+                            var eq = line.indexOf('=');
+                            if (eq > 0 && line.slice(0, 5) === 'data-') {
+                                keys.push(line.slice(5).replace(/-([a-z])/g, function(_, ch) { return ch.toUpperCase(); }));
+                            }
+                        });
+                    } catch (e) {}
+                    return keys;
+                },
+                getOwnPropertyDescriptor: function(t, k) {
+                    if (typeof k === 'string' && k in t) return Object.getOwnPropertyDescriptor(t, k);
+                    var v = __getAttr(self.__nodeId, toKebab(k));
+                    if (v !== null && v !== undefined) {
+                        return { value: v, writable: true, enumerable: true, configurable: true };
+                    }
+                    return undefined;
+                },
                 has: function(t, k) {
                     if (typeof k !== 'string') return false;
                     if (k in t) return true;
@@ -3915,6 +3937,52 @@ document.getElementsByTagName = function(tag) {
 };
 document.getElementsByClassName = function(cls) {
     return document.querySelectorAll('.' + cls);
+};
+// M78.42: live HTMLCollection——named property 语义（WebIDL legacy platform
+// object）。Proxy set 返回 false 精确复刻赋值语义：sloppy 静默 / strict
+// TypeError；named 未命中时创建 own 属性（后续 get 优先 own）。
+window.__makeLiveCollection = function(queryFn) {
+    var target = { __own: {} };
+    function lookup(k) {
+        var arr = queryFn();
+        if (typeof k === 'string' && /^\d+$/.test(k)) {
+            var i = +k;
+            return (i >= 0 && i < arr.length) ? { el: arr[i] } : null;
+        }
+        for (var j = 0; j < arr.length; j++) {
+            var el = arr[j];
+            var id = (typeof el.getAttribute === 'function') ? el.getAttribute('id') : null;
+            var nm = (typeof el.getAttribute === 'function') ? el.getAttribute('name') : null;
+            if (id === k || nm === k) return { el: el };
+        }
+        return null;
+    }
+    return new Proxy(target, {
+        get: function(t, k) {
+            if (k === 'length') return queryFn().length;
+            if (k === 'item') return function(i) { var a = queryFn(); return (i >= 0 && i < a.length) ? a[i] : null; };
+            if (k === 'namedItem') return function(n) { var r = lookup(n); return r ? r.el : null; };
+            if (k === Symbol.toStringTag) return 'HTMLCollection';
+            if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t.__own, k)) return t.__own[k];
+            var r = lookup(k);
+            return r ? r.el : undefined;
+        },
+        set: function(t, k, v) {
+            if (typeof k === 'string' && lookup(k)) return false;
+            t.__own[k] = v;
+            return true;
+        },
+        has: function(t, k) {
+            if (Object.prototype.hasOwnProperty.call(t.__own, k)) return true;
+            return !!lookup(k);
+        }
+    });
+};
+document.getElementsByTagName = function(tag) {
+    return window.__makeLiveCollection(function() { return document.querySelectorAll(tag); });
+};
+document.getElementsByClassName = function(cls) {
+    return window.__makeLiveCollection(function() { return document.querySelectorAll('.' + cls); });
 };
 Object.defineProperty(document, 'body', {
     get: function() { return __makeElement(__getBody(0)); },
