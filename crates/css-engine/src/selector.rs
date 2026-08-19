@@ -70,7 +70,7 @@ pub enum AttrSelector {
 }
 
 /// M78: 支持的伪类子集（CSS Selectors L4 里爬虫/测试最高频的三个）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Pseudo {
     /// `:lang(en, fr-*)` — BCP47 语言范围列表（RFC4647 basic filtering）。
     Lang(Vec<String>),
