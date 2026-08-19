@@ -3398,10 +3398,12 @@ Element.prototype.dispatchEvent = function(ev) {
             var cbs = cur.__listeners[ev.type];
             for (var i = 0; i < cbs.length; i++) {
                 try { cbs[i].call(cur, ev); } catch(e) {}
+                // M78.24: stopImmediatePropagation——中断同节点后续监听器。
+                if (ev.__immediate) return true;
             }
         }
         // bubbles=false 或已 stopPropagation 则停止冒泡
-        if (!ev.bubbles || ev.__stopPropagation) break;
+        if (!ev.bubbles || ev.__stopPropagation || ev.cancelBubble) break;
         // 沿 parent 链向上（用 __getParent bridge）
         try {
             var pid = __getParent(cur.__nodeId);
