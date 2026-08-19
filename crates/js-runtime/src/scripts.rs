@@ -3913,6 +3913,29 @@ if (document.contentType === undefined) {
 }
 // document.images / document.scripts（dom-tree-accessors）
 document.images = document.querySelectorAll('img');
+// M78.28: HTMLCollection 近似——querySelectorAll/getElementsByTagName 的
+// 返回值补 namedItem/item（WPT HTMLCollection 断言）。数组原型扩展法
+// （不改每次返回的数组，挂在 Array.prototype 由 name/id 反射）。
+window.HTMLCollection = function() {};
+Object.defineProperty(window.HTMLCollection.prototype, Symbol.toStringTag, { value: 'HTMLCollection' });
+Array.prototype.namedItem = function(name) {
+    if (name === undefined || name === null) return null;
+    name = String(name);
+    for (var i = 0; i < this.length; i++) {
+        var el = this[i];
+        if (el && el.getAttribute) {
+            if (el.getAttribute('id') === name || el.getAttribute('name') === name) return el;
+        }
+    }
+    return null;
+};
+// M78.28: window 遗留可写属性（HTMLCollection 测试的 loose/strict 赋值目标）。
+if (window.status === undefined) { window.status = ''; }
+if (window.name === undefined) { window.name = ''; }
+window.closed = false;
+window.length = 0;
+window.frames = window.frames || [];
+window.opener = null;
 document.scripts = document.querySelectorAll('script');
 // document.createTreeWalker：DFS 顺序的基本实现（NodeIterator 同理最小桩）。
 function TreeWalker(root, whatToShow) {
