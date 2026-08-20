@@ -3081,6 +3081,10 @@ Element.prototype.insertBefore = function(child, ref) {
 Element.prototype.removeChild = function(child) {
     // M78.15: 规范语义——null/非节点 TypeError；非本节点子节点 NotFoundError。
     if (child === null || child === undefined || typeof child.__nodeId !== 'number') {
+        // M78.53: 文档对象（有 createElement 的伪 Node）按规范抛 NotFound。
+        if (child && typeof child.createElement === 'function') {
+            throw new DOMException('The object can not be found here.', 'NotFoundError');
+        }
         throw new TypeError('Argument 1 is not an object.');
     }
     var cs = (__children(this.__nodeId) || '').split(',');
@@ -3479,7 +3483,11 @@ Object.defineProperty(Element.prototype, 'nodeType', {
 // 如果返回 undefined，React 的 `!== null` 检查会误判（undefined !== null = true），
 // 然后试图在 undefined 上设 _reactListening 属性，抛 "cannot read property of undefined"。
 Object.defineProperty(Element.prototype, 'ownerDocument', {
-    get: function() { return typeof document !== 'undefined' ? document : null; },
+    get: function() {
+        // M78.53: __ownerDoc 优先（createHTMLDocument 子文档的元素）。
+        if (this.__ownerDoc) return this.__ownerDoc;
+        return typeof document !== 'undefined' ? document : null;
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'style', {
@@ -4414,7 +4422,12 @@ document.createNodeIterator = function(root, whatToShow) { return new TreeWalker
 // document.createHTMLDocument：独立 document 对象（元素挂到根，不进 body）。
 document.createHTMLDocument = function(title) {
     var d = Object.create(Object.getPrototypeOf(document));
-    d.createElement = function(tag) { return __makeElement(__createEl(String(tag || 'div'))); };
+    d.createElement = function(tag) {
+        // M78.53: 子文档元素挂 __ownerDoc（ownerDocument 断言）。
+        var el = __makeElement(__createEl(String(tag || 'div')));
+        try { el.__ownerDoc = d; } catch (e) {}
+        return el;
+    };
     d.createTextNode = function(t) { var n = document.createTextNode(t); return n; };
     d.createDocumentFragment = function() { return document.createDocumentFragment(); };
     d.createEvent = function(t) { return new Event(t === 'UIEvents' ? 'UIEvent' : (t || '')); };
