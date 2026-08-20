@@ -385,6 +385,18 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   html_dom 178→**210（0.437）**。
 - 总分 **0.555**；REALITY PASS；757 passed。
 
+**M78.50-51 —— 批 5 中场（0.555→0.557）+ 性能回归实战**：
+
+- 50：innerText SVG/MathML 空返回（getter+setter）+ 空白保留（仅去首尾
+  换行，空格/制表符保留）。html_dom 210→214。
+- **51：性能回归实战**——REALITY 哨兵抓住 react.dev 回归（内容零损失但
+  脚本阶段 3.7s→22s）。根因：M78.48 的 nodeType/nodeName/nodeValue getter
+  在 React 渲染热路径每次 access 都走桥。实例缓存（节点类型不可变）修至
+  REALITY PASS，**残余 10-18s 差距待查**（批 6 首项——批 4 的其余改动
+  之一仍在热路径）。这正是双哨兵机制的价值：WPT 分数涨的同时抓住了
+  SPA 主线的性能暗伤。
+- 总分 **0.557**。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
