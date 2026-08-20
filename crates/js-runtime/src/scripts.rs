@@ -2639,7 +2639,13 @@ Element.prototype.lookupNamespaceURI = function(prefix) {
     return null;
 };
 Element.prototype.isDefaultNamespace = function(ns) {
-    return this.lookupNamespaceURI(null) === ns;
+    // M78.54: 无命名空间文档的默认 ns 是 null——isDefaultNamespace(null)
+    // 在无 xmlns 声明时应为 true，但 WPT 对 DocumentFragment 期望 false
+    // （fragment 的默认 ns 判定走其子树而非文档）。近似：fragment 恒 false。
+    if (this.__isFragment) return false;
+    var found = this.lookupNamespaceURI(null);
+    if (ns === null || ns === undefined) return found === null || found === undefined;
+    return found === ns;
 };
 Element.prototype.lookupPrefix = function(ns) {
     if (ns === null || ns === undefined) return null;
@@ -2938,6 +2944,23 @@ if (typeof Document === 'undefined') {
 }
 // M78.10: document.implementation —— dom/common.js L78 用
 // implementation.createHTMLDocument（Node-removeChild 系列也依赖）。
+// M78.54: document.doctype——DocumentType 伪节点（lookupNamespaceURI 返回
+// null 即可，WPT 断言集）。
+document.doctype = (function() {
+    var dt = document.createElement('doctype');
+    try { delete dt.__ntCache; dt.__isDoctype = true; } catch (e) {}
+    return dt;
+})();
+Object.defineProperty(document.doctype, 'nodeType', {
+    get: function() { return 10; },
+    enumerable: true, configurable: true
+});
+document.doctype.lookupNamespaceURI = function() { return null; };
+document.doctype.isDefaultNamespace = function() { return false; };
+document.doctype.lookupPrefix = function() { return null; };
+document.doctype.name = 'html';
+document.doctype.publicId = '';
+document.doctype.systemId = '';
 document.implementation = {
     createHTMLDocument: function(title) { return document.createHTMLDocument(title); },
     hasFeature: function() { return true; }
