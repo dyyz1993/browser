@@ -4374,7 +4374,19 @@ Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
 Event.prototype.stopImmediatePropagation = function() { this.cancelBubble = true; this.__immediate = true; };
 Event.prototype.initEvent = function(type, bubbles, cancelable) {
     this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable;
+    this.defaultPrevented = false;
 };
+// M78.47: srcElement = target 别名；returnValue=false 等价 preventDefault
+// （dispatch 期间与之后都要反映——WPT Event-defaultPrevented 系列）。
+Object.defineProperty(Event.prototype, 'srcElement', {
+    get: function() { return this.target; },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Event.prototype, 'returnValue', {
+    get: function() { return !this.defaultPrevented; },
+    set: function(v) { if (v === false && this.cancelable) this.defaultPrevented = true; },
+    enumerable: true, configurable: true
+});
 function CustomEvent(type, opts) {
     Event.call(this, type, opts);
     this.detail = (opts && opts.detail !== undefined) ? opts.detail : null;
