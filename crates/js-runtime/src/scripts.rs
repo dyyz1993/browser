@@ -3262,11 +3262,9 @@ function __innerTextWalk(nodeId, out) {
         var id = parseInt(ids[i], 10);
         var tag = (__getTag(id) || '').toUpperCase();
         if (!tag || tag === '__TEXT__') {
-            // 真 Text 节点用 __textData；shim 伪文本元素（__createEl('__text__')
-            // + __setText，文本在其子 Text 节点）fallback 到 __getText 聚合。
-            var t = (typeof __textData === 'function') ? __textData(id) : '';
-            if (!t) t = __getText(id);
-            out.push(t);
+            // M78.58-修三: 统一 __getText 聚合（__setText 清子建子：写过 td 空
+            // gt 真；原生 Text 两值相等——聚合两形态皆正确）。
+            out.push(__getText(id));
         } else if (tag === 'BR') {
             out.push('\n');
         } else if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') {
@@ -3304,15 +3302,19 @@ Object.defineProperty(Element.prototype, 'innerText', {
         // M78.56: 无换行时建单个真 Text 节点——不经 HTML 解析（NUL 字符、
         // 首空白、空串均按 data 原样保留；WPT assertNewSingleTextNode 链）。
         if (text.indexOf(String.fromCharCode(10)) < 0 && text.indexOf(String.fromCharCode(13)) < 0) {
-            var tid = __createEl('__text__');
-            __setText(tid, text);
-            __children(this.__nodeId); // no-op 保持桥热
-            // 清空现有子节点后插入（__removeChild 逐个）
-            var kids = (__children(this.__nodeId) || '').split(',').filter(function(x) { return x; });
-            for (var ki = 0; ki < kids.length; ki++) {
-                __removeChild(this.__nodeId, parseInt(kids[ki], 10));
+            // M78.58: 清空现有子节点（__removeChild 逐个，每轮重读防错位）。
+            while (true) {
+                var kids0 = (__children(this.__nodeId) || '').split(',').filter(function(x) { return x; });
+                if (!kids0.length) break;
+                __removeChild(this.__nodeId, parseInt(kids0[0], 10));
             }
-            __appendChild(this.__nodeId, tid);
+            // M78.58: 空串/null 不留空 Text 节点（WPT: Should not have empty
+            // text nodes）；非空直建真 Text。
+            if (text.length > 0) {
+                var tid = __createEl('__text__');
+                __setText(tid, text);
+                __appendChild(this.__nodeId, tid);
+            }
             return;
         }
         // M78.39: 规范换行集——LF / CRLF / CR 都转为 <br>（HTML 序列化标准）。
@@ -3962,26 +3964,26 @@ Element.prototype.after = function() {
 };
 Element.prototype.normalize = function() { __normalizeParent(this.__nodeId); };
 window.__normalizeParent = function(pid) {
-    // 相邻文本合并：连续 Text 子节点拼接进第一个，移除后续。
-    var kids = (__children(pid) || '').split(',').filter(function(x) { return x; });
+    // M78.58-修一: 每轮重读 children（__removeChild 改数组，快照会错位）；
+    // 合并读值统一 __getText 聚合（__setText 清子建子：写过 td 空 gt 真）。
     var i = 0;
-    while (i < kids.length) {
+    while (true) {
+        var kids = (__children(pid) || '').split(',').filter(function(x) { return x; });
+        if (i >= kids.length) break;
         var id = parseInt(kids[i], 10);
         var tag = __getTag(id);
         if (!tag || tag === '__text__') {
-            var j = i + 1;
-            while (j < kids.length) {
-                var id2 = parseInt(kids[j], 10);
+            if (i + 1 < kids.length) {
+                var id2 = parseInt(kids[i + 1], 10);
                 var tag2 = __getTag(id2);
                 if (!tag2 || tag2 === '__text__') {
-                    var merged = (__textData(id) || '') + (__textData(id2) || '');
-                    __setText(id, merged);
+                    __setText(id, __getText(id) + __getText(id2));
                     __removeChild(pid, id2);
-                    j += 1;
-                } else break;
+                    continue;
+                }
             }
-            i = j;
-        } else i += 1;
+        }
+        i += 1;
     }
 };
 Object.defineProperty(Element.prototype, 'outerHTML', {

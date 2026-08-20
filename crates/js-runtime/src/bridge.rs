@@ -2631,12 +2631,16 @@ pub mod qjs_bridge {
     }
 
     /// removeChild(parent, child)。
+    /// M78.58-修二: 摘除后 detach（parent=None）——旧 move-to-root 在游离
+    /// 语义（M78.45）后让已删节点被 querySelector 复活。
     pub fn remove_child(parent: f64, child: f64) {
         with_tree(|t| {
-            // 简单实现：从 parent 的 children 中移除 child
-            // Tree 没有直接 remove，用 move 到 root 的方式
-            let root = t.root();
-            move_subtree(t, root, child as usize);
+            let (pid, cid) = (parent as usize, child as usize);
+            if pid >= t.len() || cid >= t.len() {
+                return;
+            }
+            t.get_mut(pid).children.retain(|&c| c != cid);
+            t.get_mut(cid).parent = None;
         });
     }
 
