@@ -3301,6 +3301,20 @@ Object.defineProperty(Element.prototype, 'innerText', {
         function esc(s) {
             return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
+        // M78.56: 无换行时建单个真 Text 节点——不经 HTML 解析（NUL 字符、
+        // 首空白、空串均按 data 原样保留；WPT assertNewSingleTextNode 链）。
+        if (text.indexOf(String.fromCharCode(10)) < 0 && text.indexOf(String.fromCharCode(13)) < 0) {
+            var tid = __createEl('__text__');
+            __setText(tid, text);
+            __children(this.__nodeId); // no-op 保持桥热
+            // 清空现有子节点后插入（__removeChild 逐个）
+            var kids = (__children(this.__nodeId) || '').split(',').filter(function(x) { return x; });
+            for (var ki = 0; ki < kids.length; ki++) {
+                __removeChild(this.__nodeId, parseInt(kids[ki], 10));
+            }
+            __appendChild(this.__nodeId, tid);
+            return;
+        }
         // M78.39: 规范换行集——LF / CRLF / CR 都转为 <br>（HTML 序列化标准）。
         var lines = text.split(/\r\n|\r|\n/);
         var html = '';
