@@ -417,6 +417,13 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - Node-removeChild 22 行中 iframe 分支（1/3）属已定性跨 realm；
   主/createHTMLDocument 分支已解锁。html_dom **226（0.470）**。
 
+**M78.54 —— 批 8（0.559→0.562，html_dom 226→232）**：
+
+- document.doctype 伪节点（nodeType=10/name/publicId/systemId +
+  lookup 三件套返 null）。
+- isDefaultNamespace 的 fragment 近似（无命名空间子树恒 false）。
+- html_dom **232（0.482）**；总分 **0.562**。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
