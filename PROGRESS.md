@@ -346,6 +346,21 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 批 3 首项：domstringmap-supported-property-names 页面挂起（M78.43 后
   新挂，待查）；"read property 'name' of undefined" 新型 harness 过敏。
 
+**M78.44-45 —— 反射重写批 3 前半（0.518→0.521）**：
+
+- domstringmap"挂起"收案：**路径乌龙**（文件在 collections/ 而非 nodes/，
+  页面从未被清单选中；实测正确路径已 PASS）。
+- **44：DOMTokenList 语义双修**——__tokens 去重保序（class="  a a b " 的
+  token 集合是 {a,b}）；[Symbol.iterator]/keys/values/entries 返回带
+  Symbol.iterator 自引用的真迭代器（旧普通对象 not iterable）。
+- **45：createElement 游离语义（DOM 核心对齐）**——M66 起 createElement
+  自动挂 body（框架兼容捷径），违反规范（新元素不在文档中，removeChild
+  应抛 NotFoundError）。新 createDetachedEl 桥 + querySelector(All) 改
+  **全 arena 扫描**（游离元素可达）。回归测试全绿 + 真实站点 4 站零回归。
+- 接口对象 delete/configurable 试验后**撤销**（QuickJS eval 独立作用域必须
+  var 暴露裸变量，var 不可删——重构暴露方式代价大，记录后停）。
+- html_dom 138→**144**；总分 **0.521**；REALITY: PASS。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
