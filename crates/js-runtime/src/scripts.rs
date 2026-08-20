@@ -3828,6 +3828,97 @@ Object.defineProperty(Element.prototype, 'dataset', {
     enumerable: true, configurable: true
 });
 // outerHTML setter（docsify/框架用 outerHTML 替换节点）
+// M78.49: outerText（setter = innerText + 替换自身）/ replaceWith /
+// before / after / normalize（相邻文本合并——WPT outerText 系列断言）。
+Object.defineProperty(Element.prototype, 'outerText', {
+    get: function() { return this.innerText; },
+    set: function(v) {
+        var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
+        if (typeof pid !== 'number' || pid < 0) { this.innerText = v; return; }
+        var holder = document.createElement('span');
+        holder.innerText = v;
+        // 把 holder 的子节点移到父节点替换自身
+        var kids = (__children(holder.__nodeId) || '').split(',').filter(function(x) { return x; });
+        var ref = this.__nodeId;
+        for (var i = 0; i < kids.length; i++) {
+            __insertBefore(pid, parseInt(kids[i], 10), ref);
+        }
+        __removeChild(pid, this.__nodeId);
+        __normalizeParent(pid);
+    },
+    enumerable: true, configurable: true
+});
+Element.prototype.replaceWith = function() {
+    var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
+    if (typeof pid !== 'number' || pid < 0) return;
+    var ref = this.__nodeId;
+    for (var i = 0; i < arguments.length; i++) {
+        var n = arguments[i];
+        if (typeof n === 'string') {
+            var t = document.createTextNode(n);
+            __insertBefore(pid, t.__nodeId, ref);
+        } else if (n && typeof n.__nodeId === 'number') {
+            __insertBefore(pid, n.__nodeId, ref);
+        }
+    }
+    __removeChild(pid, this.__nodeId);
+    __normalizeParent(pid);
+};
+Element.prototype.before = function() {
+    var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
+    if (typeof pid !== 'number' || pid < 0) return;
+    for (var i = 0; i < arguments.length; i++) {
+        var n = arguments[i];
+        if (typeof n === 'string') {
+            var t = document.createTextNode(n);
+            __insertBefore(pid, t.__nodeId, this.__nodeId);
+        } else if (n && typeof n.__nodeId === 'number') {
+            __insertBefore(pid, n.__nodeId, this.__nodeId);
+        }
+    }
+};
+Element.prototype.after = function() {
+    var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
+    if (typeof pid !== 'number' || pid < 0) return;
+    var sib = (__children(pid) || '').split(',');
+    var ref = -1;
+    for (var i = 0; i < sib.length; i++) {
+        if (parseInt(sib[i], 10) === this.__nodeId) { ref = (i + 1 < sib.length) ? parseInt(sib[i + 1], 10) : -1; break; }
+    }
+    for (var j = 0; j < arguments.length; j++) {
+        var n2 = arguments[j];
+        if (typeof n2 === 'string') {
+            var t2 = document.createTextNode(n2);
+            __insertBefore(pid, t2.__nodeId, ref);
+        } else if (n2 && typeof n2.__nodeId === 'number') {
+            __insertBefore(pid, n2.__nodeId, ref);
+        }
+    }
+};
+Element.prototype.normalize = function() { __normalizeParent(this.__nodeId); };
+window.__normalizeParent = function(pid) {
+    // 相邻文本合并：连续 Text 子节点拼接进第一个，移除后续。
+    var kids = (__children(pid) || '').split(',').filter(function(x) { return x; });
+    var i = 0;
+    while (i < kids.length) {
+        var id = parseInt(kids[i], 10);
+        var tag = __getTag(id);
+        if (!tag || tag === '__text__') {
+            var j = i + 1;
+            while (j < kids.length) {
+                var id2 = parseInt(kids[j], 10);
+                var tag2 = __getTag(id2);
+                if (!tag2 || tag2 === '__text__') {
+                    var merged = (__textData(id) || '') + (__textData(id2) || '');
+                    __setText(id, merged);
+                    __removeChild(pid, id2);
+                    j += 1;
+                } else break;
+            }
+            i = j;
+        } else i += 1;
+    }
+};
 Object.defineProperty(Element.prototype, 'outerHTML', {
     get: function() { return this.innerHTML || ''; },
     set: function(v) {
