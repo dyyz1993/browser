@@ -372,6 +372,19 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 批 3 完整收官：html_dom 138→160（0.288→**0.333**）；总分 **0.529**；
   757 passed。
 
+**M78.48-49 —— 反射重写批 4（0.529→0.555，大爆发）**：
+
+- **48：nodeType/nodeName/nodeValue 文本节点语义**——真 Text 节点（getTag
+  空）nodeType=3/nodeName=#text/nodeValue=__textData（**__getText 聚合对
+  文本节点自身返回空**——与 M78.38 innerHTML 同款语义坑第三次出现，已在
+  三处统一 fallback 模式）。html_dom 160→178。
+- **49：outerText/replaceWith/before/after/normalize 套件**——outerText
+  setter（innerText 语义+替换自身+归一化）；replaceWith/before/after 多参
+  （字符串转 text 节点）；normalize 相邻文本合并（__normalizeParent，
+  outerText 系列"merging with previous/following text node"断言）。
+  html_dom 178→**210（0.437）**。
+- 总分 **0.555**；REALITY PASS；757 passed。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
