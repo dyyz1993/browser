@@ -361,6 +361,17 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   var 暴露裸变量，var 不可删——重构暴露方式代价大，记录后停）。
 - html_dom 138→**144**；总分 **0.521**；REALITY: PASS。
 
+**M78.46-47 —— 反射重写批 3 后半（0.521→0.529）**：
+
+- **46：lookupNamespaceURI / isDefaultNamespace / lookupPrefix**——沿祖先链
+  xmlns 属性查找（xmlns=默认，xmlns:prefix=前缀绑定）。html_dom 144→158。
+- **47：Event srcElement / returnValue 语义**——srcElement=target 别名；
+  returnValue=false 等价 preventDefault（getter 取反 defaultPrevented，
+  setter 仅 cancelable 时生效）；initEvent 重置 defaultPrevented。
+  html_dom 158→160。
+- 批 3 完整收官：html_dom 138→160（0.288→**0.333**）；总分 **0.529**；
+  757 passed。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
