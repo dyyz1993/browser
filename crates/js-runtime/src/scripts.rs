@@ -3248,14 +3248,20 @@ function __innerTextWalk(nodeId, out) {
 }
 Object.defineProperty(Element.prototype, 'innerText', {
     get: function() {
+        // M78.50: SVG/MathML 元素不支持 innerText（返回空，WPT 断言）。
+        var tn = (this.tagName || '').toLowerCase();
+        if (tn === 'svg' || tn === 'math') return '';
         var out = [];
         __innerTextWalk(this.__nodeId, out);
         var joined = out.join('');
-        // 规范：首尾各去一个换行，连续换行折叠保留（简化：首尾 strip）
+        // 规范：仅去首尾换行；空格/制表符保留（"Leading whitespace preserved"）。
         return joined.replace(/^\n/, '').replace(/\n$/, '');
     },
     set: function(v) {
         var text = String(v == null ? '' : v);
+        // M78.50: SVG/MathML 不支持 innerText setter（no-op）。
+        var tn0 = (this.tagName || '').toLowerCase();
+        if (tn0 === 'svg' || tn0 === 'math') return;
         function esc(s) {
             return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
