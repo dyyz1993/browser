@@ -424,6 +424,18 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - isDefaultNamespace 的 fragment 近似（无命名空间子树恒 false）。
 - html_dom **232（0.482）**；总分 **0.562**。
 
+**M78.55 —— 批 9 中断记录（回滚，零净损失）**：
+
+- 尝试：innerText setter 的"单 Text 节点"路径（assertNewSingleTextNode
+  断言链：nodeType/nextSibling/data）。
+- **事故一**：注释中书写字面 NUL 转义序列在 raw string 里被 python 写成
+  真实 NUL 字节 → Rust &str 拒绝（NulError）→ **shim 全体加载失败，
+  html_dom 0/90 瞬时全灭**。分段定位器 5 秒锁定。
+- **事故二**：手工回滚时误删 1 行（M78.50 注释边界）造成 globals 段失败。
+- 两事故均通过 `git checkout HEAD --` 干净恢复，**基线 232 复测确认无损**。
+- **教训（重要）**：①raw string 内注释禁写字面转义（NUL/\0）——一律用
+  文字描述；②回滚块用行区间时必须 diff 验证；③大改前先跑单类基线留档。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
