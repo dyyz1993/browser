@@ -2725,10 +2725,12 @@ window.Comment = Comment;
 // M78.18: nodeValue/data 反射（textNode 的读写）。
 Object.defineProperty(Element.prototype, 'nodeValue', {
     get: function() {
-        var tag = __getTag(this.__nodeId);
-        if (!tag || tag === '__text__') {
-            // M78.48: 真 Text 节点优先 __textData（自身 data）；__getText 聚合
-            // 子树对文本节点返回空（同 M78.38 innerHTML 教训）。
+        // M78.51: 缓存判定结果（tag 是否文本），值仍实时（文本可变）。
+        if (this.__isTextNd === undefined) {
+            var tag0 = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : '';
+            this.__isTextNd = (!tag0 || tag0 === '__text__') ? 1 : 0;
+        }
+        if (this.__isTextNd) {
             var td = (typeof __textData === 'function') ? __textData(this.__nodeId) : '';
             return td || __getText(this.__nodeId);
         }
@@ -2758,9 +2760,11 @@ try {
 // M78.15: nodeName/nodeType 按节点类型映射（#text/#comment/#document）。
 Object.defineProperty(Element.prototype, 'nodeName', {
     get: function() {
+        if (this.__nnCache !== undefined) return this.__nnCache;
         var tag = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : '';
-        if (!tag || tag === '__text__') return '#text';
-        return this.tagName;
+        var nn = (!tag || tag === '__text__') ? '#text' : this.tagName;
+        this.__nnCache = nn;
+        return nn;
     },
     enumerable: true, configurable: true
 });
@@ -3450,14 +3454,19 @@ Object.defineProperty(Element.prototype, 'parentElement', {
 });
 Object.defineProperty(Element.prototype, 'nodeType', {
     get: function() {
-        // M78.48: 真 Text 节点（getTag 空）与 shim 伪文本（__text__）都是 3；
-        // Document/Doctype 由树结构决定，包装器层见 9/10 特判。
-        if (this.__isFragment) return 11;
-        var tag = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : '';
-        if (!tag || tag === '__text__') return 3;
-        if (tag === '__comment__') return 8;
-        if (tag === 'html') return 1;
-        return 1;
+        // M78.48: 真 Text 节点（getTag 空）与 shim 伪文本（__text__）都是 3。
+        // M78.51: 实例缓存——React 渲染热路径每次 access 都走桥让 react.dev
+        // 的脚本阶段 3.7s→22s（6 倍）。节点类型不可变，缓存安全。
+        if (this.__ntCache !== undefined) return this.__ntCache;
+        var nt = 1;
+        if (this.__isFragment) nt = 11;
+        else {
+            var tag = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : 'div';
+            if (!tag || tag === '__text__') nt = 3;
+            else if (tag === '__comment__') nt = 8;
+        }
+        this.__ntCache = nt;
+        return nt;
     },
     enumerable: true, configurable: true
 });
