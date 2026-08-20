@@ -2726,7 +2726,12 @@ window.Comment = Comment;
 Object.defineProperty(Element.prototype, 'nodeValue', {
     get: function() {
         var tag = __getTag(this.__nodeId);
-        if (!tag || tag === '__text__') return __getText(this.__nodeId);
+        if (!tag || tag === '__text__') {
+            // M78.48: 真 Text 节点优先 __textData（自身 data）；__getText 聚合
+            // 子树对文本节点返回空（同 M78.38 innerHTML 教训）。
+            var td = (typeof __textData === 'function') ? __textData(this.__nodeId) : '';
+            return td || __getText(this.__nodeId);
+        }
         return null;
     },
     set: function(v) {
@@ -2752,7 +2757,11 @@ try {
 } catch (e) {}
 // M78.15: nodeName/nodeType 按节点类型映射（#text/#comment/#document）。
 Object.defineProperty(Element.prototype, 'nodeName', {
-    get: function() { return this.tagName; },
+    get: function() {
+        var tag = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : '';
+        if (!tag || tag === '__text__') return '#text';
+        return this.tagName;
+    },
     enumerable: true, configurable: true
 });
 // M78.15: 元素级导航（firstElementChild/lastElementChild/childElementCount）。
@@ -3434,7 +3443,16 @@ Object.defineProperty(Element.prototype, 'parentElement', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'nodeType', {
-    get: function() { return this.__isFragment ? 11 : 1; },
+    get: function() {
+        // M78.48: 真 Text 节点（getTag 空）与 shim 伪文本（__text__）都是 3；
+        // Document/Doctype 由树结构决定，包装器层见 9/10 特判。
+        if (this.__isFragment) return 11;
+        var tag = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : '';
+        if (!tag || tag === '__text__') return 3;
+        if (tag === '__comment__') return 8;
+        if (tag === 'html') return 1;
+        return 1;
+    },
     enumerable: true, configurable: true
 });
 // M77: ownerDocument——React 事件系统检查 rootContainerElement.ownerDocument
