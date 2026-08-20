@@ -3247,7 +3247,13 @@ Object.defineProperty(Element.prototype, 'className', {
 function DOMTokenList(nodeId) { this.__nodeId = nodeId; }
 Object.defineProperty(DOMTokenList.prototype, Symbol.toStringTag, { value: 'DOMTokenList' });
 DOMTokenList.prototype.__tokens = function() {
-    return (__getAttr(this.__nodeId, 'class') || '').split(/\s+/).filter(function(s) { return s; });
+    // M78.44: 去重 + 保序（DOMTokenList 语义：token 集合无重复）。
+    var raw = (__getAttr(this.__nodeId, 'class') || '').split(/\s+/).filter(function(s) { return s; });
+    var seen = {}, out = [];
+    for (var i = 0; i < raw.length; i++) {
+        if (!seen[raw[i]]) { seen[raw[i]] = 1; out.push(raw[i]); }
+    }
+    return out;
 };
 DOMTokenList.prototype.__write = function(arr) { __setAttr(this.__nodeId, 'class', arr.join(' ')); };
 DOMTokenList.prototype.add = function() {
@@ -3290,23 +3296,36 @@ DOMTokenList.prototype.toString = function() { return __getAttr(this.__nodeId, '
 DOMTokenList.prototype[Symbol.iterator] = function() {
     var tokens = this.__tokens();
     var idx = 0;
-    return { next: function() { return (idx < tokens.length) ? { value: tokens[idx++], done: false } : { value: undefined, done: true }; } };
+    var iter = { next: function() { return (idx < tokens.length) ? { value: tokens[idx++], done: false } : { value: undefined, done: true }; } };
+    iter[Symbol.iterator] = function() { return iter; };
+    return iter;
 };
 DOMTokenList.prototype.forEach = function(fn, thisArg) {
     var tokens = this.__tokens();
     for (var i = 0; i < tokens.length; i++) fn.call(thisArg || undefined, tokens[i], String(i), this);
 };
+// M78.44: entries/keys/values 返回真 iterator（带 Symbol.iterator 自引用，
+// 可被 for-of/展开/Array.from 消费——旧普通对象报 not iterable）。
+DOMTokenList.prototype.__makeIter = function(fn) {
+    var iter = { next: fn };
+    iter[Symbol.iterator] = function() { return iter; };
+    return iter;
+};
 DOMTokenList.prototype.entries = function() {
-    var tokens = this.__tokens();
-    var idx = 0;
-    return { next: function() { return (idx < tokens.length) ? { value: [String(idx), tokens[idx++]], done: false } : { value: undefined, done: true }; } };
+    var tokens = this.__tokens(); var idx = 0;
+    return this.__makeIter(function() {
+        return (idx < tokens.length) ? { value: [String(idx), tokens[idx++]], done: false } : { value: undefined, done: true };
+    });
 };
 DOMTokenList.prototype.keys = function() {
-    var tokens = this.__tokens();
-    var idx = 0;
-    return { next: function() { return (idx < tokens.length) ? { value: String(idx++), done: false } : { value: undefined, done: true }; } };
+    var tokens = this.__tokens(); var idx = 0;
+    return this.__makeIter(function() {
+        return (idx < tokens.length) ? { value: String(idx++), done: false } : { value: undefined, done: true };
+    });
 };
-DOMTokenList.prototype.values = DOMTokenList.prototype[Symbol.iterator];
+DOMTokenList.prototype.values = function() {
+    return this[Symbol.iterator]();
+};
 Object.defineProperty(DOMTokenList.prototype, 'length', { get: function() { return this.__tokens().length; }, enumerable: true, configurable: true });
 Object.defineProperty(DOMTokenList.prototype, 'value', {
     get: function() { return __getAttr(this.__nodeId, 'class') || ''; },
