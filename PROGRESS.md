@@ -408,6 +408,15 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   html_dom 214→**221（0.459）**。
 - 三哨兵全绿。
 
+**M78.53 —— 批 7（0.557→0.559，html_dom 221→226）**：
+
+- ownerDocument 子文档标注（createHTMLDocument 的元素挂 __ownerDoc，
+  ownerDocument getter 实例级优先）。
+- removeChild 对文档对象（有 createElement 的伪 Node）抛 NotFoundError
+  （规范：removeChild(doc) 是 NotFound 而非 TypeError）。
+- Node-removeChild 22 行中 iframe 分支（1/3）属已定性跨 realm；
+  主/createHTMLDocument 分支已解锁。html_dom **226（0.470）**。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
