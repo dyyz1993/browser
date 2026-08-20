@@ -2614,6 +2614,52 @@ window.Node = window.Node || function Node() {};
     window.Node.prototype.nodeType = 0;
 })();
 Element.prototype.webkitMatchesSelector = Element.prototype.matches;
+// M78.46: lookupNamespaceURI / isDefaultNamespace——沿祖先链查 xmlns 属性
+//（xmlns=默认命名空间，xmlns:prefix=前缀绑定；无绑定返回 null）。
+Element.prototype.lookupNamespaceURI = function(prefix) {
+    var cur = this;
+    while (cur && typeof cur.__nodeId === 'number') {
+        var attrs = (typeof __attrsOf === 'function') ? __attrsOf(cur.__nodeId) : '';
+        var lines = (attrs || '').split(String.fromCharCode(10));
+        if (prefix === null || prefix === undefined || prefix === '') {
+            for (var i = 0; i < lines.length; i++) {
+                var eq = lines[i].indexOf('=');
+                if (eq > 0 && lines[i].slice(0, eq) === 'xmlns') return lines[i].slice(eq + 1);
+            }
+        } else {
+            for (var j = 0; j < lines.length; j++) {
+                var eq2 = lines[j].indexOf('=');
+                if (eq2 > 0 && lines[j].slice(0, eq2) === 'xmlns:' + prefix) return lines[j].slice(eq2 + 1);
+            }
+        }
+        var pid = (typeof __getParent === 'function') ? __getParent(cur.__nodeId) : -1;
+        if (typeof pid !== 'number' || pid < 0) break;
+        cur = __makeElement(pid);
+    }
+    return null;
+};
+Element.prototype.isDefaultNamespace = function(ns) {
+    return this.lookupNamespaceURI(null) === ns;
+};
+Element.prototype.lookupPrefix = function(ns) {
+    if (ns === null || ns === undefined) return null;
+    var cur = this;
+    while (cur && typeof cur.__nodeId === 'number') {
+        var attrs = (typeof __attrsOf === 'function') ? __attrsOf(cur.__nodeId) : '';
+        var lines = (attrs || '').split(String.fromCharCode(10));
+        for (var i = 0; i < lines.length; i++) {
+            var eq = lines[i].indexOf('=');
+            if (eq > 0 && lines[i].slice(eq + 1) === ns) {
+                var name = lines[i].slice(0, eq);
+                return name === 'xmlns' ? null : name.slice(6);
+            }
+        }
+        var pid = (typeof __getParent === 'function') ? __getParent(cur.__nodeId) : -1;
+        if (typeof pid !== 'number' || pid < 0) break;
+        cur = __makeElement(pid);
+    }
+    return null;
+};
 // M78.35: 节点等同（isSameNode 身份；isEqualNode tag+文本近似）+ composedPath。
 Element.prototype.isSameNode = function(other) { return !!other && other.__nodeId === this.__nodeId; };
 Element.prototype.isEqualNode = function(other) {
