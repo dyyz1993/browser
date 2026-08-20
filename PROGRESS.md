@@ -444,6 +444,19 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 流程纪律生效：开工前基线留档 232、改动后 NUL 二进制检查、定向回归
   （65 全绿）先行。总分 **0.566**；REALITY PASS。
 
+**M78.57 —— 批 11 中断记录（回滚保 238，outerText 工程留档）**：
+
+- 目标：outerText 13 行（复用批 10 直建 Text 路径）。
+- **连环发现三个真 bug**（均已诊断到根因，修复未入库）：
+  ①`__normalizeParent` 用陈旧 children 快照循环（误删后续兄弟）；
+  ②`__removeChild` 桥 move-to-root——游离语义后旧节点幽灵复活（B 消失）；
+  ③**`__setText` 语义是"清子建子"**：写过的节点变成"父包 Text 子"，
+  `__textData` 返空而 `__getText` 正确——innerText walk/normalize/nodeValue
+  三处读值必须统一走 `__getText` 聚合。
+- 三修叠加后总分 218 < 基线 238（修法引入新耦合），**整体回滚到 HEAD
+  保分**；63 特性测试全绿、238 复测确认。
+- 留档：下轮以"__setText 清子建子"的正确心智重做，三修各自单独验证。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
