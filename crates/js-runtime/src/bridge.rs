@@ -1226,13 +1226,14 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
         Err(_) => return None,
     };
     let mut found = None;
-    tree.traverse(tree.root(), |id, _node| {
-        if parsed.matches(tree, id) {
+    // M78.45: 全 arena 扫描——游离元素（parent=None，不在 root 子树）也要
+    // 被 querySelector 命中（createElement 后未插入文档的元素查询是合法操作）。
+    for id in 0..tree.len() {
+        if matches!(tree.data(id), NodeData::Element { .. }) && parsed.matches(tree, id) {
             found = Some(id);
-            return false;
+            break;
         }
-        true
-    });
+    }
     found
 }
 
@@ -1256,12 +1257,11 @@ fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
         Err(_) => return Vec::new(),
     };
     let mut found = Vec::new();
-    tree.traverse(tree.root(), |id, _node| {
-        if parsed.matches(tree, id) {
+    for id in 0..tree.len() {
+        if matches!(tree.data(id), NodeData::Element { .. }) && parsed.matches(tree, id) {
             found.push(id);
         }
-        true // 不提前退出，收集全部
-    });
+    }
     found
 }
 
@@ -2580,6 +2580,26 @@ pub mod qjs_bridge {
     }
 
     /// createEl(tag) -> NodeId —— 创建元素，挂到 body。
+    /// M78.45: createDetachedEl(tag) -> NodeId——游离元素（不挂 body）。
+    /// WPT createElement 语义：新元素不在文档中（removeChild 应抛 NotFound）。
+    /// appendChild/insertBefore 照常可插入。
+    pub fn create_detached_el(tag: String) -> f64 {
+        let tag = if tag.is_empty() {
+            "div".to_string()
+        } else {
+            tag
+        };
+        with_tree(|t| {
+            t.insert(
+                None,
+                NodeData::Element {
+                    tag,
+                    attrs: Vec::new(),
+                },
+            ) as f64
+        })
+    }
+
     pub fn create_el(tag: String) -> f64 {
         let tag = if tag.is_empty() {
             "div".to_string()

@@ -3025,6 +3025,7 @@ Element.prototype.removeChild = function(child) {
         if (parseInt(cs[i], 10) === child.__nodeId) { mine = true; break; }
     }
     if (!mine) {
+        // M78.45: 子节点校验（不在本节点下=NotFoundError；含"无子节点"情形）。
         throw new DOMException('The object can not be found here.', 'NotFoundError');
     }
     __removeChild(this.__nodeId, child.__nodeId);
@@ -3920,7 +3921,11 @@ undefined;
 #[cfg(feature = "quickjs")]
 const QUICKJS_DOCUMENT_SHIM: &str = r#"
 document.createElement = function(tag) {
-    var id = __createEl(String(tag || 'div'));
+    // M78.45: 游离语义——createElement 的元素不在文档中（WPT removeChild
+    /// insertBefore 照常插入）。旧 __createEl 直接挂 body 违反规范。
+    var id = (typeof __createDetachedEl === 'function')
+        ? __createDetachedEl(String(tag || 'div'))
+        : __createEl(String(tag || 'div'));
     return __makeElement(id);
 };
 document.createElementNS = function(ns, tag) { return document.createElement(tag); };

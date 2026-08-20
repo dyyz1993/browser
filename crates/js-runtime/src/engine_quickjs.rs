@@ -304,6 +304,8 @@ impl QuickJsEngine {
 
                 // === DOM bridge ===
                 let _ = g.set("__createEl", Function::new(ctx.clone(), |tag: String| bridge::qjs_bridge::create_el(tag)).unwrap());
+                // M78.45: __createDetachedEl —— createElement 的游离语义（WPT）。
+                let _ = g.set("__createDetachedEl", Function::new(ctx.clone(), |tag: String| bridge::qjs_bridge::create_detached_el(tag)).unwrap());
                 let _ = g.set("__appendChild", Function::new(ctx.clone(), |p: f64, c: f64| bridge::qjs_bridge::append_child(p, c)).unwrap());
                 let _ = g.set("__insertBefore", Function::new(ctx.clone(), |p: f64, c: f64, r: f64| bridge::qjs_bridge::insert_before(p, c, r)).unwrap());
                 let _ = g.set("__removeChild", Function::new(ctx.clone(), |p: f64, c: f64| bridge::qjs_bridge::remove_child(p, c)).unwrap());
