@@ -481,6 +481,15 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   data-m 属性多打点——页内 console 不可见的场景可靠取证。
 - 总分 **0.598**（反射工程 0.509→0.598）；REALITY PASS。
 
+**M78.61 —— 批 14（0.598→0.601，破 0.6，html_dom 305）**：
+
+- **baseURI 补齐**：Element/Attr 的 baseURI=document URL。
+- **Attr 三件套**：createAttribute（此前**完全缺失**，baseURI 页 not-a-function
+  中断）/getAttributeNode/setAttributeNode。
+- **主 document.URL/documentURI** 定义（location 权威源；此前只有
+  createHTMLDocument 子文档有——主文档 undefined）。
+- html_dom 300→**305（0.634）**；总分 **0.601**；REALITY PASS。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
