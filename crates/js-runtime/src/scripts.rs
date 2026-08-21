@@ -3239,6 +3239,16 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
     },
     set: function(v) {
         var s = String(v);
+        if (s.length === 0) {
+            // M78.60: 空串清空全部子节点（__setText 会留一个空 Text 子节点，
+            // 使 firstChild 变成 nt3 空 Text——WPT innerText 系列的 e=null 根因）。
+            while (true) {
+                var kids = (__children(this.__nodeId) || '').split(',').filter(function(x) { return x; });
+                if (!kids.length) break;
+                __removeChild(this.__nodeId, parseInt(kids[0], 10));
+            }
+            return;
+        }
         if (typeof __parseHtml === 'function' && s.length > 0) {
             __parseHtml(this.__nodeId, s);
         } else {
@@ -3292,7 +3302,9 @@ Object.defineProperty(Element.prototype, 'innerText', {
         return joined.replace(/^\n/, '').replace(/\n$/, '');
     },
     set: function(v) {
-        var text = String(v == null ? '' : v);
+        // M78.60: undefined 显式赋值序列化为 "undefined"（String(undefined)）；
+        // null 为空串。
+        var text = (v === undefined) ? 'undefined' : String(v == null ? '' : v);
         // M78.50: SVG/MathML 不支持 innerText setter（no-op）。
         var tn0 = (this.tagName || '').toLowerCase();
         if (tn0 === 'svg' || tn0 === 'math') return;
