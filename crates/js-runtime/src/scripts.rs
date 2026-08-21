@@ -2617,6 +2617,19 @@ Element.prototype.webkitMatchesSelector = Element.prototype.matches;
 // M78.46: lookupNamespaceURI / isDefaultNamespace——沿祖先链查 xmlns 属性
 //（xmlns=默认命名空间，xmlns:prefix=前缀绑定；无绑定返回 null）。
 Element.prototype.lookupNamespaceURI = function(prefix) {
+    // M78.63-fix: xml/xmlns 隐式绑定仅当节点**在文档树内**（fragment/游离
+    // 节点不继承——WPT fragment 系列断言 null）。
+    var inDoc = false;
+    try {
+        var rootProbe = __findTag('html');
+        var cur0 = this.__nodeId;
+        while (typeof cur0 === 'number' && cur0 >= 0) {
+            if (cur0 === rootProbe) { inDoc = true; break; }
+            cur0 = __getParent(cur0);
+        }
+    } catch (e) {}
+    if (inDoc && prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
+    if (inDoc && prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
     var cur = this;
     while (cur && typeof cur.__nodeId === 'number') {
         var attrs = (typeof __attrsOf === 'function') ? __attrsOf(cur.__nodeId) : '';
@@ -2639,10 +2652,9 @@ Element.prototype.lookupNamespaceURI = function(prefix) {
     return null;
 };
 Element.prototype.isDefaultNamespace = function(ns) {
-    // M78.54: 无命名空间文档的默认 ns 是 null——isDefaultNamespace(null)
-    // 在无 xmlns 声明时应为 true，但 WPT 对 DocumentFragment 期望 false
-    // （fragment 的默认 ns 判定走其子树而非文档）。近似：fragment 恒 false。
-    if (this.__isFragment) return false;
+    // M78.63-fix: 统一语义 lookup(null)===ns 即 true——fragment 的
+    // lookup(null) 返回 null，故 isDefault(null) 为 true（修正 M78.54 的
+    // 错误近似恒 false）。
     var found = this.lookupNamespaceURI(null);
     if (ns === null || ns === undefined) return found === null || found === undefined;
     return found === ns;
@@ -4130,6 +4142,28 @@ window.__hasPendingTransitions = function() {
 // （WPT 测试大量使用 `div2_3` 这类裸引用）。shim 安装时 DOM 已解析，
 // 为每个 id 惰性定义 getter。动态新建元素不覆盖（已知子集，记录于 PROGRESS）。
 try {
+    // M78.63: 接口对象批量 non-enumerable（WPT: for..in window 不应枚举到
+    // Event/Node 等——浏览器全局接口默认不可枚举）。
+    try {
+        var __iface = ['Event','CustomEvent','EventTarget','AbortController','AbortSignal',
+            'Node','Document','DOMImplementation','DocumentFragment','ProcessingInstruction',
+            'DocumentType','Element','Attr','CharacterData','Text','Comment','NodeIterator',
+            'TreeWalker','NodeFilter','NodeList','HTMLCollection','DOMTokenList','UIEvent',
+            'MouseEvent','KeyboardEvent','WheelEvent','InputEvent','CompositionEvent',
+            'TextEvent','PointerEvent','FocusEvent','StorageEvent','Range','StaticRange',
+            'MutationObserver','NamedNodeMap','DOMException','Response','Request',
+            'XMLHttpRequest','Window'];
+        for (var ii = 0; ii < __iface.length; ii++) {
+            var nm = __iface[ii];
+            if (globalThis[nm] !== undefined) {
+                try {
+                    var val = globalThis[nm];
+                    Object.defineProperty(globalThis, nm, { value: val, writable: true,
+                        configurable: true, enumerable: false });
+                } catch (e) {}
+            }
+        }
+    } catch (e) {}
     // M78.10: 命名访问——白名单外的 id 才定义。常见全局名（testharness 的
     // test/setup/done、浏览器自身属性）不定义 accessor：<div id=test> 会把
     // self.test = fn 变成 getter 调用（sloppy 静默吞赋值）或吞 var 声明，
