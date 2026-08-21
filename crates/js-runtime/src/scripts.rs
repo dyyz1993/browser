@@ -2667,6 +2667,13 @@ Element.prototype.lookupPrefix = function(ns) {
     return null;
 };
 // M78.35: 节点等同（isSameNode 身份；isEqualNode tag+文本近似）+ composedPath。
+// M78.61: baseURI = 文档 URL（无嵌入 base 变更场景下二者相等）。
+Object.defineProperty(Element.prototype, 'baseURI', {
+    get: function() {
+        try { return document.URL || document.documentURI || ''; } catch (e) { return ''; }
+    },
+    enumerable: true, configurable: true
+});
 Element.prototype.isSameNode = function(other) { return !!other && other.__nodeId === this.__nodeId; };
 Element.prototype.isEqualNode = function(other) {
     if (!other || other.__nodeId === undefined) return false;
@@ -4177,6 +4184,33 @@ document.createComment = function(text) { return document.createElement('div'); 
 document.getElementById = function(id) {
     var nodeId = __getElById(String(id));
     return (nodeId >= 0) ? __makeElement(nodeId) : null;
+};
+// M78.61: 主 document 的 URL/documentURI（location 是权威源）。
+Object.defineProperty(document, 'URL', {
+    get: function() { try { return location.href || ''; } catch (e) { return ''; } },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(document, 'documentURI', {
+    get: function() { try { return location.href || ''; } catch (e) { return ''; } },
+    enumerable: true, configurable: true
+});
+// M78.61: Attr 节点（createAttribute 此前完全缺失——baseURI 页因 not a
+// function 中断）。getAttributeNode 一并补。
+document.createAttribute = function(name) {
+    return { name: String(name), value: '', specified: false, nodeType: 2,
+             ownerDocument: document,
+             get baseURI() { return document.URL || ''; } };
+};
+Element.prototype.getAttributeNode = function(name) {
+    var v = this.getAttribute(name);
+    if (v === null || v === undefined) return null;
+    return { name: String(name), value: v, specified: true, nodeType: 2,
+             ownerDocument: document,
+             get baseURI() { return document.URL || ''; } };
+};
+Element.prototype.setAttributeNode = function(attr) {
+    if (attr && attr.name) this.setAttribute(attr.name, attr.value || '');
+    return attr || null;
 };
 document.querySelector = function(sel) {
     __qsThrowIfInvalid(sel);
