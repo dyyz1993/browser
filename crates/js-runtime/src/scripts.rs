@@ -3279,9 +3279,11 @@ function __innerTextWalk(nodeId, out) {
         var id = parseInt(ids[i], 10);
         var tag = (__getTag(id) || '').toUpperCase();
         if (!tag || tag === '__TEXT__') {
-            // M78.58-修三: 统一 __getText 聚合（__setText 清子建子：写过 td 空
-            // gt 真；原生 Text 两值相等——聚合两形态皆正确）。
-            out.push(__getText(id));
+            // M78.62b: td 优先 + gt fallback——原生 Text 的 __getText 返回空
+            // （collect_text 只聚合子树不读自身）；__setText 写过的节点则相反
+            // （td 空 gt 真）。双 fallback 覆盖两形态。
+            var tv = (typeof __textData === 'function') ? __textData(id) : '';
+            out.push(tv || __getText(id));
         } else if (tag === 'BR') {
             out.push('\n');
         } else if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') {
@@ -3994,7 +3996,10 @@ window.__normalizeParent = function(pid) {
                 var id2 = parseInt(kids[i + 1], 10);
                 var tag2 = __getTag(id2);
                 if (!tag2 || tag2 === '__text__') {
-                    __setText(id, __getText(id) + __getText(id2));
+                    // M78.62b: 双 fallback 读值（同 walk——getText 对原生 Text 空）。
+                    var v1 = (__textData(id) || '') || __getText(id);
+                    var v2 = (__textData(id2) || '') || __getText(id2);
+                    __setText(id, v1 + v2);
                     __removeChild(pid, id2);
                     continue;
                 }
@@ -4169,7 +4174,11 @@ document.createElement = function(tag) {
 };
 document.createElementNS = function(ns, tag) { return document.createElement(tag); };
 document.createTextNode = function(text) {
-    var id = __createEl('__text__');
+    // M78.62: 游离（__createDetachedEl）——createTextNode 的新节点不在文档中
+    // （removeChild 对其应抛 NotFound；旧 __createEl 直接挂 body）。
+    var id = (typeof __createDetachedEl === 'function')
+        ? __createDetachedEl('__text__')
+        : __createEl('__text__');
     __setText(id, String(text || ''));
     return __makeElement(id);
 };
