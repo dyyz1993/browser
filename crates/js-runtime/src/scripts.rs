@@ -3904,15 +3904,13 @@ Object.defineProperty(Element.prototype, 'outerText', {
         if (typeof pid !== 'number' || pid < 0) { this.innerText = v; return; }
         var holder = document.createElement('span');
         holder.innerText = v;
-        // 把 holder 的子节点移到父节点替换自身
         var kids = (__children(holder.__nodeId) || '').split(',').filter(function(x) { return x; });
         var ref = this.__nodeId;
-        for (var i = 0; i < kids.length; i++) {
-            __insertBefore(pid, parseInt(kids[i], 10), ref);
+        for (var i2 = 0; i2 < kids.length; i2++) {
+            __insertBefore(pid, parseInt(kids[i2], 10), ref);
         }
         __removeChild(pid, this.__nodeId);
-        __normalizeParent(pid);
-    },
+        __normalizeParent(pid);    },
     enumerable: true, configurable: true
 });
 Element.prototype.replaceWith = function() {
