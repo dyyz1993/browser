@@ -501,6 +501,18 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 - 教训：桥语义假设必须单节点探针验证（td/gt 双查），不能靠"分数涨了"反推。
 - html_dom 305→**310（0.644）**；总分 **0.604**。
 
+**M78.63 —— 批 16（0.604 稳，html_dom 311）**：
+
+- **xml/xmlns 隐式命名空间绑定**：lookupNamespaceURI('xml'/'xmlns') 返回
+  标准命名空间——**仅文档树内节点**（fragment/游离不继承，WPT fragment
+  系列断言 null）。
+- **isDefaultNamespace 统一语义**：lookup(null)===ns 即 true——修正 M78.54
+  的错误近似（fragment 恒 false，真浏览器是 true）。
+- **var 绑定枚举性正式放弃**：QuickJS 的 eval var 绑定挂全局且不可去枚举
+  （defineProperty 重定义无效）——interface-objects 的 for..in/delete 两行
+  记录为引擎限制。
+- html_dom 310→**311（0.646）**；总分 0.604。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
