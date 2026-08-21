@@ -490,6 +490,17 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   createHTMLDocument 子文档有——主文档 undefined）。
 - html_dom 300→**305（0.634）**；总分 **0.601**；REALITY PASS。
 
+**M78.62 —— 批 15（0.601→0.604，html_dom 310）**：
+
+- **createTextNode 游离**（对齐 createElement 的 M78.45 语义——新 Text 不在
+  文档中，removeChild 对其抛 NotFound）。
+- **修正 M78.58 修一/修三的错误假设**：`__getText 对原生 Text 两值相等"为假
+  ——collect_text 只聚合子树、对原生 Text 节点本身返回空。改**双 fallback**
+  （td 优先 + gt fallback），normalize 合并读值同步。修三当时 +5 是靠
+  innerHTML 空串大修掩盖的。
+- 教训：桥语义假设必须单节点探针验证（td/gt 双查），不能靠"分数涨了"反推。
+- html_dom 305→**310（0.644）**；总分 **0.604**。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
