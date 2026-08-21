@@ -468,6 +468,19 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   html_dom 238→**239**。
 - 上一轮"三修连环 218"教训兑现：独立落地后顺利超基线。REALITY PASS。
 
+**M78.59-60 —— 批 13（0.566→0.598，历史最大单跳 +61）**：
+
+- 59：outerText 直建试验回滚（text-transform/display 断言依赖 holder 路径，
+  留档）；`Assigning undefined` 序列化修（undefined → "undefined"）。242。
+- **60（本轮最大发现）**：`container.innerHTML = ''` 走 `__setText`（清子
+  建子语义）会**残留一个空 Text 子节点**——`firstChild` 变成 nodeType=3 的
+  空 Text，WPT setupTest 的 `e = firstChild; while(nt!=1) next` 循环走到
+  NULL——**innerText 系列 60 行的 "e=null / offsetWidth of null" 总根因**。
+  空串改真清空（逐个 removeChild）。html_dom 242→**300（0.624）**。
+- 诊断法沉淀：WPT 页面注入 title 通道 probe（title setter 必序列化）+
+  data-m 属性多打点——页内 console 不可见的场景可靠取证。
+- 总分 **0.598**（反射工程 0.509→0.598）；REALITY PASS。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
