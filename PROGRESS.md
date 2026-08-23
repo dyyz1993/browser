@@ -513,6 +513,16 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   记录为引擎限制。
 - html_dom 310→**311（0.646）**；总分 0.604。
 
+**M78.64 —— 批 17（0.604→0.637，战略转向 webapi 首战 +0.033）**：
+
+- **战略转向**：分析发现 webapi 权重缺口 0.115（html_dom 的两倍）——
+  过去 16 批全打 html_dom 是路径依赖，单批 webapi 收益超过去 10 批总和。
+- **TextEvent 废弃接口语义**：new 抛 TypeError（废弃接口不可构造）；
+  createEvent 工厂路径返回正确 prototype 链；initTextEvent 参数校验。
+- **formData 强化**：Response headers 接受数组形式 [["k","v"]]；multipart
+  CRLF 精确分割 + 非法数据抛 TypeError。
+- webapi 27→**36（0.522）**；总分 **0.637（+0.033 单批最大）**。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
