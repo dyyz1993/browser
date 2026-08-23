@@ -5017,7 +5017,59 @@ Response.prototype.clone = function() { return new Response(this.__body, { statu
 Response.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
 Response.prototype.blob = function() { return Promise.resolve({}); };
 Response.prototype.formData = function() {
-    // M78.64b: multipart 解析强化——headers 数组形式 + CRLF 分割精确 +
+    // M78.68: FormData 类（此前完全缺失——Response.formData 的依赖）。
+function FormData() {
+    this.__pairs = [];
+}
+Object.defineProperty(FormData.prototype, Symbol.toStringTag, { value: 'FormData' });
+FormData.prototype.append = function(k, v) {
+    this.__pairs.push([String(k), String(v)]);
+};
+FormData.prototype.get = function(k) {
+    for (var i = 0; i < this.__pairs.length; i++) if (this.__pairs[i][0] === String(k)) return this.__pairs[i][1];
+    return null;
+};
+FormData.prototype.getAll = function(k) {
+    var out = [];
+    for (var i = 0; i < this.__pairs.length; i++) if (this.__pairs[i][0] === String(k)) out.push(this.__pairs[i][1]);
+    return out;
+};
+FormData.prototype.has = function(k) { return this.get(k) !== null; };
+FormData.prototype.set = function(k, v) {
+    for (var i = 0; i < this.__pairs.length; i++) {
+        if (this.__pairs[i][0] === String(k)) { this.__pairs[i][1] = String(v); return; }
+    }
+    this.append(k, v);
+};
+FormData.prototype.delete = function(k) {
+    for (var i = this.__pairs.length - 1; i >= 0; i--) {
+        if (this.__pairs[i][0] === String(k)) this.__pairs.splice(i, 1);
+    }
+};
+FormData.prototype.forEach = function(fn, thisArg) {
+    for (var i = 0; i < this.__pairs.length; i++) fn.call(thisArg, this.__pairs[i][1], this.__pairs[i][0], this);
+};
+FormData.prototype.entries = function() {
+    var idx = 0; var pairs = this.__pairs;
+    var iter = { next: function() { return idx < pairs.length ? { value: pairs[idx++], done: false } : { value: undefined, done: true }; } };
+    iter[Symbol.iterator] = function() { return iter; };
+    return iter;
+};
+FormData.prototype.keys = function() {
+    var idx = 0; var pairs = this.__pairs;
+    var iter = { next: function() { return idx < pairs.length ? { value: pairs[idx++][0], done: false } : { value: undefined, done: true }; } };
+    iter[Symbol.iterator] = function() { return iter; };
+    return iter;
+};
+FormData.prototype.values = function() {
+    var idx = 0; var pairs = this.__pairs;
+    var iter = { next: function() { return idx < pairs.length ? { value: pairs[idx++][1], done: false } : { value: undefined, done: true }; } };
+    iter[Symbol.iterator] = function() { return iter; };
+    return iter;
+};
+FormData.prototype[Symbol.iterator] = FormData.prototype.entries;
+window.FormData = FormData;
+// M78.64b: multipart 解析强化——headers 数组形式 + CRLF 分割精确 +
     // 非法抛 TypeError。
     var self = this;
     return Promise.resolve().then(function() {
