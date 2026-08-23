@@ -4613,6 +4613,9 @@ Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value
 Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
     __removeAttr(this.__nodeId, String(name));
 };
+// M78.79: Location 构造器（WPT location-prototype 系列）。
+window.Location = function Location() { throw new TypeError('Illegal constructor'); };
+Object.defineProperty(window.Location.prototype, Symbol.toStringTag, { value: 'Location' });
 // M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
     d.title = String(title === undefined ? '' : title === null ? 'null' : title).replace(/\s+/g, ' ').trim();
     d.addEventListener = function() {};
