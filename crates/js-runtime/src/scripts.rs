@@ -4566,7 +4566,8 @@ document.createHTMLDocument = function(title) {
     d.createTextNode = document.createTextNode;
     d.body = d.createElement('body');
     d.documentElement = d.createElement('html');
-    d.title = String(title || '');
+    // M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
+    d.title = String(title === undefined ? '' : title === null ? 'null' : title).replace(/\s+/g, ' ').trim();
     d.addEventListener = function() {};
     d.removeEventListener = function() {};
     d.getElementsByTagName = function(tag) { return []; };
