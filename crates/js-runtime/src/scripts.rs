@@ -3825,6 +3825,11 @@ Element.prototype.insertAdjacentElement = function(pos, el) {
 // M78: insertAdjacentText —— testharness.js 的输出渲染依赖它（4 个位置全支持）。
 Element.prototype.insertAdjacentText = function(pos, text) {
     text = String(text == null ? '' : text);
+    // M78.76: 位置校验（WPT: 无效位置抛 SyntaxError）。
+    var validPos = ['beforebegin', 'afterbegin', 'beforeend', 'afterend'];
+    if (validPos.indexOf(String(pos)) < 0) {
+        throw new DOMException('The position provided must be one of "beforebegin", "afterbegin", "beforeend", or "afterend".', 'SyntaxError');
+    }
     if (!text) return;
     var self = this;
     function makeTextNode() { return document.createTextNode(text); }
