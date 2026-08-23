@@ -3727,6 +3727,8 @@ Element.prototype.dispatchEvent = function(ev) {
                 try { cbs[i].call(cur, ev); } catch(e) {}
                 // M78.24: stopImmediatePropagation——中断同节点后续监听器。
                 if (ev.__immediate) return true;
+                // M78.81: stopPropagation——同节点后续监听器也中断。
+                if (ev.__stopPropagation || ev.cancelBubble) return true;
             }
         }
         // bubbles=false 或已 stopPropagation 则停止冒泡
