@@ -499,6 +499,40 @@ fn element_lang(tree: &Tree, id: NodeId) -> Option<String> {
     None
 }
 
+/// M78.78: dir="auto" 的内容方向探测——首个强方向字符
+/// （简化 bidi：ASCII 字母→ltr，阿拉伯/希伯来→rtl，其他→ltr）。
+fn dir_auto_content_direction(tree: &Tree, id: NodeId) -> String {
+    let text = collect_text_for_dir(tree, id);
+    for ch in text.chars() {
+        let c = ch as u32;
+        // 阿拉伯文 U+0600-U+06FF / 希伯来 U+0590-U+05FF → rtl
+        if (0x0600..=0x06FF).contains(&c) || (0x0590..=0x05FF).contains(&c) {
+            return "rtl".to_string();
+        }
+        // ASCII 字母 → ltr
+        if ch.is_ascii_alphabetic() {
+            return "ltr".to_string();
+        }
+    }
+    "ltr".to_string()
+}
+
+fn collect_text_for_dir(tree: &Tree, id: NodeId) -> String {
+    let mut out = String::new();
+    collect_text_dir_inner(tree, id, &mut out);
+    out
+}
+
+fn collect_text_dir_inner(tree: &Tree, id: NodeId, out: &mut String) {
+    for &child in tree.children_of(id) {
+        match tree.data(child) {
+            NodeData::Text(s) => out.push_str(s),
+            NodeData::Element { .. } => collect_text_dir_inner(tree, child, out),
+            _ => {}
+        }
+    }
+}
+
 /// 元素的方向：从自身向上找最近的 dir="ltr|rtl"（auto 不参与匹配，近似）。
 /// HTML 规范：无任何 dir 祖先时默认方向性为 ltr。
 fn element_dir(tree: &Tree, id: NodeId) -> Option<String> {
@@ -509,6 +543,10 @@ fn element_dir(tree: &Tree, id: NodeId) -> Option<String> {
                 let d = v.trim().to_lowercase();
                 if d == "ltr" || d == "rtl" {
                     return Some(d);
+                }
+                if d == "auto" {
+                    // M78.78: dir="auto" 探测内容方向。
+                    return Some(dir_auto_content_direction(tree, nid));
                 }
             }
         }
