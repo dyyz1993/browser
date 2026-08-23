@@ -2409,6 +2409,21 @@ window.MutationObserver = function(cb) {
     self.__cb = cb;
     self.__targets = [];
     self.observe = function(target, opts) {
+        // M78.74: 参数校验（WPT MutationObserver-sanity）。
+        opts = opts || {};
+        var hasAny = opts.childList || opts.attributes || opts.characterData ||
+                     opts.attributeOldValue || opts.attributeFilter || opts.characterDataOldValue;
+        if (!hasAny) {
+            throw new TypeError('MutationObserver: none of childList, attributes, or characterData are true');
+        }
+        if ((opts.attributeOldValue || opts.attributeFilter) && !opts.attributes) {
+            if (opts.attributeOldValue === true || opts.attributeFilter) {
+                throw new TypeError('MutationObserver: attributeOldValue/attributeFilter without attributes');
+            }
+        }
+        if (opts.characterDataOldValue === true && !opts.characterData) {
+            throw new TypeError('MutationObserver: characterDataOldValue without characterData');
+        }
         if (target && target.__nodeId !== undefined) {
             self.__targets.push(target);
             if (window.__activeObservers.indexOf(self) < 0) window.__activeObservers.push(self);
