@@ -4647,8 +4647,12 @@ Event.prototype.preventDefault = function() { this.defaultPrevented = true; };
 Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
 Event.prototype.stopImmediatePropagation = function() { this.cancelBubble = true; this.__immediate = true; };
 Event.prototype.initEvent = function(type, bubbles, cancelable) {
+    // M78.65: init 后允许重新 dispatch——重置派发状态。
     this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable;
     this.defaultPrevented = false;
+    this.target = null; this.currentTarget = null; this.eventPhase = Event.AT_TARGET;
+    this.__dispatched = false; delete this.__immediate;
+    delete this.__stopPropagation; this.cancelBubble = false; this.returnValue = true;
 };
 // M78.47: srcElement = target 别名；returnValue=false 等价 preventDefault
 // （dispatch 期间与之后都要反映——WPT Event-defaultPrevented 系列）。
@@ -4710,7 +4714,7 @@ function UIEvent(type, opts) {
 }
 UIEvent.prototype = Object.create(Event.prototype);
 Object.defineProperty(UIEvent.prototype, Symbol.toStringTag, { value: 'UIEvent' });
-UIEvent.prototype.initUIEvent = function(type, bubbles, cancelable, view, detail) {
+UIEvent.prototype.initUIEvent = function(type, bubbles, cancelable, view, detail) { if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
     this.initEvent(type, bubbles, cancelable);
     this.view = view || null; this.detail = (detail === undefined) ? 0 : detail;
 };
@@ -4747,7 +4751,7 @@ function CompositionEvent(type, opts) {
 }
 CompositionEvent.prototype = Object.create(UIEvent.prototype);
 Object.defineProperty(CompositionEvent.prototype, Symbol.toStringTag, { value: 'CompositionEvent' });
-CompositionEvent.prototype.initCompositionEvent = function(type, b, c, v, data, locale) {
+CompositionEvent.prototype.initCompositionEvent = function(type, b, c, v, data, locale) { if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
     this.initEvent(type, b, c);
     this.data = data; this.locale = locale || '';
 };
@@ -4794,7 +4798,7 @@ window.PointerEvent = PointerEvent;
     }
     MouseEvent2.prototype = Object.create(Event.prototype);
     Object.defineProperty(MouseEvent2.prototype, Symbol.toStringTag, { value: 'MouseEvent' });
-    MouseEvent2.prototype.initMouseEvent = function(type, b, c, v, detail, x, y, cx, cy, ctrl, alt, shift, meta, btn, rel) {
+    MouseEvent2.prototype.initMouseEvent = function(type, b, c, v, detail, x, y, cx, cy, ctrl, alt, shift, meta, btn, rel) { if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
         this.initEvent(type, b, c);
         this.clientX = x || 0; this.clientY = y || 0; this.detail = detail || 0;
         this.ctrlKey = !!ctrl; this.altKey = !!alt; this.shiftKey = !!shift; this.metaKey = !!meta;
@@ -4814,7 +4818,7 @@ window.PointerEvent = PointerEvent;
     }
     KeyboardEvent2.prototype = Object.create(Event.prototype);
     Object.defineProperty(KeyboardEvent2.prototype, Symbol.toStringTag, { value: 'KeyboardEvent' });
-    KeyboardEvent2.prototype.initKeyboardEvent = function(type, b, c, v, key, locale, loc, m, r, cHist) {
+    KeyboardEvent2.prototype.initKeyboardEvent = function(type, b, c, v, key, locale, loc, m, r, cHist) { if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
         this.initEvent(type, b, c); this.key = key || ''; this.location = loc || 0;
     };
     window.KeyboardEvent = KeyboardEvent2;
@@ -4827,6 +4831,16 @@ window.PointerEvent = PointerEvent;
     FocusEvent2.prototype = Object.create(UIEvent.prototype);
     Object.defineProperty(FocusEvent2.prototype, Symbol.toStringTag, { value: 'FocusEvent' });
     window.FocusEvent = FocusEvent2;
+    // M78.65: 构造器 length=1（WPT 断言——正式参数只有 type）。
+    try {
+        ['UIEvent','WheelEvent','InputEvent','CompositionEvent','TextEvent',
+         'PointerEvent','MouseEvent','KeyboardEvent','FocusEvent'].forEach(function(nm) {
+            var fn = window[nm];
+            if (typeof fn === 'function') {
+                Object.defineProperty(fn, 'length', { value: 1, writable: false, configurable: true });
+            }
+        });
+    } catch (e) {}
     var _unused = [_ME, _KE, _FE]; // 保留旧引用防 GC 提示（未被闭包捕获则编译期裁剪）
 })();
 
