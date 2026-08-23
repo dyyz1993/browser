@@ -4501,6 +4501,12 @@ document.createEvent = function(type) {
     if (t === 'MouseEvents') return new MouseEvent('click');
     if (t === 'UIEvents' || t === 'HTMLEvents') return new Event('load');
     if (t === 'CustomEvent') return new CustomEvent('');
+    if (t === 'TextEvent') {
+        // M78.64: createEvent 绕过构造器的 TypeError（工厂路径合法）。
+        var te = Object.create(TextEvent.prototype);
+        Event.call(te, 'textInput');
+        return te;
+    }
     return new Event('');
 };
 document.createComment = document.createComment || function(text) { return document.createElement('div'); };
@@ -4747,15 +4753,17 @@ CompositionEvent.prototype.initCompositionEvent = function(type, b, c, v, data, 
 };
 window.CompositionEvent = CompositionEvent;
 function TextEvent(type, opts) {
-    UIEvent.call(this, type, opts);
-    opts = opts || {};
-    this.data = ('data' in opts) ? opts.data : '';
-    this.inputMethod = opts.inputMethod || 0;
-    this.locale = opts.locale || '';
+    // M78.64: TextEvent 是废弃接口——new 抛 TypeError（WPT 断言）。
+    throw new TypeError('Illegal constructor');
 }
 TextEvent.prototype = Object.create(UIEvent.prototype);
 Object.defineProperty(TextEvent.prototype, Symbol.toStringTag, { value: 'TextEvent' });
+Object.defineProperty(TextEvent.prototype, 'data', { value: '', writable: true, enumerable: true, configurable: true });
+Object.defineProperty(TextEvent.prototype, 'inputMethod', { value: 0, writable: true, enumerable: true, configurable: true });
+Object.defineProperty(TextEvent.prototype, 'locale', { value: '', writable: true, enumerable: true, configurable: true });
 TextEvent.prototype.initTextEvent = function(type, b, c, v, data, m, locale) {
+    // 参数校验（WPT: 无参抛 TypeError）。
+    if (arguments.length < 5) throw new TypeError('Argument 5 is required.');
     this.initEvent(type, b, c);
     this.data = data; this.locale = locale || '';
 };
@@ -4994,28 +5002,31 @@ Response.prototype.clone = function() { return new Response(this.__body, { statu
 Response.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
 Response.prototype.blob = function() { return Promise.resolve({}); };
 Response.prototype.formData = function() {
-    // M78.13: multipart/form-data 解析（boundary 分割 → FormData 近似项）。
+    // M78.64b: multipart 解析强化——headers 数组形式 + CRLF 分割精确 +
+    // 非法抛 TypeError。
     var self = this;
     return Promise.resolve().then(function() {
-        var fd = new FormData();
-        var ct = self.__multipartBoundary || '';
-        var m = /boundary="?([^";\s]+)"?/i.exec(ct);
-        if (!m) {
-            // body 自带 preamble：--boundary
-            var bm = /--([^\r\n]+)/.exec(self.__body.slice(0, 200));
-            if (bm) m = bm;
+        var ctype = (self.headers && self.headers.get) ? (self.headers.get('content-type') || '') : (self.__multipartBoundary || '');
+        if (ctype.indexOf('multipart/form-data') < 0) {
+            throw new TypeError('FormData: not multipart/form-data');
         }
-        if (!m) return fd;
-        var boundary = '--' + m[1];
-        var parts = self.__body.split(boundary);
-        for (var i = 0; i < parts.length; i++) {
-            var part = parts[i];
-            if (!part || part === '--' || part === '--\r\n' || part.indexOf('--') === 0) continue;
-            part = part.replace(/^\r\n/, '');
-            var hdrEnd = part.indexOf('\r\n\r\n');
+        var bm = /boundary=([^;\s]+)/i.exec(ctype);
+        if (!bm) throw new TypeError('FormData: missing boundary');
+        var boundary = '--' + bm[1];
+        var body = self.__body || '';
+        var rawParts = body.split(boundary);
+        var fd = new FormData();
+        for (var i = 1; i < rawParts.length; i++) {
+            var part = rawParts[i];
+            if (part.indexOf('--') === 0) break;
+            if (part.indexOf(String.fromCharCode(13, 10)) === 0) part = part.slice(2);
+            var hdrEnd = part.indexOf(String.fromCharCode(13, 10, 13, 10));
             if (hdrEnd < 0) continue;
             var headers = part.slice(0, hdrEnd);
-            var value = part.slice(hdrEnd + 4).replace(/\r\n$/, '');
+            var value = part.slice(hdrEnd + 4);
+            if (value.lastIndexOf(String.fromCharCode(13, 10)) === value.length - 2) {
+                value = value.slice(0, -2);
+            }
             var nm = /name="([^"]*)"/i.exec(headers);
             if (nm) {
                 try { fd.append(nm[1], value); } catch (e) {}
