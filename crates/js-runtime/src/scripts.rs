@@ -4566,7 +4566,13 @@ document.createHTMLDocument = function(title) {
     d.createTextNode = document.createTextNode;
     d.body = d.createElement('body');
     d.documentElement = d.createElement('html');
-    // M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
+    // M78.72: DOMStringMap 全局构造器 + dataset remove 方法。
+window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
+Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
+Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
+    __removeAttr(this.__nodeId, String(name));
+};
+// M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
     d.title = String(title === undefined ? '' : title === null ? 'null' : title).replace(/\s+/g, ' ').trim();
     d.addEventListener = function() {};
     d.removeEventListener = function() {};
