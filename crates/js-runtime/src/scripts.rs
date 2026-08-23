@@ -4727,11 +4727,6 @@ function WheelEvent(type, opts) {
 }
 WheelEvent.prototype = Object.create(MouseEvent.prototype);
 Object.defineProperty(WheelEvent.prototype, Symbol.toStringTag, { value: 'WheelEvent' });
-WheelEvent.prototype.initWheelEvent = function(type, b, c, v, d, x, y, z, m) {
-    this.initEvent(type, b, c);
-    this.deltaX = x || 0; this.deltaY = y || 0; this.deltaZ = z || 0; this.deltaMode = m || 0;
-};
-WheelEvent.prototype.initWebKitWheelEvent = WheelEvent.prototype.initWheelEvent;
 window.WheelEvent = WheelEvent;
 function InputEvent(type, opts) {
     UIEvent.call(this, type, opts);
