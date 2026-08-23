@@ -1220,8 +1220,9 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     }
     // M78.7: 委托 css-engine 选择器——完整后代/相邻(`+`)组合器 + 属性 + 伪类
     // 子集，与样式管线共享单一实现（替代旧"只匹配最后一段"的近似）。
-    // 解析失败（不支持的语法）按"无匹配"处理，与历史行为一致。
-    let parsed = match browser_css_engine::Selector::parse(sel) {
+    // M78.77: :scope 伪类——近似替换为 *（WPT :scope 系列）。
+    let sel_processed = sel.replace(":scope", "*");
+    let parsed = match browser_css_engine::Selector::parse(&sel_processed) {
         Ok(s) => s,
         Err(_) => return None,
     };
@@ -1252,7 +1253,9 @@ fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
         }
     }
     // M78.7: 同 find_by_selector——委托 css-engine 完整匹配。
-    let parsed = match browser_css_engine::Selector::parse(sel) {
+    // M78.77: :scope 近似。
+    let sel_processed2 = sel.replace(":scope", "*");
+    let parsed = match browser_css_engine::Selector::parse(&sel_processed2) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
