@@ -4989,7 +4989,13 @@ function Response(body, init) {
     var __hdrMap = {};
     var ih = init.headers;
     if (ih) {
-        if (typeof ih.forEach === 'function') {
+        if (Array.isArray(ih)) {
+            for (var ai = 0; ai < ih.length; ai++) {
+                if (Array.isArray(ih[ai]) && ih[ai].length >= 2) {
+                    __hdrMap[String(ih[ai][0]).toLowerCase()] = String(ih[ai][1]);
+                }
+            }
+        } else if (typeof ih.forEach === 'function') {
             try { ih.forEach(function(v, k) { __hdrMap[String(k).toLowerCase()] = String(v); }); } catch (e) {}
         } else {
             for (var hk in ih) { if (ih.hasOwnProperty(hk)) __hdrMap[String(hk).toLowerCase()] = String(ih[hk]); }
