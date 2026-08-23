@@ -523,6 +523,33 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
   CRLF 精确分割 + 非法数据抛 TypeError。
 - webapi 27→**36（0.522）**；总分 **0.637（+0.033 单批最大）**。
 
+**M78.65-84 —— 20 轮连续执行（0.637→0.658）**：
+
+65. init*Event 参数校验 + 构造器 length=1。webapi→40。
+66. Request/fetch URL 规范化 + % 不编码。webapi 40。
+67. 移除废弃 initWheelEvent。webapi 42。
+68. **FormData 完整类**（append/get/entries/iterator——此前完全缺失！暴露
+    于 Response headers 数组形式修复后）。webapi 41。
+69. removeChild synthetic doc——手测通过，WPT 环境差异（跳过）。
+70. 检查点 **0.655**。
+71. createHTMLDocument title 空白规范化。html_dom 317。
+72. DOMStringMap 全局构造器。317。
+73. value/checked/disabled/selected 反射属性（批量遗漏）。317。
+74. MutationObserver.observe 参数校验。317。
+75. 检查点 **0.658**。
+76. insertAdjacentText 位置校验（SyntaxError）。html_dom 318。
+77. :scope 伪类近似（bridge 替换为 Universal）。
+78. dir=auto 内容方向探测（简化 bidi：首个强方向字符）。
+79. Location 构造器。storage 40。
+80. 检查点 0.658。
+81. stopPropagation 同节点后续监听器中断。webapi 41。
+82. location hash（iframe 型跳过）。
+83. 全量终评。
+84. 收口（清理 4.3GB + 本记录）。
+
+终态 **0.658**：js 0.927 / html 0.661 / css 0.662 / webapi 0.594 /
+storage 0.399。**M78 全程 0.3334 → 0.658（+97%）**。REALITY PASS。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
