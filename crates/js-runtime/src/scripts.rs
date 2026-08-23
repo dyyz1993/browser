@@ -2318,7 +2318,7 @@ window.URL = function(input, base) {
             var code = str.charCodeAt(ci);
             var safe = (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
                 || (code >= 48 && code <= 57)
-                || '-_.!~*\'()/?:@&=+$,#'.indexOf(ch) >= 0;
+                || '-_.!~*\'()/?:@&=+$,#%'.indexOf(ch) >= 0;
             out += safe ? ch : encodeURIComponent(ch);
         }
         return out;
@@ -5055,6 +5055,10 @@ window.Response = Response;
 function Request(input, init) {
     init = init || {};
     var url = (typeof input === 'string') ? input : (input && input.url) || String(input);
+    // M78.66: URL normalize + query encode.
+    if (typeof URL === 'function' && location && location.href) {
+        try { url = new URL(url, location.href).href; } catch (e) {}
+    }
     this.url = url;
     this.method = (init.method || (input && input.method) || 'GET').toUpperCase();
     this.headers = init.headers || {};
@@ -5069,6 +5073,10 @@ window.Request = Request;
 
 window.fetch = function(input, options) {
     var url = (typeof input === 'string') ? input : (input && input.url) || String(input);
+    // M78.66: URL normalize + query encode for fetch.
+    if (typeof URL === 'function' && location && location.href) {
+        try { url = new URL(url, location.href).href; } catch (e) {}
+    }
     options = options || {};
     var method = options.method || 'GET';
     var body = options.body || null;
