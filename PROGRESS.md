@@ -1598,6 +1598,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 
 ---
 
+**M78.107-109 —— 长尾深化续（0.670→0.672）**：
+
+- **107：createElementNS namespace 前缀解析**（lookupNamespaceURI 从
+  tagName prefix + __namespace 匹配）。
+- **108：Element 实例暴露 Node 常量**（WPT Node-constants +4）。
+  html_dom 329→333。
+- **109→revert：DOMStringMap 移到全局**——移出 createHTMLDocument 后
+  13 个测试回归（document_entity/range/headers 等），revert 保分。
+- **106：formData bare CR 检测**。
+- 终态 **0.672**（js 0.927 / html 0.696 / css 0.662 / webapi 0.609 /
+  storage 0.505）。**M78 全程 0.3334 → 0.672（+101.5%）**。REALITY PASS。
+- 教训：DOMStringMap 构造器在 createHTMLDocument 内部是**设计决定**而非
+  放错——它只应在子文档场景可用。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
