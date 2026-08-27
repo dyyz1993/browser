@@ -2737,6 +2737,11 @@ Event.prototype.composedPath = function() {
     }
     return path;
 };
+// M78.112: DOMStringMap 全局构造器（只在全局暴露引用，不移除内部实现）。
+if (typeof window.DOMStringMap === 'undefined') {
+    window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
+}
 // M78.32: 反射属性批量（lang/dir/className/title/hidden/tabIndex/draggable）。
 (function() {
     var refl = ['lang', 'dir', 'title', 'draggable'];
