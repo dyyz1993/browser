@@ -3775,34 +3775,48 @@ document.importNode = function(node, deep) {
 };
 Element.prototype.removeEventListener = function(type, cb) {};
 Element.prototype.dispatchEvent = function(ev) {
-    // GAP-M: 事件冒泡。dispatchEvent 应沿 parent 链向上触发祖先监听器
-    // （事件委托场景：ul 监听 click，点击 li 应冒泡到 ul）。
+    // M78.113: 三阶段 dispatch（capture → target → bubble）。
     if (!ev) return true;
-    var cur = this;
     ev.target = this;
-    while (cur) {
-        ev.currentTarget = cur;
-        if (cur.__listeners && cur.__listeners[ev.type]) {
-            var cbs = cur.__listeners[ev.type];
-            for (var i = 0; i < cbs.length; i++) {
-                try { cbs[i].call(cur, ev); } catch(e) {}
-                // M78.24: stopImmediatePropagation——中断同节点后续监听器。
-                if (ev.__immediate) return true;
-                // M78.81: stopPropagation——同节点后续监听器也中断。
-                if (ev.__stopPropagation || ev.cancelBubble) return true;
+    // 构建 ancestor 链（从 target 到根）
+    var chain = [];
+    var cur = this;
+    while (cur) { chain.push(cur); try { var pid = __getParent(cur.__nodeId); cur = (pid >= 0) ? __makeElement(pid) : null; } catch(pe) { break; } }
+    // Phase 1: capture（从根到 target 的父节点）
+    for (var ci = chain.length - 1; ci > 0; ci--) {
+        var cap = chain[ci];
+        ev.currentTarget = cap; ev.eventPhase = Event.CAPTURING_PHASE;
+        if (cap.__listeners && cap.__listeners[ev.type]) {
+            var capCbs = cap.__listeners[ev.type];
+            for (var cj = 0; cj < capCbs.length; cj++) {
+                try { capCbs[cj].call(cap, ev); } catch(e) {}
+                if (ev.__immediate || ev.__stopPropagation || ev.cancelBubble) return true;
             }
         }
-        // bubbles=false 或已 stopPropagation 则停止冒泡
-        if (!ev.bubbles || ev.__stopPropagation || ev.cancelBubble) break;
-        // 沿 parent 链向上（用 __getParent bridge）
-        try {
-            var pid = __getParent(cur.__nodeId);
-            if (pid >= 0) {
-                cur = __makeElement(pid);
-            } else {
-                break;
+    }
+    // Phase 2: target
+    ev.currentTarget = this; ev.eventPhase = Event.AT_TARGET;
+    if (this.__listeners && this.__listeners[ev.type]) {
+        var tCbs = this.__listeners[ev.type];
+        for (var ti = 0; ti < tCbs.length; ti++) {
+            try { tCbs[ti].call(this, ev); } catch(e) {}
+            if (ev.__immediate || ev.__stopPropagation || ev.cancelBubble) return true;
+        }
+    }
+    // Phase 3: bubble（从 target 父到根）
+    if (ev.bubbles) {
+        for (var bi = 1; bi < chain.length; bi++) {
+            var bub = chain[bi];
+            ev.currentTarget = bub; ev.eventPhase = Event.BUBBLING_PHASE;
+            if (bub.__listeners && bub.__listeners[ev.type]) {
+                var bubCbs = bub.__listeners[ev.type];
+                for (var bj = 0; bj < bubCbs.length; bj++) {
+                    try { bubCbs[bj].call(bub, ev); } catch(e) {}
+                    if (ev.__immediate || ev.__stopPropagation || ev.cancelBubble) return true;
+                }
             }
-        } catch(pe) { break; }
+            if (ev.__stopPropagation || ev.cancelBubble) break;
+        }
     }
     return true;
 };
