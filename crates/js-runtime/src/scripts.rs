@@ -4271,6 +4271,12 @@ document.getElementById = function(id) {
     return (nodeId >= 0) ? __makeElement(nodeId) : null;
 };
 // M78.61: 主 document 的 URL/documentURI（location 是权威源）。
+// M78.89: document.location = window.location（同一对象引用）。
+Object.defineProperty(document, 'location', {
+    get: function() { return window.location; },
+    set: function(v) { if (v && typeof v.href === 'string') { window.location = v; } else if (typeof v === 'string') { __setLocHref(v); } },
+    enumerable: true, configurable: true
+});
 Object.defineProperty(document, 'URL', {
     get: function() { try { return location.href || ''; } catch (e) { return ''; } },
     enumerable: true, configurable: true
