@@ -4510,7 +4510,22 @@ if (window.status === undefined) { window.status = ''; }
 if (window.name === undefined) { window.name = ''; }
 window.closed = false;
 window.length = 0;
-window.frames = window.frames || [];
+// M78.91: frames 按索引返回 iframe 的 contentWindow（Node-removeChild 等依赖）。
+window.frames = new Proxy([], {
+    get: function(t, k) {
+        if (typeof k === 'string' && /^\d+$/.test(k)) {
+            var iframes = (typeof __qsAll === 'function') ? __qsAll('iframe') : '';
+            var ids = (iframes || '').split(',').filter(function(x) { return x; });
+            var idx = parseInt(k, 10);
+            if (idx < ids.length) {
+                var el = __makeElement(parseInt(ids[idx], 10));
+                return el.contentWindow;
+            }
+            return undefined;
+        }
+        return t[k];
+    }
+});
 window.opener = null;
 document.scripts = document.querySelectorAll('script');
 // document.createTreeWalker：DFS 顺序的基本实现（NodeIterator 同理最小桩）。
