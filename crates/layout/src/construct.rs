@@ -604,28 +604,11 @@ fn encode_svg_placeholder(tree: &Tree, svg_id: NodeId, svg_attrs: &[(String, Str
         .and_then(|(_, v)| v.trim_end_matches("px").parse::<f32>().ok())
         .unwrap_or(100.0);
 
-    let mut shapes_str = String::new();
-    for &child_id in tree.children_of(svg_id) {
-        if let NodeData::Element { tag, attrs } = tree.data(child_id) {
-            let lower = tag.to_ascii_lowercase();
-            if !matches!(
-                lower.as_str(),
-                "circle" | "rect" | "line" | "polygon" | "polyline"
-            ) {
-                continue;
-            }
-            if !shapes_str.is_empty() {
-                shapes_str.push_str("; ");
-            }
-            shapes_str.push_str(&lower);
-            for (k, v) in attrs {
-                // 简化编码：key=value，值里不含空格（颜色名/数字都没有）
-                let v_compact = v.split_whitespace().next().unwrap_or(v);
-                shapes_str.push_str(&format!(" {k}={v_compact}"));
-            }
-        }
-    }
-    format!("[SVG: w={vb_w} h={vb_h} | {shapes_str}]")
+    // M78.85: 只输出尺寸——Vue/Svelte 等站点有上百个 SVG 图标，
+    // 详细占位符淹没正文文本。形状信息由 CLI 后处理按需解析。
+    let _ = tree;
+    let _ = svg_id;
+    format!("[SVG {vb_w}x{vb_h}]")
 }
 
 #[cfg(test)]
