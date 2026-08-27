@@ -568,6 +568,18 @@ storage 0.399。**M78 全程 0.3334 → 0.658（+97%）**。REALITY PASS。
 - 终态 **0.668**：js 0.927 / html 0.684 / css 0.662 / webapi 0.609 /
   storage 0.399。**M78 全程 0.3334 → 0.668（+100%）**。REALITY PASS。
 
+**M78.100-107 —— 战略转向+长尾深化（0.668→0.670）**：
+
+- **战略分析**：量化发现 webapi 权重缺口 0.115（html_dom 两倍）——
+  转向 webapi/storage 主攻。
+- **100：React render-url 空白**——CSS-in-JS hydration 限制（记录）。
+- **101：initTextEvent 参数校验回退**（5 args 校验过严）。
+- **103：Location 构造器重放置**到全局 shim（storage 41→**45**）。
+- **105：pushState about:blank 规范化 → 回滚**（破坏 navigation 测试）。
+- **106：formData bare CR 检测**。
+- 终态 **0.670**：js 0.927 / html 0.684 / css 0.662 / webapi 0.609 /
+  storage **0.505**。**M78 全程 0.3334 → 0.670（+101%）**。REALITY PASS。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
