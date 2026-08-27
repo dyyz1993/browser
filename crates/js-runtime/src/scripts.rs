@@ -2737,6 +2737,22 @@ Event.prototype.composedPath = function() {
     }
     return path;
 };
+// M78.118: 缺失的接口构造器声明（WPT interface-objects 的 exist 断言）。
+(function() {
+    var missing = ['DOMImplementation', 'ProcessingInstruction', 'DocumentType',
+                   'Attr', 'CharacterData', 'NodeIterator', 'CDATASection',
+                   'EntityReference', 'Entity', 'Notation'];
+    for (var i = 0; i < missing.length; i++) {
+        var nm = missing[i];
+        if (typeof window[nm] === 'undefined') {
+            try {
+                window[nm] = function() { throw new TypeError('Illegal constructor'); };
+                Object.defineProperty(window[nm], 'name', { value: nm, writable: false, configurable: true });
+                Object.defineProperty(window[nm].prototype, Symbol.toStringTag, { value: nm });
+            } catch (e) {}
+        }
+    }
+})();
 // M78.112: DOMStringMap 全局构造器（只在全局暴露引用，不移除内部实现）。
 if (typeof window.DOMStringMap === 'undefined') {
     window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
