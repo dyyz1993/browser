@@ -4704,6 +4704,10 @@ Range.prototype.extractContents = function() { return document.createDocumentFra
 Range.prototype.insertNode = function() {};
 Range.prototype.getBoundingClientRect = function() { return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 }; };
 Range.prototype.detach = function() {};
+// M78.116: Range.toString()——返回范围内的文本（近似：起止容器间的所有文本）。
+Range.prototype.toString = function() {
+    try { return __getText(this.startContainer.__nodeId || 0) || ''; } catch(e) { return ''; }
+};
 window.Range = Range;
 document.createRange = function() { return new Range(); };
 document.createNodeIterator = function(root, whatToShow) { return new TreeWalker(root, whatToShow); };
