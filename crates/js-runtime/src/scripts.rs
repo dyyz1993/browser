@@ -4224,7 +4224,10 @@ try {
             }
         }
     } catch (e) {}
-    // M78.10: 命名访问——白名单外的 id 才定义。常见全局名（testharness 的
+    // M78.103: Location 构造器（WPT location-prototype 系列）。
+try { window.Location = function Location() { throw new TypeError('Illegal constructor'); }; } catch(e) {}
+try { Object.defineProperty(window.Location.prototype, Symbol.toStringTag, { value: 'Location' }); } catch(e) {}
+// M78.10: 命名访问——白名单外的 id 才定义。常见全局名（testharness 的
     // test/setup/done、浏览器自身属性）不定义 accessor：<div id=test> 会把
     // self.test = fn 变成 getter 调用（sloppy 静默吞赋值）或吞 var 声明，
     // 曾致 html_dom 类 246→90 的整片回归（var x 声明被 accessor 挡住后
@@ -4654,9 +4657,6 @@ Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value
 Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
     __removeAttr(this.__nodeId, String(name));
 };
-// M78.79: Location 构造器（WPT location-prototype 系列）。
-window.Location = function Location() { throw new TypeError('Illegal constructor'); };
-Object.defineProperty(window.Location.prototype, Symbol.toStringTag, { value: 'Location' });
 // M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
     d.title = String(title === undefined ? '' : title === null ? 'null' : title).replace(/\s+/g, ' ').trim();
     d.addEventListener = function() {};
