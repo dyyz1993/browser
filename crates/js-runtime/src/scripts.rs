@@ -4607,6 +4607,29 @@ function TreeWalker(root, whatToShow) {
     })(root, this.__seq);
     this.__idx = 0;
 }
+TreeWalker.prototype.parentNode = function() {
+    var pid = __getParent(this.currentNode.__nodeId);
+    if (typeof pid !== 'number' || pid < 0) return null;
+    this.currentNode = __makeElement(pid);
+    return this.currentNode;
+};
+TreeWalker.prototype.firstChild = function() {
+    var cs = __children(this.currentNode.__nodeId);
+    if (!cs) return null;
+    var first = parseInt(cs.split(',')[0], 10);
+    if (isNaN(first)) return null;
+    this.currentNode = __makeElement(first);
+    return this.currentNode;
+};
+TreeWalker.prototype.lastChild = function() {
+    var cs = __children(this.currentNode.__nodeId);
+    if (!cs) return null;
+    var ids = cs.split(',').filter(function(s) { return s; });
+    var last = parseInt(ids[ids.length - 1], 10);
+    if (isNaN(last)) return null;
+    this.currentNode = __makeElement(last);
+    return this.currentNode;
+};
 TreeWalker.prototype.nextNode = function() {
     if (this.__idx + 1 >= this.__seq.length) return null;
     this.__idx++;
@@ -4618,6 +4641,14 @@ TreeWalker.prototype.previousNode = function() {
     this.__idx--;
     this.currentNode = this.__seq[this.__idx];
     return this.currentNode;
+};
+// M78.115: NodeFilter 常量（WPT TreeWalker 断言依赖）。
+window.NodeFilter = {
+    SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4,
+    SHOW_CDATA_SECTION: 8, SHOW_ENTITY_REFERENCE: 16, SHOW_ENTITY: 32,
+    SHOW_PROCESSING_INSTRUCTION: 64, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256,
+    SHOW_DOCUMENT_TYPE: 512, SHOW_DOCUMENT_FRAGMENT: 1024, SHOW_NOTATION: 2048,
+    FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3
 };
 document.createTreeWalker = function(root, whatToShow) { return new TreeWalker(root, whatToShow); };
 // M78: document.createEvent —— WPT Event-constants/老式 API 依赖。
