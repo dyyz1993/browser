@@ -4875,9 +4875,11 @@ Object.defineProperty(TextEvent.prototype, 'data', { value: '', writable: true, 
 Object.defineProperty(TextEvent.prototype, 'inputMethod', { value: 0, writable: true, enumerable: true, configurable: true });
 Object.defineProperty(TextEvent.prototype, 'locale', { value: '', writable: true, enumerable: true, configurable: true });
 TextEvent.prototype.initTextEvent = function(type, b, c, v, data, m, locale) {
-    // 参数校验（WPT: 无参抛 TypeError）。
+    // M78.111: 无 type 时 throw TypeError；view 默认 null。
+    if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
     this.initEvent(type, b, c);
-    this.data = data; this.locale = locale || '';
+    this.view = v || null;
+    this.data = (data === undefined) ? '' : data; this.locale = locale || '';
 };
 window.TextEvent = TextEvent;
 function PointerEvent(type, opts) {
@@ -5182,6 +5184,9 @@ FormData.prototype.values = function() {
 };
 FormData.prototype[Symbol.iterator] = FormData.prototype.entries;
 window.FormData = FormData;
+// M78.111: execCommand stub（textInput 测试的依赖）。
+document.execCommand = function(cmd, ui, value) { return false; };
+window.find = window.find || function() { return false; };
 // M78.64b: multipart 解析强化——headers 数组形式 + CRLF 分割精确 +
     // 非法抛 TypeError。
     var self = this;
