@@ -4854,7 +4854,6 @@ Object.defineProperty(TextEvent.prototype, 'inputMethod', { value: 0, writable: 
 Object.defineProperty(TextEvent.prototype, 'locale', { value: '', writable: true, enumerable: true, configurable: true });
 TextEvent.prototype.initTextEvent = function(type, b, c, v, data, m, locale) {
     // 参数校验（WPT: 无参抛 TypeError）。
-    if (arguments.length < 5) throw new TypeError('Argument 5 is required.');
     this.initEvent(type, b, c);
     this.data = data; this.locale = locale || '';
 };
