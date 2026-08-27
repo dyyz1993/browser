@@ -2420,9 +2420,23 @@ window.MutationObserver = function(cb) {
         if (!hasAny) {
             throw new TypeError('MutationObserver: none of childList, attributes, or characterData are true');
         }
-        // auto-enable: attributeOldValue/attributeFilter → attributes=true
-        if (('attributeOldValue' in opts) || ('attributeFilter' in opts)) opts.attributes = true;
-        if ('characterDataOldValue' in opts) opts.characterData = true;
+        // M78.95: 区分省略（auto-enable）和显式 false（throw）。
+        if (opts.attributeOldValue === true && opts.attributes === false) {
+            throw new TypeError('MutationObserver: attributeOldValue=true but attributes=false');
+        }
+        if (opts.attributeFilter && opts.attributes === false) {
+            throw new TypeError('MutationObserver: attributeFilter but attributes=false');
+        }
+        if (opts.characterDataOldValue === true && opts.characterData === false) {
+            throw new TypeError('MutationObserver: characterDataOldValue=true but characterData=false');
+        }
+        // auto-enable: attributeOldValue/attributeFilter 省略 attributes → attributes=true
+        if (('attributeOldValue' in opts) || ('attributeFilter' in opts)) {
+            if (opts.attributes === undefined) opts.attributes = true;
+        }
+        if ('characterDataOldValue' in opts) {
+            if (opts.characterData === undefined) opts.characterData = true;
+        }
         if (target && target.__nodeId !== undefined) {
             self.__targets.push(target);
             if (window.__activeObservers.indexOf(self) < 0) window.__activeObservers.push(self);
