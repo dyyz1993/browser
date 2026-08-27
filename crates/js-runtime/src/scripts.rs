@@ -5185,6 +5185,15 @@ window.FormData = FormData;
             if (value.lastIndexOf(String.fromCharCode(13, 10)) === value.length - 2) {
                 value = value.slice(0, -2);
             }
+            // M78.106: bare CR（非 CRLF）→ 非法
+            var CR = String.fromCharCode(13);
+            var LF = String.fromCharCode(10);
+            if (value.indexOf(CR + LF) < 0 && value.indexOf(CR) >= 0) {
+                throw new TypeError('FormData: bare CR in part data');
+            }
+            if (headers.indexOf(CR) >= 0 && headers.indexOf(CR + LF) < 0) {
+                throw new TypeError('FormData: bare CR in headers');
+            }
             var nm = /name="([^"]*)"/i.exec(headers);
             if (nm) {
                 try { fd.append(nm[1], value); } catch (e) {}
