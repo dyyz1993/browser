@@ -1826,8 +1826,10 @@ function __parseLoc(href) {
 function __setLocHref(u) {
     // M78: 相对 URL 解析（pushState('/x?y#z') 后 location.href 必须是绝对地址）。
     var resolved = String(u);
-    if (typeof URL === 'function' && __locHref && __locHref.indexOf('about:') !== 0) {
-        try { resolved = new URL(String(u), __locHref).href; } catch (e) {}
+    var __base = __locHref;
+    if (typeof URL === 'function' && __base) {
+        if (__base.indexOf('about:') === 0) __base = 'http://localhost/';
+        try { resolved = new URL(String(u), __base).href; } catch (e) {}
     }
     // M78: hash 变化 → 异步派发 hashchange（WPT history 系列依赖）。
     var oldHash = '';
