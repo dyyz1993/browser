@@ -3053,6 +3053,10 @@ undefined;
 #[cfg(feature = "quickjs")]
 const QUICKJS_ELEMENT_SHIM: &str = r#"
 function Element(nodeId) { this.__nodeId = nodeId; }
+Element.prototype.hasAttributes = function() {
+    var raw = (typeof __attrsOf === 'function') ? __attrsOf(this.__nodeId) : '';
+    return (raw || '').length > 0;
+};
 Element.prototype.hasAttribute = function(key) {
     var v = __getAttr(this.__nodeId, String(key));
     return v !== null && v !== undefined;
