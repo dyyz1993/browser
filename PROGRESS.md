@@ -550,6 +550,24 @@ CDP 代理 73/73）。总分 0.3334→0.42+（下轮全量复测）。
 终态 **0.658**：js 0.927 / html 0.661 / css 0.662 / webapi 0.594 /
 storage 0.399。**M78 全程 0.3334 → 0.658（+97%）**。REALITY PASS。
 
+**M78.85-99 —— 视觉验证 + 长尾深化（0.658→0.668）**：
+
+- **85：SVG 占位符精简**——`[SVG w×h]` 替代详细列表（Vue/Svelte 100+ 个
+  SVG 图标淹没正文），视觉验证确认 svelte.dev 文本从全噪声变纯正文。
+- **86：react.dev render-url 空白**——CSS-in-JS hydration 限制（记录）。
+- **87：value 反射属性位置修正**（M78.73 放错在 createHTMLDocument 内部
+  导致 getElementById("123").value=undefined）。html_dom 323。
+- **88：MutationObserver auto-enable**（presence auto-enables，区分省略
+  和显式 false）。324。
+- **89：document.location = window.location 引用。storage 41。**
+- **91：frames Proxy iframe contentWindow 索引访问。**
+- **92：hasAttributes**（此前缺失）。html_dom 326。
+- **93：formData 非法数据检测（throw TypeError）。webapi 42。**
+- **95：MutationObserver 显式 false throw + 省略 auto-enable 区分。329。**
+- **97：outerText 直建路径推迟（需精确解析 setter 块边界）。**
+- 终态 **0.668**：js 0.927 / html 0.684 / css 0.662 / webapi 0.609 /
+  storage 0.399。**M78 全程 0.3334 → 0.668（+100%）**。REALITY PASS。
+
 **M78.15 循环 15 —— 长尾批量（html_dom +10）**：
 
 - **removeChild 规范语义**：null/非节点 TypeError；非本节点子节点
