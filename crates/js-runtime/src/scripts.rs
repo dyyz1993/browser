@@ -3591,6 +3591,12 @@ Object.defineProperty(Element.prototype, 'parentElement', {
     },
     enumerable: true, configurable: true
 });
+// M78.109: DOMStringMap 全局构造器（WPT dataset 断言；M78.72 放错位置修正）。
+window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
+Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
+Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
+    __removeAttr(this.__nodeId, String(name));
+};
 // M78.108: Element 实例也能访问 Node 常量（WPT Node-constants 断言）。
 (function() {
     var nodeConsts = { ELEMENT_NODE:1, ATTRIBUTE_NODE:2, TEXT_NODE:3,
@@ -4673,11 +4679,6 @@ document.createHTMLDocument = function(title) {
     d.body = d.createElement('body');
     d.documentElement = d.createElement('html');
     // M78.73: 表单反射属性移到全局区域（M78.87 修正）。
-// M78.72: DOMStringMap 全局构造器 + dataset remove 方法。
-window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
-Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
-Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
-    __removeAttr(this.__nodeId, String(name));
 };
 // M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
     d.title = String(title === undefined ? '' : title === null ? 'null' : title).replace(/\s+/g, ' ').trim();

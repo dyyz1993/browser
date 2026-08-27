@@ -3,7 +3,7 @@
  "revisions": {
   "test262": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "wpt": "7b4ed9fa6c53369585e1e9592ac304b0cb674155",
-  "locked_at": "2026-08-20"
+  "locked_at": "2026-08-28"
  },
  "declarations": {
   "test262_modes": "单模式（sloppy 默认；onlyStrict 用 strict）——PARTIAL 已声明",
