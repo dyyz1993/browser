@@ -1817,7 +1817,17 @@ function __parseLoc(href) {
         set: function(h) {
             var v = String(h);
             if (v.charAt(0) !== '#') v = '#' + v;
-            __setLocHref(__locHref.split('#')[0] + v);
+            // M78.119: hash 值 URL 编码（空格等不兼容字符——WPT 断言）。
+            var encoded = '';
+            for (var hi = 1; hi < v.length; hi++) {
+                var ch = v.charAt(hi);
+                var code = v.charCodeAt(hi);
+                var safe = (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+                    || (code >= 48 && code <= 57)
+                    || '-_.!~*\'()/?:@&=+$,#'.indexOf(ch) >= 0;
+                encoded += safe ? ch : encodeURIComponent(ch);
+            }
+            __setLocHref(__locHref.split('#')[0] + '#' + encoded);
         },
         enumerable: true, configurable: true
     });

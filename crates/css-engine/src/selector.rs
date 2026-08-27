@@ -499,54 +499,102 @@ fn element_lang(tree: &Tree, id: NodeId) -> Option<String> {
     None
 }
 
-/// M78.78: dir="auto" 的内容方向探测——首个强方向字符
-/// （简化 bidi：ASCII 字母→ltr，阿拉伯/希伯来→rtl，其他→ltr）。
+/// dir 属性的已定义值："ltr" / "rtl" / "auto"（trim + ASCII 不区分大小写）。
+/// 无效值（如空串 `dir=""`）或缺失返回 `None`——规范中的 Undefined state，
+/// 不产生方向隔离，方向性继续向父级继承。
+/// <https://html.spec.whatwg.org/multipage/dom.html#attr-dir-state>
+fn defined_dir_value(attrs: &[(String, String)]) -> Option<String> {
+    attrs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("dir"))
+        .map(|(_, v)| v.trim().to_lowercase())
+        .filter(|d| d == "ltr" || d == "rtl" || d == "auto")
+}
+
+/// M78.78: dir="auto" 的内容方向探测——HTML 规范的 first-strong 扫描
+/// （"contained text auto directionality"）：
+/// 按文档顺序遍历后代，首个强方向字符（bidi 类型 L / AL / R）决定方向；
+/// 无强字符（neutral）→ 默认 "ltr"。
+/// <https://html.spec.whatwg.org/multipage/dom.html#auto-directionality>
 fn dir_auto_content_direction(tree: &Tree, id: NodeId) -> String {
-    let text = collect_text_for_dir(tree, id);
-    for ch in text.chars() {
-        let c = ch as u32;
-        // 阿拉伯文 U+0600-U+06FF / 希伯来 U+0590-U+05FF → rtl
-        if (0x0600..=0x06FF).contains(&c) || (0x0590..=0x05FF).contains(&c) {
-            return "rtl".to_string();
-        }
-        // ASCII 字母 → ltr
-        if ch.is_ascii_alphabetic() {
-            return "ltr".to_string();
-        }
-    }
-    "ltr".to_string()
+    dir_first_strong(tree, id).unwrap_or_else(|| "ltr".to_string())
 }
 
-fn collect_text_for_dir(tree: &Tree, id: NodeId) -> String {
-    let mut out = String::new();
-    collect_text_dir_inner(tree, id, &mut out);
-    out
-}
-
-fn collect_text_dir_inner(tree: &Tree, id: NodeId, out: &mut String) {
+/// first-strong 递归扫描：返回子树内首个强方向字符的方向，`None` = neutral。
+///
+/// 规范跳过规则：`bdi` / `script` / `style` / `textarea` 以及**任何带已定义
+/// dir 属性（ltr/rtl/auto）的后代元素**的整个子树都不参与父级的扫描——
+/// 它们各自独立解析方向性。无效 dir 值（Undefined state）不隔离，照常深入。
+/// （WPT css/selectors/dir-selector-auto.html：div[dir=auto] 内含
+/// div[dir=rtl]ת + div"a" 时方向为 ltr，靠的就是这条跳过规则。）
+fn dir_first_strong(tree: &Tree, id: NodeId) -> Option<String> {
     for &child in tree.children_of(id) {
         match tree.data(child) {
-            NodeData::Text(s) => out.push_str(s),
-            NodeData::Element { .. } => collect_text_dir_inner(tree, child, out),
+            NodeData::Text(s) => {
+                for ch in s.chars() {
+                    if let Some(d) = strong_char_direction(ch) {
+                        return Some(d.to_string());
+                    }
+                }
+            }
+            NodeData::Element { tag, attrs } => {
+                let t = tag.as_str();
+                if matches!(t, "bdi" | "script" | "style" | "textarea")
+                    || defined_dir_value(attrs).is_some()
+                {
+                    continue; // 隔离子树，整体跳过
+                }
+                if let Some(d) = dir_first_strong(tree, child) {
+                    return Some(d);
+                }
+            }
             _ => {}
         }
     }
+    None
 }
 
-/// 元素的方向：从自身向上找最近的 dir="ltr|rtl"（auto 不参与匹配，近似）。
-/// HTML 规范：无任何 dir 祖先时默认方向性为 ltr。
+/// Unicode bidi 首个强字符判定（近似 UAX#9 的 L / AL / R 类）：
+/// 阿拉伯 / 希伯来等 RTL 文字系统 → "rtl"；其余字母（拉丁/希腊/西里尔等）→ "ltr"；
+/// 数字 / 标点 / 空白是弱或中性字符，不决定方向（返回 `None`）。
+fn strong_char_direction(ch: char) -> Option<&'static str> {
+    const RTL_RANGES: &[(u32, u32)] = &[
+        (0x0590, 0x05FF), // Hebrew
+        (0x0600, 0x06FF), // Arabic
+        (0x0700, 0x08FF), // Syriac / Thaana / Nko / Samaritan / Mandaic / Arabic ext
+        (0xFB1D, 0xFDFF), // Hebrew presentation forms + Arabic presentation forms-A
+        (0xFE70, 0xFEFF), // Arabic presentation forms-B
+    ];
+    let c = ch as u32;
+    if RTL_RANGES.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)) {
+        return Some("rtl");
+    }
+    if ch.is_alphabetic() {
+        return Some("ltr");
+    }
+    None
+}
+
+/// 元素的方向：HTML 规范 directionality 算法（近似）。
+/// 自身向上找最近的已定义 dir（ltr/rtl 直接定方向；auto 走 first-strong 扫描）；
+/// `bdi` 无 dir 属性时按 auto 语义解析；无效/缺失 dir 一路向父级继承；
+/// 无任何 dir 祖先时默认 ltr。
+/// JS 侧 `el.dir = "ltr"` / `el.innerText = "ת"` 等改动落在 arena 树的
+/// 属性/文本节点上，本函数实时读取，天然反映动态变更。
+/// <https://html.spec.whatwg.org/multipage/dom.html#the-directionality>
 fn element_dir(tree: &Tree, id: NodeId) -> Option<String> {
     let mut cur = Some(id);
     while let Some(nid) = cur {
-        if let NodeData::Element { attrs, .. } = tree.data(nid) {
-            if let Some((_, v)) = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("dir")) {
-                let d = v.trim().to_lowercase();
-                if d == "ltr" || d == "rtl" {
-                    return Some(d);
-                }
-                if d == "auto" {
-                    // M78.78: dir="auto" 探测内容方向。
-                    return Some(dir_auto_content_direction(tree, nid));
+        if let NodeData::Element { tag, attrs, .. } = tree.data(nid) {
+            match defined_dir_value(attrs).as_deref() {
+                Some(d @ ("ltr" | "rtl")) => return Some(d.to_string()),
+                // M78.78: dir="auto" 探测内容方向。
+                Some("auto") => return Some(dir_auto_content_direction(tree, nid)),
+                // Undefined state：无效/缺失 dir，向父级继承。
+                _ => {
+                    if tag.eq_ignore_ascii_case("bdi") {
+                        return Some(dir_auto_content_direction(tree, nid));
+                    }
                 }
             }
         }
@@ -1008,6 +1056,134 @@ mod tests {
         );
         assert!(Selector::parse("p:dir(rtl)").unwrap().matches(&t, p));
         assert!(!Selector::parse("p:dir(ltr)").unwrap().matches(&t, p));
+    }
+
+    // ---- WPT css/selectors/dir-selector-auto.html ----
+
+    /// 测试内联小工具：模拟 JS `el.dir = value`（属性写回 arena 树）。
+    fn js_set_dir(t: &mut Tree, id: NodeId, v: &str) {
+        if let NodeData::Element { attrs, .. } = &mut t.get_mut(id).data {
+            match attrs.iter_mut().find(|(k, _)| k == "dir") {
+                Some(pair) => pair.1 = v.to_string(),
+                None => attrs.push(("dir".into(), v.into())),
+            }
+        }
+    }
+
+    /// 测试内联小工具：模拟 JS `el.innerText = text`（改 Text 节点数据）。
+    fn js_set_text(t: &mut Tree, id: NodeId, text: &str) {
+        if let NodeData::Text(s) = &mut t.get_mut(id).data {
+            *s = text.to_string();
+        }
+    }
+
+    /// WPT div3 场景：first-strong 扫描按文档顺序进行，带已定义 dir 的子树
+    /// 整体跳过；`dir=""`（Undefined）不隔离；appendChild 重排改变树序。
+    #[test]
+    fn dir_auto_skips_defined_dir_subtrees_and_follows_tree_order() {
+        let el = |tag: &str, attrs: Vec<(&str, &str)>| NodeData::Element {
+            tag: tag.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        // div3[dir=auto] > div3_1[dir=rtl]("ת") + div3_2("a")
+        let div3 = t.insert(Some(root), el("div", vec![("id", "div3"), ("dir", "auto")]));
+        let div3_1 = t.insert(
+            Some(div3),
+            el("div", vec![("id", "div3_1"), ("dir", "rtl")]),
+        );
+        let text_he = t.insert(Some(div3_1), NodeData::Text("\u{05EA}".into()));
+        let div3_2 = t.insert(Some(div3), el("div", vec![("id", "div3_2")]));
+        let _ = t.insert(Some(div3_2), NodeData::Text("a".into()));
+
+        // Initial：div3_1 有显式 dir=rtl → 其希伯来文本被跳过，首个强字符是 "a" → ltr。
+        assert!(Selector::parse("#div3:dir(ltr)").unwrap().matches(&t, div3));
+        assert!(!Selector::parse("#div3:dir(rtl)").unwrap().matches(&t, div3));
+        assert!(Selector::parse("#div3_1:dir(rtl)")
+            .unwrap()
+            .matches(&t, div3_1));
+        assert!(Selector::parse("#div3_2:dir(ltr)")
+            .unwrap()
+            .matches(&t, div3_2));
+
+        // Updated：JS `div3_1.dir = ""` → Undefined state，不再隔离 → 希伯来文
+        // 是树序首个强字符 → div3 变 rtl。
+        js_set_dir(&mut t, div3_1, "");
+        assert!(Selector::parse("#div3:dir(rtl)").unwrap().matches(&t, div3));
+        assert!(!Selector::parse("#div3:dir(ltr)").unwrap().matches(&t, div3));
+
+        // Updated：JS `div3.appendChild(div3_1)` → div3_1 移到 div3_2 之后，
+        // 树序首个强字符变 "a" → div3 回到 ltr。
+        t.get_mut(div3).children.rotate_left(1);
+        assert!(Selector::parse("#div3:dir(ltr)").unwrap().matches(&t, div3));
+        let _ = text_he; // 希伯来文本节点贯穿三个阶段始终存在
+    }
+
+    /// WPT div1 / div2 场景：JS 改 innerText / dir 属性后，:dir() 必须读到
+    /// arena 树上的最新状态；dir=auto 无强文本 → 默认 ltr；嵌套 dir=auto 隔离。
+    #[test]
+    fn dir_auto_reflects_js_text_and_dir_mutations() {
+        let el = |tag: &str, attrs: Vec<(&str, &str)>| NodeData::Element {
+            tag: tag.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        // div1[dir=auto] > div1_1("a")；div2[dir=auto] > div2_1("ת")
+        let div1 = t.insert(Some(root), el("div", vec![("id", "div1"), ("dir", "auto")]));
+        let div1_1 = t.insert(Some(div1), el("div", vec![("id", "div1_1")]));
+        let text1 = t.insert(Some(div1_1), NodeData::Text("a".into()));
+        let div2 = t.insert(Some(root), el("div", vec![("id", "div2"), ("dir", "auto")]));
+        let div2_1 = t.insert(Some(div2), el("div", vec![("id", "div2_1")]));
+        let text2 = t.insert(Some(div2_1), NodeData::Text("\u{05EA}".into()));
+        // div5[dir=auto] > span[dir=auto]("ת") —— 嵌套 auto 子树也隔离 → ltr。
+        let div5 = t.insert(Some(root), el("div", vec![("id", "div5"), ("dir", "auto")]));
+        let span5 = t.insert(Some(div5), el("span", vec![("dir", "auto")]));
+        let _ = t.insert(Some(span5), NodeData::Text("\u{05EA}".into()));
+
+        // Initial：div1 组 ltr，div2 组 rtl，div5 嵌套 auto 隔离 → ltr。
+        assert!(Selector::parse("#div1:dir(ltr)").unwrap().matches(&t, div1));
+        assert!(Selector::parse("#div1_1:dir(ltr)")
+            .unwrap()
+            .matches(&t, div1_1));
+        assert!(Selector::parse("#div2:dir(rtl)").unwrap().matches(&t, div2));
+        assert!(Selector::parse("#div2_1:dir(rtl)")
+            .unwrap()
+            .matches(&t, div2_1));
+        assert!(Selector::parse("#div5:dir(ltr)").unwrap().matches(&t, div5));
+
+        // Updated：JS `div1_1.innerText = "\u05EA"` → div1 与 div1_1 都变 rtl。
+        js_set_text(&mut t, text1, "\u{05EA}");
+        assert!(Selector::parse("#div1:dir(rtl)").unwrap().matches(&t, div1));
+        assert!(Selector::parse("#div1_1:dir(rtl)")
+            .unwrap()
+            .matches(&t, div1_1));
+
+        // Updated：JS `div1_1.dir = "ltr"` → 子树被隔离、无其他强文本 → div1
+        // 回到默认 ltr，div1_1 显式 ltr。
+        js_set_dir(&mut t, div1_1, "ltr");
+        assert!(Selector::parse("#div1:dir(ltr)").unwrap().matches(&t, div1));
+        assert!(Selector::parse("#div1_1:dir(ltr)")
+            .unwrap()
+            .matches(&t, div1_1));
+
+        // Reupdated：文本改回 "a"（div1_1 已隔离，不影响 div1）→ 两者皆 ltr。
+        js_set_text(&mut t, text1, "a");
+        assert!(Selector::parse("#div1:dir(ltr)").unwrap().matches(&t, div1));
+        assert!(Selector::parse("#div1_1:dir(ltr)")
+            .unwrap()
+            .matches(&t, div1_1));
+
+        // Updated：JS `div2_1.remove()` 模拟 —— 清空文本 → div2 无强字符 → ltr。
+        js_set_text(&mut t, text2, "");
+        assert!(Selector::parse("#div2:dir(ltr)").unwrap().matches(&t, div2));
     }
 
     #[test]
