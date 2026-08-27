@@ -2658,6 +2658,11 @@ Element.prototype.lookupNamespaceURI = function(prefix) {
     } catch (e) {}
     if (inDoc && prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
     if (inDoc && prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
+    // M78.107: createElementNS 创建的元素——从 tagName 前缀 + __namespace 匹配。
+    if (this.__namespace && this.tagName && this.tagName.indexOf(':') > 0) {
+        var tagPrefix = this.tagName.split(':')[0];
+        if (tagPrefix === prefix) return this.__namespace;
+    }
     var cur = this;
     while (cur && typeof cur.__nodeId === 'number') {
         var attrs = (typeof __attrsOf === 'function') ? __attrsOf(cur.__nodeId) : '';
@@ -4269,7 +4274,11 @@ document.createElement = function(tag) {
         : __createEl(String(tag || 'div'));
     return __makeElement(id);
 };
-document.createElementNS = function(ns, tag) { return document.createElement(tag); };
+document.createElementNS = function(ns, tag) {
+    var __el = document.createElement(tag);
+    if (ns && typeof ns === 'string') { try { el.__namespace = ns; } catch(e) {} }
+    return __el;
+};
 document.createTextNode = function(text) {
     // M78.62: 游离（__createDetachedEl）——createTextNode 的新节点不在文档中
     // （removeChild 对其应抛 NotFound；旧 __createEl 直接挂 body）。
