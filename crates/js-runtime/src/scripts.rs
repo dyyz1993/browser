@@ -2746,7 +2746,28 @@ Event.prototype.composedPath = function() {
         set: function(v) { __setAttr(this.__nodeId, 'tabindex', String(v)); },
         enumerable: true, configurable: true
     });
-    Object.defineProperty(Element.prototype, 'accessKey', {
+    // M78.87: 表单元素反射属性（value/checked/disabled/selected——M78.73 放错位置）。
+Object.defineProperty(Element.prototype, 'value', {
+    get: function() { return __getAttr(this.__nodeId, 'value') || ''; },
+    set: function(v) { __setAttr(this.__nodeId, 'value', String(v)); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'checked', {
+    get: function() { return __getAttr(this.__nodeId, 'checked') !== null; },
+    set: function(v) { if (v) __setAttr(this.__nodeId, 'checked', ''); else __removeAttr(this.__nodeId, 'checked'); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'disabled', {
+    get: function() { return __getAttr(this.__nodeId, 'disabled') !== null; },
+    set: function(v) { if (v) __setAttr(this.__nodeId, 'disabled', ''); else __removeAttr(this.__nodeId, 'disabled'); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'selected', {
+    get: function() { return __getAttr(this.__nodeId, 'selected') !== null; },
+    set: function(v) { if (v) __setAttr(this.__nodeId, 'selected', ''); else __removeAttr(this.__nodeId, 'selected'); },
+    enumerable: true, configurable: true
+});
+Object.defineProperty(Element.prototype, 'accessKey', {
         get: function() { return __getAttr(this.__nodeId, 'accesskey') || ''; },
         set: function(v) { __setAttr(this.__nodeId, 'accesskey', String(v)); },
         enumerable: true, configurable: true
@@ -4588,27 +4609,7 @@ document.createHTMLDocument = function(title) {
     d.createTextNode = document.createTextNode;
     d.body = d.createElement('body');
     d.documentElement = d.createElement('html');
-    // M78.73: 表单元素反射属性（value/checked/disabled 等——批量遗漏）。
-Object.defineProperty(Element.prototype, 'value', {
-    get: function() { return __getAttr(this.__nodeId, 'value') || ''; },
-    set: function(v) { __setAttr(this.__nodeId, 'value', String(v)); },
-    enumerable: true, configurable: true
-});
-Object.defineProperty(Element.prototype, 'checked', {
-    get: function() { return __getAttr(this.__nodeId, 'checked') !== null; },
-    set: function(v) { if (v) __setAttr(this.__nodeId, 'checked', ''); else __removeAttr(this.__nodeId, 'checked'); },
-    enumerable: true, configurable: true
-});
-Object.defineProperty(Element.prototype, 'disabled', {
-    get: function() { return __getAttr(this.__nodeId, 'disabled') !== null; },
-    set: function(v) { if (v) __setAttr(this.__nodeId, 'disabled', ''); else __removeAttr(this.__nodeId, 'disabled'); },
-    enumerable: true, configurable: true
-});
-Object.defineProperty(Element.prototype, 'selected', {
-    get: function() { return __getAttr(this.__nodeId, 'selected') !== null; },
-    set: function(v) { if (v) __setAttr(this.__nodeId, 'selected', ''); else __removeAttr(this.__nodeId, 'selected'); },
-    enumerable: true, configurable: true
-});
+    // M78.73: 表单反射属性移到全局区域（M78.87 修正）。
 // M78.72: DOMStringMap 全局构造器 + dataset remove 方法。
 window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
 Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
