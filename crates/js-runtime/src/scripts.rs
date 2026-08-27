@@ -5175,7 +5175,17 @@ window.FormData = FormData;
             var nm = /name="([^"]*)"/i.exec(headers);
             if (nm) {
                 try { fd.append(nm[1], value); } catch (e) {}
+            } else if (headers.indexOf('Content-Disposition') >= 0 || headers.indexOf('content-disposition') >= 0) {
+                // 有 Content-Disposition 但无 name → 非法数据
+                throw new TypeError('FormData: missing name in Content-Disposition');
+            } else if (value.length > 0) {
+                // 有数据但无 Content-Disposition → 非法
+                throw new TypeError('FormData: missing Content-Disposition');
             }
+        }
+        // M78.93: 空 body 无任何 part 且不为空字符串 → 非法
+        if (body.length > 0 && fd.__pairs.length === 0 && rawParts.length <= 2) {
+            throw new TypeError('FormData: no valid parts found');
         }
         return fd;
     });
