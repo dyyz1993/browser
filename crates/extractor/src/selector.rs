@@ -61,12 +61,13 @@ mod tests {
     }
 
     #[test]
-    fn query_all_attribute_selector_not_supported_matches_nothing() {
+    fn query_all_attribute_selector_matches_element() {
         let tree = parse("<a href='x'>link</a>");
-        // css-engine 不支持属性选择器：`a[href]` 会被当成 tag="a[href]"，
-        // 解析不报错（lenient），但永远匹配不到任何元素。
-        // 这正是 format_links 内部直接遍历 <a> 而不依赖属性选择器的原因。
-        let ids = query_all(&tree, "a[href]").expect("lenient parse, no error");
-        assert!(ids.is_empty(), "attribute selector matches nothing");
+        // M78: css-engine 已支持属性选择器（AttrSelector::Exists/Equals），
+        // `a[href]` 现在能真正匹配带 href 的 <a>（旧断言"匹配不到"已过时）。
+        let ids = query_all(&tree, "a[href]").expect("valid attribute selector");
+        assert_eq!(ids.len(), 1, "attribute selector matches the <a>");
+        let none = query_all(&tree, "a[title]").expect("valid attribute selector");
+        assert!(none.is_empty(), "missing attribute matches nothing");
     }
 }

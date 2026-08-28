@@ -82,6 +82,8 @@ pub enum Pseudo {
     Dir(String),
     /// `:nth-child(n)` — 仅整数形式。
     NthChild(u32),
+    /// `:nth-last-child(n)` — 仅整数形式（从末尾数）。
+    NthLastChild(u32),
     /// `:not(compound)` — 复合选择器取反。
     Not(Box<CompoundSelector>),
 }
@@ -106,6 +108,7 @@ impl fmt::Display for CompoundSelector {
                 }
                 Pseudo::Dir(d) => write!(f, ":dir({d})")?,
                 Pseudo::NthChild(n) => write!(f, ":nth-child({n})")?,
+                Pseudo::NthLastChild(n) => write!(f, ":nth-last-child({n})")?,
                 Pseudo::Not(inner) => write!(f, ":not({inner})")?,
             }
         }
@@ -463,6 +466,19 @@ fn parse_pseudo(
             }
             Ok(Pseudo::NthChild(n))
         }
+        // M78.79: :nth-last-child（WPT dir-selector-querySelector.html compound 用例）。
+        "nth-last-child" => {
+            let n: u32 = args.trim().parse().map_err(|_| {
+                format!(
+                    "unsupported :nth-last-child argument {:?} in {input:?}",
+                    args.trim()
+                )
+            })?;
+            if n == 0 {
+                return Err(format!("':nth-last-child' is 1-based in {input:?}"));
+            }
+            Ok(Pseudo::NthLastChild(n))
+        }
         _ => Err(format!("unsupported pseudo-class :{name} in {input:?}")),
     }
 }
@@ -567,6 +583,11 @@ fn strong_char_direction(ch: char) -> Option<&'static str> {
     ];
     let c = ch as u32;
     if RTL_RANGES.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)) {
+        // 阿拉伯-印度 / 扩展阿拉伯-印度数字是 bidi 弱类型（AN），
+        // first-strong 扫描必须跳过（UAX#9：强类型只有 L / AL / R）。
+        if (0x0660..=0x0669).contains(&c) || (0x06F0..=0x06F9).contains(&c) {
+            return None;
+        }
         return Some("rtl");
     }
     if ch.is_alphabetic() {
@@ -619,6 +640,26 @@ fn element_child_index(tree: &Tree, id: NodeId) -> u32 {
         }
     }
     1
+}
+
+/// 元素在父节点的元素子节点中从末尾数的 1-based 位置（`:nth-last-child`）。
+/// 父节点的最后一个元素子元素位置为 1；无父节点（游离/html）视作 1，
+/// 与 `element_child_index` 的口径一致。
+fn element_last_child_index(tree: &Tree, id: NodeId) -> u32 {
+    let parent = tree.get(id).parent;
+    let Some(pid) = parent else {
+        return 1;
+    };
+    let elems: Vec<NodeId> = tree
+        .children_of(pid)
+        .iter()
+        .copied()
+        .filter(|&c| matches!(tree.data(c), NodeData::Element { .. }))
+        .collect();
+    elems
+        .iter()
+        .position(|&c| c == id)
+        .map_or(1, |i| (elems.len() - i) as u32)
 }
 
 fn compound_matches(tree: &Tree, id: NodeId, sel: &CompoundSelector) -> bool {
@@ -702,6 +743,7 @@ fn compound_matches(tree: &Tree, id: NodeId, sel: &CompoundSelector) -> bool {
                 None => false,
             },
             Pseudo::NthChild(n) => element_child_index(tree, id) == *n,
+            Pseudo::NthLastChild(n) => element_last_child_index(tree, id) == *n,
             Pseudo::Not(inner) => !compound_matches(tree, id, inner),
         };
         if !ok {
@@ -1198,6 +1240,77 @@ mod tests {
         assert!(!Selector::parse("p:nth-child(1)")
             .unwrap()
             .matches(&tree, p_out));
+    }
+
+    /// M78.79: `:nth-last-child(n)` —— 从末尾数元素兄弟位置。
+    /// fixture 复刻 WPT dir-selector-querySelector.html：outer 下 5 个 div，
+    /// `:nth-last-child(3):dir(rtl)` 命中第 3 个（dir=rtl）。
+    #[test]
+    fn nth_last_child_counts_element_siblings_from_end() {
+        let el = |tag: &str, attrs: Vec<(&str, &str)>| NodeData::Element {
+            tag: tag.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let outer = t.insert(Some(root), el("div", vec![("id", "outer")]));
+        let kids: Vec<NodeId> = ["", "ltr", "rtl", "lol", "auto"]
+            .iter()
+            .enumerate()
+            .map(|(i, dir)| {
+                t.insert(
+                    Some(outer),
+                    el("div", vec![("id", &format!("d{i}")), ("dir", *dir)]),
+                )
+            })
+            .collect();
+        // 元素子序列 d0..d4：倒数第 3 = d2（dir=rtl）。
+        assert!(Selector::parse(":nth-last-child(3):dir(rtl)")
+            .unwrap()
+            .matches(&t, kids[2]));
+        assert!(!Selector::parse(":nth-last-child(3):dir(ltr)")
+            .unwrap()
+            .matches(&t, kids[2]));
+        // 末位 d4（dir=auto 空内容 → ltr）：nth-last-child(1)。
+        assert!(Selector::parse(":nth-last-child(1):dir(ltr)")
+            .unwrap()
+            .matches(&t, kids[4]));
+        // 首位 d0：nth-last-child(5)。
+        assert!(Selector::parse(":nth-last-child(5)")
+            .unwrap()
+            .matches(&t, kids[0]));
+        // 0-based 与非整数拒绝。
+        assert!(Selector::parse(":nth-last-child(0)").is_err());
+        assert!(Selector::parse(":nth-last-child(2n)").is_err());
+    }
+
+    /// first-strong 扫描跳过阿拉伯-印度数字（bidi 弱类型 AN）：
+    /// "٥a" 的首个强字符是拉丁 a → ltr；纯 "٥" 无强字符 → 默认 ltr。
+    /// （若误把 U+0660-0669 当 RTL 强字符，两个断言都会变 rtl。）
+    #[test]
+    fn dir_auto_skips_arabic_indic_digits() {
+        let el = |tag: &str, attrs: Vec<(&str, &str)>| NodeData::Element {
+            tag: tag.into(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let d1 = t.insert(Some(root), el("div", vec![("id", "d1"), ("dir", "auto")]));
+        t.insert(Some(d1), NodeData::Text("\u{0665}a".into())); // ٥a
+        let d2 = t.insert(Some(root), el("div", vec![("id", "d2"), ("dir", "auto")]));
+        t.insert(Some(d2), NodeData::Text("\u{0665}".into())); // ٥
+        assert!(Selector::parse("#d1:dir(ltr)").unwrap().matches(&t, d1));
+        assert!(Selector::parse("#d2:dir(ltr)").unwrap().matches(&t, d2));
+        // 对照：紧随其后的真阿拉伯字母（U+0627 ا）仍是 rtl 强字符。
+        let d3 = t.insert(Some(root), el("div", vec![("id", "d3"), ("dir", "auto")]));
+        t.insert(Some(d3), NodeData::Text("\u{0665}\u{0627}".into())); // ٥ا
+        assert!(Selector::parse("#d3:dir(rtl)").unwrap().matches(&t, d3));
     }
 
     #[test]

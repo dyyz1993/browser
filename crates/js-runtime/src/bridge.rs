@@ -1213,7 +1213,14 @@ fn find_by_selector(tree: &Tree, sel: &str) -> Option<NodeId> {
     // id 选择器短路：仅当选择器是纯 id（#xxx，不含空格/组合器）时才走快路径。
     // 否则 "#dyn1 .p" 这种后代选择器会被误判：strip_prefix('#')="dyn1 .p"
     // 再当 id 去找，必然落空。M71.3 GAP-I。
-    if !sel.contains(' ') && !sel.contains('+') {
+    // M78.130: 含 : . [ # 的复杂选择器也必须走 css-engine（"#div1:dir(ltr)"
+    // 被当纯 id 查找直接 return None——:dir() 系列 21 个 WPT 全军覆没）。
+    if !sel.contains(' ')
+        && !sel.contains('+')
+        && !sel.contains(':')
+        && !sel.contains('.')
+        && !sel.contains('[')
+    {
         if let Some(tag) = sel.strip_prefix('#') {
             return find_by_id(tree, tag);
         }
@@ -1243,7 +1250,13 @@ fn find_all_by_selector(tree: &Tree, sel: &str) -> Vec<NodeId> {
     let sel = sel.trim();
     // id 选择器短路：仅当选择器是纯 id（不含空格/组合器）时走快路径。
     // 含空格的复合选择器（如 "#dyn1 .p"）不能走 id 快路径，否则误判。M71.3 GAP-I。
-    if !sel.contains(' ') && !sel.contains('+') {
+    // M78.130: 含 : . [ 的复杂选择器走 css-engine（同 find_by_selector）。
+    if !sel.contains(' ')
+        && !sel.contains('+')
+        && !sel.contains(':')
+        && !sel.contains('.')
+        && !sel.contains('[')
+    {
         if let Some(tag) = sel.strip_prefix('#') {
             // id 选择器最多一个
             if let Some(id) = find_by_id(tree, tag) {
@@ -1352,6 +1365,13 @@ fn set_text(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<J
 }
 
 fn set_text_inner(tree: &mut Tree, id: NodeId, text: &str) {
+    // M78.128: id 本身是 Text 节点时直接改 data——normalize 合并相邻文本时
+    // 目标就是 Text 节点，旧"清子建子"把合并值挂成 Text 的子节点（序列化
+    // 永远不可达），第二个文本又被删，内容即丢失。
+    if let NodeData::Text(t) = &mut tree.get_mut(id).data {
+        *t = text.into();
+        return;
+    }
     tree.get_mut(id).children.clear();
     tree.insert(Some(id), NodeData::Text(text.into()));
 }

@@ -1612,6 +1612,40 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 教训：DOMStringMap 构造器在 createHTMLDocument 内部是**设计决定**而非
   放错——它只应在子文档场景可用。
 
+**M78.110-130 —— 批 20-23 汇总（0.672→0.783，单批 23 +0.098）**：
+
+- **126：createHTMLDocument 游离语义**——子文档 createElement/createTextNode/
+  createComment 全走 `__createDetachedEl` + 挂 `__ownerDoc`（旧 `__createEl`
+  直接挂主文档 body，body.removeChild 不抛 NotFound；text 的 ownerDocument
+  断言失败）。html_dom +7。
+- **127：WebIDL 接口对象 configurable 化**——7 个顶层 function 声明
+  （Event/CustomEvent/Element/Text/Comment/TreeWalker/DOMTokenList）转
+  `globalThis.X = function X` 赋值 + XHR shim 末尾统一 defineProperty
+  （enumerable:false, configurable:true）。**赋值不提升**：Element/Event
+  必须前置到 GLOBAL shim 顶部（globals 段 eval 期引用）。html_dom +8。
+- **128：set_text_inner Text 分支**——id 本身是 Text 节点时直接改 data
+  （旧"清子建子"把 normalize 合并值挂成 Text 的子节点，序列化不可达，
+  outerText 合并丢内容）。连带：outerText 游离抛 NoModificationAllowed、
+  SVG/MathML no-op、localName getter、childNodes 返回 `__makeElement`
+  包装（裸 NodeId 数字上 localName/data 全 undefined）、textContent=''
+  清子不留空 Text。html_dom outertext 9→3。
+- **129（子任务 B）：formData 严格状态机**——multipart body 必须 dash-boundary
+  开头，delimiter 后仅 padding+CRLF/--，bare CR/LF、缺 Content-Disposition
+  一律 reject；合法空表单 resolve 空 FormData；initTextEvent data 缺省转
+  'undefined' 字符串；dispatchEvent 三阶段补 window/document 传播路径 +
+  capture 标志 + stopPropagation 延迟生效。webapi 44→55/69。
+- **130（子任务 A 诊断 + 主线程落地）：querySelector id 快路径修复**——
+  `#div1:dir(ltr)` 被 strip_prefix('#') 当纯 id 查找直接 return None，
+  css-engine 从未被调用（:dir() 系列全军覆没）。快路径收紧为纯 id（不含
+  `: . [`），css_selector 45→67/68（+22）。附带 Element.remove 真实现
+  （旧 no-op）、:nth-last-child 解析+匹配、first-strong 排除阿拉伯-印度
+  数字（AN 是 bidi 弱类型）。
+- **教训（storage 虚惊）**：`--repeat` 显示的 `45/210` 是 WPT 部分，+73
+  cdp-proxy 并入后落盘 118/283——读分必须看 save 行/agg，别看轮次行。
+- 终态 **0.783**（js 0.927 / html 0.754 / css 0.985 / webapi 0.797 /
+  storage 0.417）。**M78 全程 0.3334 → 0.783（+135%）**。REALITY PASS，
+  762 cargo tests 全绿，二进制 9.6MB，冷启动 364ms。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

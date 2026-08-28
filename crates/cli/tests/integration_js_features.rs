@@ -695,18 +695,21 @@ document.getElementById('out').textContent = 'QS_' + (span ? span.textContent : 
 #[test]
 fn web_api_create_element_ns() {
     // M62: document.createElementNS（Vue/React SVG/MathML 元素创建）
+    // M78.125 后对齐规范：非 HTML 命名空间保留原始大小写（SVG 元素 tagName
+    // 不大写——WPT Element-tagName 断言），HTML 命名空间仍大写。
     let html = r#"<!DOCTYPE html><html><body>
 <div id="out">FAIL</div>
 <script>
 var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-document.getElementById('out').textContent = 'NS_' + svg.tagName;
+var div = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+document.getElementById('out').textContent = 'NS_' + svg.tagName + '_' + div.tagName;
 </script></body></html>"#;
     let path = write_tmp(html);
     bin()
         .args(["render-script", &path, "--width", "120"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("NS_SVG"));
+        .stdout(predicate::str::contains("NS_svg_DIV"));
     let _ = std::fs::remove_file(&path);
 }
 

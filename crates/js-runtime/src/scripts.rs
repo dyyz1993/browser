@@ -1026,11 +1026,12 @@ fn run_scripts_quickjs(
         .map(|(_, js)| js.as_str())
         .collect::<Vec<_>>()
         .join("\n;\n");
-    if let Err(e) = engine.eval(&combined_shim) {
+    // M78.128-debug: eval_safe 打印异常 message（eval 的 Debug 格式只有 Exception）。
+    if let Err(e) = engine.eval_safe(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
         // M78.36-debug: 逐段定位 + 段内二分找首个失败行。
         for (name, js) in &shims {
-            if let Err(se) = engine.eval(js) {
+            if let Err(se) = engine.eval_safe(js) {
                 eprintln!("[js-runtime] shim 段 [{name}] 失败: {se}");
                 let lines: Vec<&str> = js.split('\n').collect();
                 let (mut lo, mut hi) = (0usize, lines.len() - 1);
@@ -1609,6 +1610,28 @@ const QUICKJS_GLOBAL_SHIM: &str = r#"
 // window 全局对象
 var window = globalThis;
 var self = globalThis;
+// M78.127: Element 构造器必须最先定义（赋值不提升——后续 Text/Comment/
+// HTMLElement 等在 eval 期就引用 Element；顶层 function 声明有提升但
+// non-configurable，WPT interface-objects 要求可 delete）。
+// Event 同理：globals 段 __StorageEvent.prototype 在 eval 期引用 Event，
+// 之前靠合并 eval 的函数提升（XHR 段声明）兜底；转赋值后须在此预定义
+// （XHR 段稍后会用完整版本再次覆盖 + 挂原型静态方法）。
+globalThis.Element = function Element(nodeId) { this.__nodeId = nodeId; };
+globalThis.Event = function Event(type, opts) {
+    opts = opts || {};
+    this.type = String(type);
+    this.target = null;
+    this.currentTarget = null;
+    this.bubbles = !!opts.bubbles;
+    this.cancelable = !!opts.cancelable;
+    this.composed = !!opts.composed;
+    this.eventPhase = 2;
+    this.defaultPrevented = false;
+    this.isTrusted = false;
+    this.cancelBubble = false;
+    this.returnValue = true;
+    this.timeStamp = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+};
 	var top = globalThis;
 	var parent = globalThis;
 	
@@ -1969,10 +1992,15 @@ window.console = {
 // window EventTarget 方法（很多框架在 window 上注册事件）
 // 用全局变量存监听器，避免 this 绑定问题
 var __winListeners = {};
-window.addEventListener = function(type, cb) {
+// M78.129: 与 __winListeners[type][i] 一一对应的 capture 标志（三阶段过滤用）。
+var __winListenersCap = {};
+window.addEventListener = function(type, cb, opt) {
     if (cb === null || cb === undefined) return;
+    var wcap = (opt === true) || !!(opt && opt.capture);
     if (!__winListeners[type]) __winListeners[type] = [];
+    if (!__winListenersCap[type]) __winListenersCap[type] = [];
     __winListeners[type].push(cb);
+    __winListenersCap[type].push(wcap);
 };
 window.removeEventListener = function(type, cb) {};
 window.dispatchEvent = function(ev) {
@@ -2830,11 +2858,13 @@ Object.defineProperty(Element.prototype, 'accessKey', {
 })();
 // M78.18: Text/Comment 全局构造器（insertion-removing-steps 系列依赖
 // `new Text(...)`）。
-function Text(data) { var n = document.createTextNode(data); return n; }
+// M78.127: WebIDL 接口用赋值定义（configurable），顶层 function 声明是
+// non-configurable 且无法 redefine（delete 返回 false，WPT interface-objects）。
+globalThis.Text = function Text(data) { var n = document.createTextNode(data); return n; };
 Text.prototype = Object.create(Element.prototype);
 Object.defineProperty(Text.prototype, Symbol.toStringTag, { value: 'Text' });
 window.Text = Text;
-function Comment(data) { var n = document.createComment(data); return n; }
+globalThis.Comment = function Comment(data) { var n = document.createComment(data); return n; };
 Comment.prototype = Object.create(Element.prototype);
 Object.defineProperty(Comment.prototype, Symbol.toStringTag, { value: 'Comment' });
 window.Comment = Comment;
@@ -3108,7 +3138,8 @@ undefined;
 /// M66-B: QuickJS Element shim（和 boa element_shim 的核心逻辑相同）。
 #[cfg(feature = "quickjs")]
 const QUICKJS_ELEMENT_SHIM: &str = r#"
-function Element(nodeId) { this.__nodeId = nodeId; }
+// M78.127: Element 构造器已移到 GLOBAL shim 顶部（赋值不提升，此处仅为
+// 旧定义位——所有 Element.prototype.* 挂载照常）。
 Element.prototype.hasAttributes = function() {
     var raw = (typeof __attrsOf === 'function') ? __attrsOf(this.__nodeId) : '';
     return (raw || '').length > 0;
@@ -3249,12 +3280,22 @@ Element.prototype.append = function() {
         }
     }
 };
-Element.prototype.remove = function() {};
-Element.prototype.addEventListener = function(type, cb) {
+// M78.130: remove 真摘除（旧 no-op 让 :dir() 等 first-strong 语义失效——
+// WPT dir-selector-auto: div2_1.remove() 后 div2 不再扫到希伯来文本）。
+Element.prototype.remove = function() {
+    var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
+    if (typeof pid === 'number' && pid >= 0) __removeChild(pid, this.__nodeId);
+};
+Element.prototype.addEventListener = function(type, cb, opt) {
     if (cb === null || cb === undefined) return;
+    // M78.129: 记录 capture 标志（dispatchEvent 三阶段过滤用）。
+    var ecapture = (opt === true) || !!(opt && opt.capture);
     if (!this.__listeners) this.__listeners = {};
     if (!this.__listeners[type]) this.__listeners[type] = [];
+    if (!this.__listenerCaps) this.__listenerCaps = {};
+    if (!this.__listenerCaps[type]) this.__listenerCaps[type] = [];
     this.__listeners[type].push(cb);
+    this.__listenerCaps[type].push(ecapture);
 };
 Element.prototype.cloneNode = function(deep) {
     var tag = String(__getTag(this.__nodeId) || 'div');
@@ -3310,7 +3351,20 @@ Object.defineProperty(Element.prototype, 'tagName', {
 });
 Object.defineProperty(Element.prototype, 'textContent', {
     get: function() { return __getText(this.__nodeId); },
-    set: function(v) { __setText(this.__nodeId, String(v)); },
+    set: function(v) {
+        // M78.128: 空串清全部子节点且不留空 Text（WPT: textContent='' 后
+        // childNodes.length === 0；__setText 清子建子会留一个空 Text）。
+        var s = String(v);
+        if (s === '') {
+            while (true) {
+                var kids = (__children(this.__nodeId) || '').split(',').filter(function(x) { return x; });
+                if (!kids.length) break;
+                __removeChild(this.__nodeId, parseInt(kids[0], 10));
+            }
+            return;
+        }
+        __setText(this.__nodeId, s);
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'innerHTML', {
@@ -3489,7 +3543,7 @@ Object.defineProperty(Element.prototype, 'className', {
 });
 // M78: DOMTokenList —— 真类实现（Symbol.toStringTag + 惰性缓存 + value/迭代）。
 // WPT assert_class_string 用 {}.toString.call(obj) 检查 [object DOMTokenList]。
-function DOMTokenList(nodeId) { this.__nodeId = nodeId; }
+globalThis.DOMTokenList = function DOMTokenList(nodeId) { this.__nodeId = nodeId; };
 Object.defineProperty(DOMTokenList.prototype, Symbol.toStringTag, { value: 'DOMTokenList' });
 DOMTokenList.prototype.__tokens = function() {
     // M78.44: 去重 + 保序（DOMTokenList 语义：token 集合无重复）。
@@ -3787,7 +3841,9 @@ Object.defineProperty(Element.prototype, 'childNodes', {
         try {
             var cs = __children(this.__nodeId);
             var ids = cs ? cs.split(',').filter(function(s) { return s; }) : [];
-            var arr = ids.map(function(s) { return parseInt(s, 10); });
+            // M78.128: 返回 Element 包装（elCache 缓存）——裸 NodeId 数字上
+            // localName/data/nodeType 等全部 undefined（WPT outerText 系列断言）。
+            var arr = ids.map(function(s) { return __makeElement(parseInt(s, 10)); });
             arr.item = function(i) { return (i >= 0 && i < arr.length) ? arr[i] : null; };
             return arr;
         } catch(e) { return []; }
@@ -3809,50 +3865,86 @@ document.importNode = function(node, deep) {
     try { return node.cloneNode(deep !== false); } catch(e) { return null; }
 };
 Element.prototype.removeEventListener = function(type, cb) {};
+// M78.129: capture 标志登记（__listenerCaps[type][i] 与 __listeners[type][i] 一一对应）。
+// 供 dispatchEvent 三阶段过滤：capture listener 只在 capture 相位触发，
+// 非 capture 只在 at-target/bubble 相位触发（at-target 全部按注册序触发）。
 Element.prototype.dispatchEvent = function(ev) {
     // M78.113: 三阶段 dispatch（capture → target → bubble）。
+    // M78.129: 路径补 window/document（DOM 传播路径：window → document →
+    // 根元素 → … → 父节点 → target，bubble 反向）；stopPropagation 语义改为
+    // 延迟生效（本节点剩余 listener 照跑，之后不再前进）；stopImmediatePropagation
+    // 立即终止（本节点剩余 listener 也不跑）。
     if (!ev) return true;
     ev.target = this;
-    // 构建 ancestor 链（从 target 到根）
-    var chain = [];
+    // 元素祖先链（target 在最前；父节点非元素 = document 节点 → 链到此为止）
+    var chain = [this];
     var cur = this;
-    while (cur) { chain.push(cur); try { var pid = __getParent(cur.__nodeId); cur = (pid >= 0) ? __makeElement(pid) : null; } catch(pe) { break; } }
-    // Phase 1: capture（从根到 target 的父节点）
-    for (var ci = chain.length - 1; ci > 0; ci--) {
-        var cap = chain[ci];
-        ev.currentTarget = cap; ev.eventPhase = Event.CAPTURING_PHASE;
-        if (cap.__listeners && cap.__listeners[ev.type]) {
-            var capCbs = cap.__listeners[ev.type];
-            for (var cj = 0; cj < capCbs.length; cj++) {
-                try { capCbs[cj].call(cap, ev); } catch(e) {}
-                if (ev.__immediate || ev.__stopPropagation || ev.cancelBubble) return true;
+    var guard = 0;
+    while (guard++ < 64) {
+        var pid;
+        try { pid = __getParent(cur.__nodeId); } catch (pe) { break; }
+        if (typeof pid !== 'number' || pid < 0) break;
+        var ptag;
+        try { ptag = __getTag(pid); } catch (te) { break; }
+        if (typeof ptag !== 'string' || !ptag) break;
+        try { cur = __makeElement(pid); } catch (me) { break; }
+        if (!cur) break;
+        chain.push(cur);
+    }
+    function __stopped() {
+        return !!(ev.__immediate || ev.__stopPropagation || ev.cancelBubble);
+    }
+    // 在一个节点上触发一次 visit。repPhase = eventPhase 上报值；
+    // filter: 1=只 capture listener，3=只非 capture，2=不过滤。
+    function __visit(target, repPhase, filter, lst, caps) {
+        if (!lst) return;
+        ev.currentTarget = target;
+        ev.eventPhase = repPhase;
+        var snap = lst.slice();
+        for (var k = 0; k < snap.length; k++) {
+            if (filter !== 2 && caps) {
+                var isc = !!caps[k];
+                if (filter === 1 ? !isc : isc) continue;
             }
+            try { snap[k].call(target, ev); } catch (e) {}
+            if (ev.__immediate) break;
         }
     }
-    // Phase 2: target
-    ev.currentTarget = this; ev.eventPhase = Event.AT_TARGET;
-    if (this.__listeners && this.__listeners[ev.type]) {
-        var tCbs = this.__listeners[ev.type];
-        for (var ti = 0; ti < tCbs.length; ti++) {
-            try { tCbs[ti].call(this, ev); } catch(e) {}
-            if (ev.__immediate || ev.__stopPropagation || ev.cancelBubble) return true;
-        }
+    function __elVisit(target, repPhase, filter) {
+        if (!target || !target.__listeners) return;
+        __visit(target, repPhase, filter, target.__listeners[ev.type],
+            (target.__listenerCaps && target.__listenerCaps[ev.type]) || null);
     }
-    // Phase 3: bubble（从 target 父到根）
+    var __winLst = (typeof __winListeners !== 'undefined' && __winListeners[ev.type]) || null;
+    var __winCap = (typeof __winListenersCap !== 'undefined' && __winListenersCap[ev.type]) || null;
+    var __docLst = (document.__listeners && document.__listeners[ev.type]) || null;
+    var __docCap = (document.__listenerCaps && document.__listenerCaps[ev.type]) || null;
+    // Phase 1: capture（window → document → 根 → target 的父节点）
+    if (!__stopped()) __visit(window, 1, 1, __winLst, __winCap);
+    if (!__stopped()) __visit(document, 1, 1, __docLst, __docCap);
+    for (var ci = chain.length - 1; ci >= 1; ci--) {
+        if (__stopped()) break;
+        __elVisit(chain[ci], 1, 1);
+    }
+    // Phase 2: target 双 visit（capture listener → 非 capture listener，均报
+    // AT_TARGET；bubbles=false 也触发；两次 visit 之间检查 stop 标志——
+    // WPT Event-stopPropagation-cancel-bubbling）。
+    if (!__stopped()) __elVisit(this, 2, 1);
+    if (!__stopped()) __elVisit(this, 2, 3);
+    // Phase 3: bubble（target 父 → 根 → document → window，仅 bubbles=true）
     if (ev.bubbles) {
         for (var bi = 1; bi < chain.length; bi++) {
-            var bub = chain[bi];
-            ev.currentTarget = bub; ev.eventPhase = Event.BUBBLING_PHASE;
-            if (bub.__listeners && bub.__listeners[ev.type]) {
-                var bubCbs = bub.__listeners[ev.type];
-                for (var bj = 0; bj < bubCbs.length; bj++) {
-                    try { bubCbs[bj].call(bub, ev); } catch(e) {}
-                    if (ev.__immediate || ev.__stopPropagation || ev.cancelBubble) return true;
-                }
-            }
-            if (ev.__stopPropagation || ev.cancelBubble) break;
+            if (__stopped()) break;
+            __elVisit(chain[bi], 3, 3);
         }
+        if (!__stopped()) __visit(document, 3, 3, __docLst, __docCap);
+        if (!__stopped()) __visit(window, 3, 3, __winLst, __winCap);
     }
+    // M78.129: dispatch 前预设的 stop 标志抑制全部 listener（propagation-stopped）；
+    // dispatch 结束清标志——同一 event 可再次 dispatch（multiple-cancelBubble）。
+    ev.eventPhase = 0; ev.currentTarget = null;
+    ev.cancelBubble = false; ev.__stopPropagation = false;
+    try { delete ev.__immediate; } catch (de) {}
     return true;
 };
 // getComputedStyle：返回一个只读 style 对象（爬虫场景，不需像素精确）。
@@ -4066,7 +4158,14 @@ Object.defineProperty(Element.prototype, 'outerText', {
     get: function() { return this.innerText; },
     set: function(v) {
         var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
-        if (typeof pid !== 'number' || pid < 0) { this.innerText = v; return; }
+        if (typeof pid !== 'number' || pid < 0) {
+            // M78.128: 游离节点 setter 抛 NoModificationAllowedError（WPT 断言）。
+            throw new DOMException('newText argument is invalid', 'NoModificationAllowedError');
+        }
+        // M78.128: SVG/MathML 不支持 outerText——no-op（WPT: innerHTML 保持原样）。
+        var lg = (typeof this.localName === 'string') ? this.localName : String(__getTag(this.__nodeId)).toLowerCase();
+        var nsS = String(this.namespaceURI || '');
+        if (lg === 'svg' || lg === 'math' || nsS.indexOf('svg') >= 0 || nsS.indexOf('MathML') >= 0) return;
         var holder = document.createElement('span');
         holder.innerText = v;
         var kids = (__children(holder.__nodeId) || '').split(',').filter(function(x) { return x; });
@@ -4078,6 +4177,19 @@ Object.defineProperty(Element.prototype, 'outerText', {
         __normalizeParent(pid);    },
     enumerable: true, configurable: true
 });
+// M78.128: localName getter——元素小写（HTML ns）、SVG/MathML 原始大小写
+// （__origTagName，createElementNS 保留）、伪文本 #text / 伪注释 #comment。
+Object.defineProperty(Element.prototype, 'localName', {
+    get: function() {
+        if (this.__origTagName) return String(this.__origTagName);
+        var t = String((typeof __getTag === 'function') ? __getTag(this.__nodeId) : '');
+        if (!t || t === '__text__') return '#text';
+        if (t === '__comment__') return '#comment';
+        return t.toLowerCase();
+    },
+    enumerable: true, configurable: true
+});
+
 Element.prototype.replaceWith = function() {
     var pid = (typeof __getParent === 'function') ? __getParent(this.__nodeId) : -1;
     if (typeof pid !== 'number' || pid < 0) return;
@@ -4576,19 +4688,54 @@ Object.defineProperty(document, 'readyState', {
     get: function() { return 'complete'; },
     enumerable: true, configurable: true
 });
-document.addEventListener = function(type, cb) {
+document.addEventListener = function(type, cb, opt) {
+    // M78.129: 记录 capture 标志（dispatchEvent 三阶段过滤用）。
+    var dcap = (opt === true) || !!(opt && opt.capture);
     if (!this.__listeners) this.__listeners = {};
     if (!this.__listeners[type]) this.__listeners[type] = [];
+    if (!this.__listenerCaps) this.__listenerCaps = {};
+    if (!this.__listenerCaps[type]) this.__listenerCaps[type] = [];
     this.__listeners[type].push(cb);
+    this.__listenerCaps[type].push(dcap);
 };
 document.removeEventListener = function(type, cb) {};
 document.dispatchEvent = function(ev) {
-    if (this.__listeners && this.__listeners[ev && ev.type]) {
-        var cbs = this.__listeners[ev.type];
-        for (var i = 0; i < cbs.length; i++) {
-            try { cbs[i](ev); } catch(e) {}
+    // M78.129: 对齐 dispatch 语义——document 为 target（全部 listener 按注册序、
+    // AT_TARGET），bubbles=true 冒泡到 window；stop 标志生效；结束清标志
+    //（同一 event 可再次 dispatch，WPT Event-dispatch-multiple-cancelBubble）。
+    if (!ev) return true;
+    ev.target = this;
+    function __dStopped() {
+        return !!(ev.__immediate || ev.__stopPropagation || ev.cancelBubble);
+    }
+    if (!__dStopped()) {
+        ev.currentTarget = this; ev.eventPhase = 2;
+        var cbs = (this.__listeners && this.__listeners[ev.type]) || null;
+        if (cbs) {
+            var snap = cbs.slice();
+            for (var i = 0; i < snap.length; i++) {
+                try { snap[i].call(this, ev); } catch (e) {}
+                if (ev.__immediate) break;
+            }
         }
     }
+    if (ev.bubbles && !__dStopped()) {
+        ev.currentTarget = window; ev.eventPhase = 3;
+        var wcbs = (typeof __winListeners !== 'undefined' && __winListeners[ev.type]) || null;
+        var wcap = (typeof __winListenersCap !== 'undefined' && __winListenersCap[ev.type]) || null;
+        if (wcbs) {
+            var wsnap = wcbs.slice();
+            for (var wi = 0; wi < wsnap.length; wi++) {
+                if (wcap && wcap[wi]) continue;
+                try { wsnap[wi].call(window, ev); } catch (e) {}
+                if (ev.__immediate) break;
+            }
+        }
+    }
+    ev.eventPhase = 0; ev.currentTarget = null;
+    ev.cancelBubble = false; ev.__stopPropagation = false;
+    try { delete ev.__immediate; } catch (de) {}
+    return true;
 };
 // ===== M78: WPT 高频 DOM API 补齐（html_dom 类循环 5）=====
 // document.contentType（Document-contentType 系列）
@@ -4650,7 +4797,8 @@ window.frames = new Proxy([], {
 window.opener = null;
 document.scripts = document.querySelectorAll('script');
 // document.createTreeWalker：DFS 顺序的基本实现（NodeIterator 同理最小桩）。
-function TreeWalker(root, whatToShow) {
+// M78.127: 赋值定义（configurable——WPT interface-objects delete 断言）。
+globalThis.TreeWalker = function TreeWalker(root, whatToShow) {
     this.root = root; this.currentNode = root;
     this.whatToShow = whatToShow === undefined ? 0xFFFFFFFF : whatToShow;
     this.__seq = [];
@@ -4773,16 +4921,27 @@ document.createNodeIterator = function(root, whatToShow) { return new TreeWalker
 // document.createHTMLDocument：独立 document 对象（元素挂到根，不进 body）。
 document.createHTMLDocument = function(title) {
     var d = Object.create(Object.getPrototypeOf(document));
-    d.createElement = function(tag) {
-        // M78.53: 子文档元素挂 __ownerDoc（ownerDocument 断言）。
-        var el = __makeElement(__createEl(String(tag || 'div')));
+    // M78.126: 子文档 creator 全部走游离语义（__createDetachedEl）——旧版用
+    // __createEl 直接挂主文档 body，导致 body.removeChild(s) 不抛 NotFound；
+    // createTextNode 委托主文档导致 ownerDocument 断言失败（期望 d 得到主
+    // document）。全部挂 __ownerDoc，并补齐 createComment（__comment__ 伪标签）。
+    var __mkSub = function(kind, val) {
+        var id = (typeof __createDetachedEl === 'function')
+            ? __createDetachedEl(kind)
+            : __createEl(kind);
+        if (kind === '__text__' || kind === '__comment__') {
+            try { __setText(id, String(val || '')); } catch (e) {}
+        }
+        var el = __makeElement(id);
         try { el.__ownerDoc = d; } catch (e) {}
         return el;
     };
-    d.createTextNode = function(t) { var n = document.createTextNode(t); return n; };
+    d.createElement = function(tag) { return __mkSub(String(tag || 'div'), ''); };
+    d.createElementNS = function(ns, tag) { return d.createElement(tag); };
+    d.createTextNode = function(t) { return __mkSub('__text__', t); };
+    d.createComment = function(t) { return __mkSub('__comment__', t); };
     d.createDocumentFragment = function() { return document.createDocumentFragment(); };
     d.createEvent = function(t) { return new Event(t === 'UIEvents' ? 'UIEvent' : (t || '')); };
-    d.createTextNode = document.createTextNode;
     d.body = d.createElement('body');
     d.documentElement = d.createElement('html');
     // M78.73: 表单反射属性移到全局区域（M78.87 修正）。
@@ -4851,7 +5010,8 @@ undefined;
 #[cfg(feature = "quickjs")]
 const QUICKJS_XHR_SHIM: &str = r#"
 // Event 构造器（M78: 对齐 WPT 断言——Symbol.toStringTag/常量/phase 属性）
-function Event(type, opts) {
+// M78.127: 赋值定义（configurable——WPT interface-objects delete 断言）。
+globalThis.Event = function Event(type, opts) {
     opts = opts || {};
     this.type = String(type);
     this.target = null;
@@ -4892,7 +5052,7 @@ Object.defineProperty(Event.prototype, 'returnValue', {
     set: function(v) { if (v === false && this.cancelable) this.defaultPrevented = true; },
     enumerable: true, configurable: true
 });
-function CustomEvent(type, opts) {
+globalThis.CustomEvent = function CustomEvent(type, opts) {
     Event.call(this, type, opts);
     this.detail = (opts && opts.detail !== undefined) ? opts.detail : null;
 }
@@ -4992,7 +5152,10 @@ TextEvent.prototype.initTextEvent = function(type, b, c, v, data, m, locale) {
     if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
     this.initEvent(type, b, c);
     this.view = v || null;
-    this.data = data; this.locale = locale || '';
+    // M78.129: data 缺省 → 字符串 'undefined'（WebIDL DOMString 转换语义，
+    // WPT uievents/textInput/api.html 断言 initTextEvent('foo') 后 data === 'undefined'）。
+    this.data = (data === undefined) ? 'undefined' : String(data);
+    this.locale = locale || '';
 };
 window.TextEvent = TextEvent;
 function PointerEvent(type, opts) {
@@ -5236,7 +5399,20 @@ function Response(body, init) {
         forEach: function(fn) { for (var k in __hdrMap) fn(__hdrMap[k], k); }
     };
     this.__multipartBoundary = __hdrMap['content-type'] || '';
-    this.__body = (body === undefined || body === null) ? '' : String(body);
+    // M78.129: FormData body → multipart 序列化（WPT fetch response-form-data
+    // "Empty form data"：new Response(new FormData).text() 必须以 '--' 开头、
+    // 含 close delimiter，可回读解析出空 FormData）。
+    if (body && body.__pairs) {
+        var __fb = '----FormBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+        var __fparts = [];
+        for (var __fi = 0; __fi < body.__pairs.length; __fi++) {
+            __fparts.push(__fb + '\r\n' + 'Content-Disposition: form-data; name="' + body.__pairs[__fi][0] + '"\r\n\r\n' + body.__pairs[__fi][1] + '\r\n');
+        }
+        this.__body = __fparts.join('') + __fb + '--\r\n';
+        if (!__hdrMap['content-type']) __hdrMap['content-type'] = 'multipart/form-data; boundary=' + __fb.slice(2);
+    } else {
+        this.__body = (body === undefined || body === null) ? '' : String(body);
+    }
 }
 Object.defineProperty(Response.prototype, Symbol.toStringTag, { value: 'Response' });
 Response.prototype.text = function() { this.bodyUsed = true; return Promise.resolve(this.__body); };
@@ -5300,8 +5476,10 @@ window.FormData = FormData;
 // M78.111: execCommand stub（textInput 测试的依赖）。
 document.execCommand = function(cmd, ui, value) { return false; };
 window.find = window.find || function() { return false; };
-// M78.64b: multipart 解析强化——headers 数组形式 + CRLF 分割精确 +
-    // 非法抛 TypeError。
+// M78.129: multipart 严格状态机解析（对齐 fetch 规范——畸形 body 必须 reject）：
+// body 必须以 dash-boundary 开头；delimiter 后只允许 transport padding（空格/Tab）
+// + CRLF（开 part）或 '--'（关 delimiter）；每个 part 必须有带 name 的
+// Content-Disposition；关闭 delimiter 后只允许 padding + 单个 CRLF + EOF。
     var self = this;
     return Promise.resolve().then(function() {
         var ctype = (self.headers && self.headers.get) ? (self.headers.get('content-type') || '') : (self.__multipartBoundary || '');
@@ -5310,46 +5488,62 @@ window.find = window.find || function() { return false; };
         }
         var bm = /boundary=([^;\s]+)/i.exec(ctype);
         if (!bm) throw new TypeError('FormData: missing boundary');
-        var boundary = '--' + bm[1];
+        var bstr = '--' + bm[1];
+        var CRLF = String.fromCharCode(13, 10);
         var body = self.__body || '';
-        var rawParts = body.split(boundary);
+        if (body.indexOf(bstr) !== 0) throw new TypeError('FormData: missing opening boundary');
+        var pos = bstr.length;
         var fd = new FormData();
-        for (var i = 1; i < rawParts.length; i++) {
-            var part = rawParts[i];
-            if (part.indexOf('--') === 0) break;
-            if (part.indexOf(String.fromCharCode(13, 10)) === 0) part = part.slice(2);
-            var hdrEnd = part.indexOf(String.fromCharCode(13, 10, 13, 10));
-            if (hdrEnd < 0) continue;
-            var headers = part.slice(0, hdrEnd);
-            var value = part.slice(hdrEnd + 4);
-            if (value.lastIndexOf(String.fromCharCode(13, 10)) === value.length - 2) {
-                value = value.slice(0, -2);
-            }
-            // M78.106: bare CR（非 CRLF）→ 非法
-            var CR = String.fromCharCode(13);
-            var LF = String.fromCharCode(10);
-            if (value.indexOf(CR + LF) < 0 && value.indexOf(CR) >= 0) {
-                throw new TypeError('FormData: bare CR in part data');
-            }
-            if (headers.indexOf(CR) >= 0 && headers.indexOf(CR + LF) < 0) {
-                throw new TypeError('FormData: bare CR in headers');
-            }
-            var nm = /name="([^"]*)"/i.exec(headers);
-            if (nm) {
-                try { fd.append(nm[1], value); } catch (e) {}
-            } else if (headers.indexOf('Content-Disposition') >= 0 || headers.indexOf('content-disposition') >= 0) {
-                // 有 Content-Disposition 但无 name → 非法数据
-                throw new TypeError('FormData: missing name in Content-Disposition');
-            } else if (value.length > 0) {
-                // 有数据但无 Content-Disposition → 非法
-                throw new TypeError('FormData: missing Content-Disposition');
+        while (true) {
+            var pad = pos;
+            while (pad < body.length && (body.charAt(pad) === ' ' || body.charAt(pad) === '\t')) pad++;
+            if (body.indexOf(CRLF, pad) === pad) {
+                // 开 part delimiter → 解析 headers + content
+                pos = pad + 2;
+                var cd = null;
+                while (true) {
+                    if (body.indexOf(CRLF, pos) === pos) { pos += 2; break; }
+                    var le = body.indexOf(CRLF, pos);
+                    if (le < 0) throw new TypeError('FormData: unterminated part headers');
+                    var hline = body.slice(pos, le);
+                    if (hline.indexOf(String.fromCharCode(13)) >= 0 || hline.indexOf(String.fromCharCode(10)) >= 0) {
+                        throw new TypeError('FormData: bare CR or LF in part headers');
+                    }
+                    var hci = hline.indexOf(':');
+                    if (hci > 0 && hline.slice(0, hci).trim().toLowerCase() === 'content-disposition') {
+                        cd = hline.slice(hci + 1).trim();
+                    }
+                    pos = le + 2;
+                }
+                if (cd === null) throw new TypeError('FormData: part missing Content-Disposition');
+                var nm = /name="([^"]*)"/i.exec(cd);
+                if (!nm) throw new TypeError('FormData: missing name in Content-Disposition');
+                var dpos = body.indexOf(CRLF + bstr, pos);
+                if (dpos < 0) throw new TypeError('FormData: unterminated part');
+                var value = body.slice(pos, dpos);
+                // content 里 bare CR / LF（不成对 CRLF）→ 非法（保留 M78.106 语义）
+                for (var vi = 0; vi < value.length; vi++) {
+                    var vch = value.charAt(vi);
+                    if (vch === String.fromCharCode(13) && value.charAt(vi + 1) !== String.fromCharCode(10)) {
+                        throw new TypeError('FormData: bare CR in part data');
+                    }
+                    if (vch === String.fromCharCode(10) && value.charAt(vi - 1) !== String.fromCharCode(13)) {
+                        throw new TypeError('FormData: bare LF in part data');
+                    }
+                }
+                fd.append(nm[1], value);
+                pos = dpos + 2 + bstr.length;
+            } else if (body.indexOf('--', pad) === pad) {
+                // 关闭 delimiter：padding 后可选单个 CRLF，之后必须 EOF
+                var q = pad + 2;
+                while (q < body.length && (body.charAt(q) === ' ' || body.charAt(q) === '\t')) q++;
+                if (body.indexOf(CRLF, q) === q) q += 2;
+                if (q !== body.length) throw new TypeError('FormData: junk after closing boundary');
+                return fd;
+            } else {
+                throw new TypeError('FormData: malformed boundary delimiter');
             }
         }
-        // M78.93: 空 body 无任何 part 且不为空字符串 → 非法
-        if (body.length > 0 && fd.__pairs.length === 0 && rawParts.length <= 2) {
-            throw new TypeError('FormData: no valid parts found');
-        }
-        return fd;
     });
 };
 Response.error = function() { return new Response('', { status: 0 }); };
@@ -5407,6 +5601,33 @@ window.fetch = function(input, options) {
         }
     });
 };
+
+// M78.127: WebIDL 接口对象属性语义——{writable, enumerable: false, configurable: true}。
+// 顶层 function 声明是 enumerable + non-configurable（delete 返回 false），
+// WPT dom/interface-objects.html 要求 for-in 不可见且可 delete。
+(function() {
+    var ifaces = ['Event', 'CustomEvent', 'EventTarget', 'AbortController', 'AbortSignal',
+        'Node', 'Document', 'DOMImplementation', 'DocumentFragment', 'ProcessingInstruction',
+        'DocumentType', 'Element', 'Attr', 'CharacterData', 'Text', 'Comment',
+        'NodeIterator', 'TreeWalker', 'NodeFilter', 'NodeList', 'HTMLCollection', 'DOMTokenList',
+        'UIEvent', 'MouseEvent', 'KeyboardEvent', 'FocusEvent', 'WheelEvent', 'InputEvent',
+        'MutationObserver', 'NamedNodeMap', 'DOMStringMap', 'Range', 'Selection',
+        'XMLHttpRequest', 'FormData', 'Headers', 'Request', 'Response', 'FetchController',
+        'StorageEvent', 'PopStateEvent', 'HashChangeEvent', 'ProgressEvent', 'ErrorEvent',
+        'HTMLElement', 'Image', 'Option', 'WebSocket', 'MessageChannel', 'MessagePort',
+        'TextEvent', 'File', 'Blob', 'URL', 'URLSearchParams', 'DOMParser'];
+    for (var i = 0; i < ifaces.length; i++) {
+        var n = ifaces[i], v;
+        try { v = window[n]; } catch (e) { continue; }
+        if (typeof v === 'function') {
+            try {
+                Object.defineProperty(window, n, {
+                    value: v, writable: true, enumerable: false, configurable: true
+                });
+            } catch (e) {}
+        }
+    }
+})();
 
 undefined;
 "#;
@@ -5847,11 +6068,12 @@ fn eval_in_tree_quickjs(
         .map(|(_, js)| js.as_str())
         .collect::<Vec<_>>()
         .join("\n;\n");
-    if let Err(e) = engine.eval(&combined_shim) {
+    // M78.128-debug: eval_safe 打印异常 message（eval 的 Debug 格式只有 Exception）。
+    if let Err(e) = engine.eval_safe(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
         // M78.36-debug: 逐段定位 + 段内二分找首个失败行。
         for (name, js) in &shims {
-            if let Err(se) = engine.eval(js) {
+            if let Err(se) = engine.eval_safe(js) {
                 eprintln!("[js-runtime] shim 段 [{name}] 失败: {se}");
                 let lines: Vec<&str> = js.split('\n').collect();
                 let (mut lo, mut hi) = (0usize, lines.len() - 1);
