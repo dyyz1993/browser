@@ -1681,6 +1681,28 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   主线程做自由文件（engine_quickjs.rs 的 JS 补丁区）+ 预研探针清单；
   改完必须重编 release（run_compat 用 release 二进制）。
 
+**M78.133-135 —— 批 25 破 0.85（0.830→≈0.872）**：
+
+- **133：iframe 同 realm 脚本执行**——跨 realm 基建被拒（非目标）下的
+  same-realm 近似：静态 iframe load 派发时取同源 src（或 srcdoc）的内联
+  `<script>` 在当前 realm eval，执行期间打 `__inIframeScript` 标记。
+  **__fireStorage 只在标记期间派发**（规范：storage 事件不回发起窗口——
+  旧版父页自己的 clear() 抢发 key=null 干扰断言顺序，同窗口门控一并修复）。
+  连带修复 **URL shim 裸相对路径分支**（'resources/child.html' 无 ./ 前缀
+  此前原样返回，iframe src 解析全挂）。storage 131→143（+12）、webapi +1。
+- **134：focus/activeElement 追踪 + execCommand('insertText')**——focus 设
+  window.__activeEl、document.activeElement getter；insertText 写表单 value
+  或追加文本子节点并同步派发 input 事件（不派发 textInput）。webapi 56→58。
+- **135：location.protocol setter scheme 校验**——`^[a-zA-Z][a-zA-Z0-9+.-]*$`
+  语法校验，非法抛 SyntaxError DOMException。**WPT location-protocol-setter
+  48 个 "is not a scheme" 断言单点解锁**。storage 143→**190/283**。
+- 中期面板：js 0.942 / html 0.891 / css **1.000** / webapi 0.841 /
+  storage **0.671** → 总分 **≈0.872，突破 0.85 目标线**。REALITY PASS
+  ×3（iframe 执行/execCommand/protocol setter 各验一轮）+ 762 全绿。
+- 结构性剩余：non-broken 协议族 19 个（frame.contentWindow.location +
+  MessageChannel 跨 realm）、history 遍历 iframe 子集、test262 引擎语法
+  （regexp-modifiers/v-flag）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
