@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* Mirrors nextjs.org feature cards: <a> (inline tag) made a block-level
+   flex column via CSS, each card title a flex row with gap between spans.
+   M78.142 regression fixture: before the fix, flex containers grouped into
+   anonymous inline wrappers never ran flex layout — card contents piled at
+   overlapping positions and painted words interleaved into glued garbage
+   ("Addcomponentswithoutssending..."). */
+.card { display: flex; flex-direction: column; }
+.title-row { display: flex; flex-direction: row; gap: 8px; }
+</style>
+</head>
+<body>
+<a class="card" href="/docs/rsc">
+  <div class="title-row"><span>React</span><span>Server</span><span>Components</span></div>
+  <div>Add components without sending additional client-side JavaScript.</div>
+</a>
+<a class="card" href="/docs/rendering">
+  <div class="title-row"><span>Client</span><span>and</span><span>Server</span><span>Rendering</span></div>
+  <div>Flexible rendering and caching options, including ISR.</div>
+</a>
+</body>
+</html>

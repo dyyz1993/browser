@@ -4696,10 +4696,33 @@ window.getComputedStyle = function(el) {
     return styleObj;
 };
 Element.prototype.insertAdjacentHTML = function(pos, html) {
-    // 简化：只支持 beforeend（最常用）
-    if (pos === 'beforeend' && html) {
-        __setAttr(this.__nodeId, 'innerHTML', (__getAttr(this.__nodeId, 'innerHTML') || '') + html);
+    // M78.142: 规范语义——beforeend 把片段解析为真实子节点并追加。
+    // 旧实现 __setAttr('innerHTML') 是 AGENTS.md 规则 18 点名的反模式：
+    // set_attr 只写属性表（M66-fix 同款），内容永不进 DOM（渲染缺内容），
+    // 还在元素上留 innerHTML="<markup>" 垃圾属性污染序列化输出。
+    // 实现：临时 div 承载 __parseHtml 产出的真实子节点，再逐个 move 到
+    // 目标（__appendChild 是 move 语义，先快照 children 再遍历，同 GAP-K）。
+    if (pos !== 'beforeend') return;
+    var s = (html == null) ? '' : String(html);
+    if (!s.length) return;
+    if (typeof __parseHtml !== 'function' || typeof __createEl !== 'function') {
+        // 无解析桥（极端环境）：退化为文本插入，保证内容可见不静默丢失
+        var _tid = __createEl('__text__');
+        __setText(_tid, s);
+        __appendChild(this.__nodeId, _tid);
+        return;
     }
+    var wrapId = __createEl('div');
+    __parseHtml(wrapId, s);
+    var kidsStr = __children(wrapId) || '';
+    var kids = kidsStr.split(',').filter(function(x) { return x; });
+    for (var i = 0; i < kids.length; i++) {
+        __appendChild(this.__nodeId, parseInt(kids[i], 10));
+    }
+    // 清理临时 wrap（__createEl 会把节点挂到 body 下）
+    var wrapParent = __getParent(wrapId);
+    if (wrapParent >= 0) __removeChild(wrapParent, wrapId);
+    try { window.__fireMutation(this.__nodeId, 'childList'); } catch(e) {}
 };
 // M78.13: insertAdjacentElement —— 镜像 insertAdjacentText 的位置逻辑。
 Element.prototype.insertAdjacentElement = function(pos, el) {

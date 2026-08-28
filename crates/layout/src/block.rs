@@ -108,7 +108,18 @@ fn layout_anonymous_children(bx: &mut LayoutBox, containing_width: f32) {
     let mut inline_start: Option<usize> = None;
     let mut i = 0;
     while i < n {
-        let is_block = bx.children[i].box_type == BoxType::Block;
+        // M78.142: Flex/Grid containers are block-level in CSS regardless of
+        // their source tag (`<a style="display:flex">` is an inline TAG but a
+        // block-level box). Previously only BoxType::Block broke the inline
+        // run, so flex containers built here were handed to
+        // `layout_inline_run`, which recursed them as plain inline wrappers —
+        // their flex/grid layout (gap, direction, item positioning) never
+        // ran and all descendants piled at overlapping positions (words
+        // glued together on real sites like nextjs.org feature cards).
+        let is_block = !matches!(
+            bx.children[i].box_type,
+            BoxType::Inline | BoxType::Anonymous
+        );
         if is_block {
             // Flush pending inline run.
             if let Some(start) = inline_start.take() {
@@ -315,5 +326,38 @@ mod tests {
         // Both inline runs should be visible somewhere in the layout.
         // The "a" run is on line 0, block on line 1+, "c" run after.
         assert!(anon.dimensions.height >= 3.0);
+    }
+
+    // ---- M78.142: flex containers inside anonymous wrappers ----
+
+    #[test]
+    fn anonymous_flex_column_children_stack() {
+        // `<a style="display:flex;flex-direction:column">` is an inline TAG,
+        // so construct groups it into an anonymous box. The flex layout must
+        // still run (column stacking) — before M78.142 the card was handed
+        // to the inline run and its children piled at one position
+        // (nextjs.org word-gluing symptom).
+        let mut card = LayoutBox::new(BoxType::Flex);
+        card.flex.direction = crate::boxes::FlexDirection::Column;
+        card.children = vec![inline_text("TITLE"), inline_text("SUBTITLE")];
+        let anon = anonymous_with(vec![card, inline_text("after")]);
+        let mut root = block();
+        root.children.push(anon);
+        let mut tree = LayoutTree { root };
+        layout(
+            &mut tree,
+            LayoutConfig {
+                viewport_width: 80.0,
+            },
+        );
+        let card = &tree.root.children[0].children[0];
+        let title = &card.children[0];
+        let subtitle = &card.children[1];
+        assert!(
+            subtitle.dimensions.y > title.dimensions.y,
+            "flex column items must stack, got title.y={} subtitle.y={}",
+            title.dimensions.y,
+            subtitle.dimensions.y
+        );
     }
 }

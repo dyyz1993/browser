@@ -92,6 +92,32 @@ fn layout_box_recursive(bx: &mut LayoutBox, state: &mut LayoutState) {
         return;
     }
 
+    // M78.142: Block-level boxes (Block / Flex / Grid) inside an inline run
+    // are atomic per CSS — `display:flex` on an inline tag (`<a>`, `<span>`)
+    // still creates a block-level box that breaks the line. Lay them out
+    // with their real layout algorithm at the current position, then move
+    // any following inline content to a fresh line. Previously these fell
+    // through to the inline-wrapper recursion below: flex/grid layout never
+    // ran, children stacked at overlapping x/y, and their painted words
+    // interleaved into glued garbage ("Addcomponentswithout...").
+    if matches!(bx.box_type, BoxType::Block | BoxType::Flex | BoxType::Grid) {
+        let em = 1.0_f32;
+        let margin_left = bx.margin.left.resolve(state.width, em);
+        let margin_top = bx.margin.top.resolve(state.width, em);
+        let margin_bottom = bx.margin.bottom.resolve(state.width, em);
+        // Inline content already on this line → the block starts on a new
+        // line (CSS line-break semantics around block-level boxes).
+        if state.cursor_x > state.x_start {
+            state.cursor_y += 1.0;
+            state.cursor_x = state.x_start;
+        }
+        state.cursor_y += margin_top;
+        crate::block::layout_box_pub(bx, state.x_start + margin_left, state.cursor_y, state.width);
+        state.cursor_y = bx.dimensions.bottom() + margin_bottom;
+        state.cursor_x = state.x_start;
+        return;
+    }
+
     // Inline box (with or without direct text).
     bx.dimensions.x = state.cursor_x;
     bx.dimensions.y = state.cursor_y;
@@ -231,5 +257,66 @@ mod tests {
         let mut boxes = vec![inline_text("   \t  ")];
         let h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
         assert_eq!(h, 0.0);
+    }
+
+    // ---- M78.142: block-level boxes inside an inline run ----
+
+    #[test]
+    fn flex_box_inside_inline_run_runs_flex_layout() {
+        // <a style="display:flex;flex-direction:column"> inside an anonymous
+        // inline wrapper: the flex container must lay out its children with
+        // the real flex algorithm (column stacking), not inline recursion.
+        let mut inner = LayoutBox::new(BoxType::Flex);
+        inner.flex.direction = crate::boxes::FlexDirection::Column;
+        inner.children = vec![inline_text("AA"), inline_text("BB")];
+        let mut boxes = vec![inline_text("hi "), inner, inline_text(" tail")];
+        let _h = layout_inline_run(&mut boxes, 0.0, 0.0, 80.0);
+        let flex = &boxes[1];
+        let aa = &flex.children[0];
+        let bb = &flex.children[1];
+        // Column flex: BB must be on a line BELOW AA (previously both were
+        // inline-recursed onto the same cursor line).
+        assert!(
+            bb.dimensions.y > aa.dimensions.y,
+            "column flex items must stack, got aa.y={} bb.y={}",
+            aa.dimensions.y,
+            bb.dimensions.y
+        );
+        // Following inline text must start on a fresh line below the flex box.
+        let tail = &boxes[2];
+        assert!(
+            tail.dimensions.y >= bb.dimensions.y,
+            "inline tail must not overlap flex content, tail.y={} bb.y={}",
+            tail.dimensions.y,
+            bb.dimensions.y
+        );
+    }
+
+    #[test]
+    fn nested_flex_row_in_flex_item_keeps_gap() {
+        // flex item that is itself a flex row with gap: the inner gap must
+        // produce visible spacing between spans (M78.142 dispatch in
+        // flex::layout_box_into).
+        let mut inner = LayoutBox::new(BoxType::Flex);
+        inner.flex.gap = 5.0;
+        inner.children = vec![inline_text("AAA"), inline_text("BB")];
+        let mut outer = LayoutBox::new(BoxType::Flex);
+        outer.flex.direction = crate::boxes::FlexDirection::Column;
+        outer.children = vec![inner];
+        let mut tree = crate::boxes::LayoutTree { root: outer };
+        crate::block::layout(
+            &mut tree,
+            crate::block::LayoutConfig {
+                viewport_width: 80.0,
+            },
+        );
+        let inner = &tree.root.children[0];
+        let a = &inner.children[0];
+        let b = &inner.children[1];
+        let gap = b.dimensions.x - (a.dimensions.x + a.dimensions.width);
+        assert!(
+            (gap - 5.0).abs() < 0.5,
+            "expected inner gap 5 between spans, got {gap}"
+        );
     }
 }

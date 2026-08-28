@@ -824,6 +824,83 @@ impl QuickJsEngine {
 "#,
                 );
 
+                // M78.142: QuickJS 原生 Iterator.prototype.find 引用泄漏修复
+                //（astro.build GC 断言崩溃根因）。
+                //
+                // 上游 quickjs.c 的 JS_ITERATOR_HELPER_KIND_FIND 在谓词返回 falsy
+                // 时直接 `item = JS_UNDEFINED`，漏了 JS_FreeValue（对比 FOR_EACH
+                // 分支有释放）——每个被跳过的 next() 值泄漏 1 个引用计数。
+                // astro.build 的 `.querySelectorAll(...).values().find(...)` 跳过
+                // 7 个 span 包装对象 → runtime drop 时 gc_obj_list 非空 →
+                // `assert(list_empty(&rt->gc_obj_list))` abort（quickjs.c:2348）。
+                //
+                // 用纯 JS 按 ES2026 iterator-helpers 规范重写 find（零 Rust 依赖，
+                // 二进制不涨）：
+                // - O 非对象 → TypeError；predicate 不可调用 → TypeError
+                //   （规范顺序：在 GetIteratorDirect 之前）
+                // - GetIteratorDirect：只读 this.next 且必须可调用（不走
+                //   Symbol.iterator 包装）
+                // - next() 返回非对象 → TypeError；done → return undefined
+                //   （不读 value）
+                // - predicate 收到 (value, counter)，this 为 undefined
+                // - 匹配 → 返回 value 且不关闭迭代器（规范无 IteratorClose）
+                // - predicate 抛错 → IteratorClose（close 的错误被吞掉，保留
+                //   原异常——IteratorClose 规范第 3 步）
+                // 覆盖写法用 Object.defineProperty（原生 find 是 writable+
+                // configurable，可安全替换）。chunks/windows/includes/join 同款
+                // 手法见 M78.131d/e。
+                let _ = ctx.eval::<(), _>(
+                    r#"(function() {
+    if (typeof Iterator !== 'function' || !Iterator.prototype) return;
+    var IP = Iterator.prototype;
+    function __findSafe(predicate) {
+        if (this === null || this === undefined ||
+            (typeof this !== 'object' && typeof this !== 'function')) {
+            throw new TypeError('Iterator.prototype.find called on non-object');
+        }
+        if (typeof predicate !== 'function') {
+            throw new TypeError('find predicate must be a function');
+        }
+        var nextMethod = this.next;
+        if (typeof nextMethod !== 'function') {
+            throw new TypeError('iterator next is not a function');
+        }
+        var counter = 0;
+        while (true) {
+            var res = nextMethod.call(this);
+            if (res === null || (typeof res !== 'object' && typeof res !== 'function')) {
+                throw new TypeError('iterator next() returned non-object');
+            }
+            var done = res.done;
+            if (done) return undefined;
+            var value = res.value;
+            var hit;
+            try {
+                hit = predicate.call(undefined, value, counter);
+            } catch (e) {
+                // IteratorClose(iterated, throw-completion)：原异常优先，
+                // close 自身的错误吞掉。
+                var ret;
+                try { ret = this.return; } catch (e2) { throw e; }
+                if (typeof ret === 'function') {
+                    try { ret.call(this); } catch (e3) {}
+                }
+                throw e;
+            }
+            if (hit) return value;
+            counter = counter + 1;
+        }
+    }
+    try {
+        Object.defineProperty(__findSafe, 'length', { value: 1 });
+        Object.defineProperty(IP, 'find', {
+            value: __findSafe, writable: true, enumerable: false, configurable: true
+        });
+    } catch (e) {}
+})();
+"#,
+                );
+
                 // M78.131f: ES2026 await-dictionary 提案的 Promise.allKeyed /
                 // allSettledKeyed（QuickJS 无此 API）。语义要点：
                 // - 对象字典输入：Reflect.ownKeys ∩ own enumerable（非枚举跳过）
@@ -1139,5 +1216,287 @@ impl QuickJsEngine {
 impl Drop for QuickJsEngine {
     fn drop(&mut self) {
         self.rt.run_gc();
+    }
+}
+
+#[cfg(all(test, feature = "quickjs"))]
+mod gc_leak_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+
+    /// 极简本地 HTTP 服务器：返回预置 JS 文本（模拟 astro 的 _astro/*.js chunk）。
+    /// 返回 base URL。线程在测试进程结束时随进程退出（测试进程可容忍）。
+    fn spawn_js_server(routes: Vec<(&'static str, &'static str)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let routes: Arc<Vec<(String, String)>> = Arc::new(
+            routes
+                .into_iter()
+                .map(|(p, b)| (p.to_string(), b.to_string()))
+                .collect(),
+        );
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let routes = routes.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf);
+                    let req = String::from_utf8_lossy(&buf);
+                    let path = req.split_whitespace().nth(1).unwrap_or("/");
+                    let resp = match routes.iter().find(|(p, _)| p == path) {
+                        Some((_, body)) => format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        ),
+                        None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+                    };
+                    let _ = stream.write_all(resp.as_bytes());
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 用例 1：普通 ESM 链（entry → b → c），无循环/无 TLA。
+    #[test]
+    fn esm_chain_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            (
+                "/entry.js",
+                "import { b } from './b.js';\nexport const v = b + 1;",
+            ),
+            (
+                "/b.js",
+                "import { c } from './c.js';\nexport const b = c * 2;",
+            ),
+            ("/c.js", "export const c = 3;"),
+        ]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let r = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "globalThis.__marker = (globalThis.__marker||0)+1;",
+        );
+        assert!(r.is_ok(), "entry eval failed: {r:?}");
+        engine.run_jobs();
+        drop(engine); // 若 gc_obj_list 非空 → JS_FreeRuntime abort → 测试进程死
+    }
+
+    /// 用例 2：CJS 风格模块（无 import/export，走 loader 的 is_cjs namespace 注册路径）。
+    #[test]
+    fn cjs_module_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            ("/entry.js", "import './vendor.js';\nexport const v = 1;"),
+            ("/vendor.js", "var x = 42; window.__x = x;"),
+        ]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let r = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "globalThis.__marker = (globalThis.__marker||0)+1;",
+        );
+        assert!(r.is_ok(), "entry eval failed: {r:?}");
+        engine.run_jobs();
+        drop(engine);
+    }
+
+    /// 用例 3：循环依赖（astro/preact 常见）。
+    #[test]
+    fn circular_imports_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            (
+                "/entry.js",
+                "import { a } from './a.js';\nexport const v = a;",
+            ),
+            (
+                "/a.js",
+                "import { b } from './b.js';\nexport const a = 'a' + (b || '');",
+            ),
+            (
+                "/b.js",
+                "import { a } from './a.js';\nexport const b = 'b' + (a || '');",
+            ),
+        ]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let r = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "globalThis.__marker = (globalThis.__marker||0)+1;",
+        );
+        assert!(r.is_ok(), "entry eval failed: {r:?}");
+        engine.run_jobs();
+        drop(engine);
+    }
+
+    /// 用例 4：top-level await 模块（astro islands 常见）。
+    #[test]
+    fn top_level_await_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            (
+                "/entry.js",
+                "import { s } from './tla.js';\nexport const v = s;",
+            ),
+            (
+                "/tla.js",
+                "await Promise.resolve();\nexport const s = 'tla';",
+            ),
+        ]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let r = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "globalThis.__marker = (globalThis.__marker||0)+1;",
+        );
+        assert!(r.is_ok(), "entry eval failed: {r:?}");
+        engine.run_jobs();
+        drop(engine);
+    }
+
+    /// 用例 5：动态 import()（astro island hydration）。
+    #[test]
+    fn dynamic_import_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            (
+                "/entry.js",
+                "import('./lazy.js').then(function(m){ window.__v = m.lz; });\nexport const v = 1;",
+            ),
+            ("/lazy.js", "export const lz = 'lazy';"),
+        ]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let r = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "globalThis.__marker = (globalThis.__marker||0)+1;",
+        );
+        assert!(r.is_ok(), "entry eval failed: {r:?}");
+        engine.run_jobs();
+        engine.run_jobs();
+        drop(engine);
+    }
+
+    /// 用例 6：模块 import 失败（404）——loader 返回 Err 的路径。
+    #[test]
+    fn failed_import_no_gc_assert() {
+        let base = spawn_js_server(vec![(
+            "/entry.js",
+            "import { x } from './missing.js';\nexport const v = x;",
+        )]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let r = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "globalThis.__marker = (globalThis.__marker||0)+1;",
+        );
+        let _ = r; // 期望 Err，但不能 abort
+        engine.run_jobs();
+        drop(engine);
+    }
+
+    /// 用例 7：模块求值抛错（entry 依赖模块运行时 throw）。
+    #[test]
+    fn module_throw_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            ("/entry.js", "import './boom.js';\nexport const v = 1;"),
+            ("/boom.js", "throw new Error('boom');"),
+        ]);
+        let mut engine = QuickJsEngine::new(Some(&base));
+        let _ = engine.eval_module_with_imports(
+            &format!("{base}/entry.js"),
+            "import { v } from './entry.js';\nwindow.__v = v;",
+        );
+        engine.run_jobs();
+        drop(engine);
+    }
+
+    /// 用例 8：完整管线（run_scripts_with_base_engine）+ astro 风格页面。
+    /// astro.build 崩溃签名：module eval 后 runtime drop 时 gc_obj_list 非空。
+    #[test]
+    fn full_pipeline_astro_like_no_gc_assert() {
+        let base = spawn_js_server(vec![
+            (
+                "/_astro/hoisted.js",
+                "import { sig } from './signals-core.module.js';\n\
+                 document.title = 'astro';\n\
+                 var el = document.getElementById('app');\n\
+                 if (el) el.textContent = 'count ' + sig;",
+            ),
+            (
+                "/_astro/signals-core.module.js",
+                "export function sig() { return 42; }\n\
+                 export const s = 7;",
+            ),
+        ]);
+        let html = format!(
+            r#"<html><head>
+            <script type="module" src="{base}/_astro/hoisted.js"></script>
+            </head><body><div id="app"></div></body></html>"#
+        );
+        let tree = browser_html_parser::parse(&html);
+        let (shared, executed) = crate::scripts::run_scripts_with_base_engine(
+            tree,
+            Some(base),
+            &crate::engine::EngineKind::QuickJs,
+        );
+        assert!(executed >= 1, "no scripts executed");
+        drop(shared);
+    }
+
+    /// 用例 9：原生 iterator helpers（values().find 提前退出）——astro 崩溃根因。
+    ///
+    /// 上游 quickjs.c 的 JS_ITERATOR_HELPER_KIND_FIND 在谓词 falsy 时漏
+    /// JS_FreeValue（`item = JS_UNDEFINED` 无释放），每个被跳过的 next() 值
+    /// 泄漏 1 个引用计数 → runtime drop 时 `assert(list_empty(&rt->gc_obj_list))`
+    /// abort。M78.142 用纯 JS 规范实现覆盖 find 后本测试必须活着通过。
+    #[test]
+    fn iter_helpers_find_no_gc_assert() {
+        let mut engine = QuickJsEngine::new(None);
+        let r = engine.eval_safe(
+            r#"var arr = [];
+             for (var i = 0; i < 100; i++) arr.push({n: i});
+             var hit = arr.values().find(function(x){ return x.n === 50; });
+             if (!hit || hit.n !== 50) throw new Error('find failed');
+             var miss = arr.values().find(function(x){ return false; });
+             if (miss !== undefined) throw new Error('find miss must be undefined');
+             // thisArg 断言：规范规定 predicate 的 this 为 undefined
+             var got;
+             arr.values().find(function(x){ got = this; return false; });
+             if (got !== undefined) throw new Error('predicate this must be undefined');
+             // counter 断言：第二个参数从 0 递增
+             var seen = [];
+             arr.values().find(function(x, i){ seen.push(i); return i === 2; });
+             if (seen.join(',') !== '0,1,2') throw new Error('counter broken: ' + seen);
+             // 非对象 this 抛 TypeError
+             var threw = false;
+             try { Iterator.prototype.find.call(1, function(){}); } catch (e) {
+                 threw = e instanceof TypeError;
+             }
+             if (!threw) throw new Error('non-object this must throw TypeError');
+             // predicate 不可调用抛 TypeError
+             threw = false;
+             try { arr.values().find(42); } catch (e) {
+                 threw = e instanceof TypeError;
+             }
+             if (!threw) throw new Error('non-callable predicate must throw TypeError');
+             // 谓词抛错时迭代器应被 close（return 被调用）且原异常透传
+             var closed = false;
+             var it = Object.create(Iterator.prototype);
+             it.next = function() { return { value: 1, done: false }; };
+             it.return = function() { closed = true; return { value: undefined, done: true }; };
+             threw = false;
+             try { it.find(function(){ throw new Error('pred'); }); }
+             catch (e) { threw = e.message === 'pred'; }
+             if (!threw || !closed) throw new Error('predicate throw must close iterator');
+             // 匹配成功不 close（规范：find 返回值不关迭代器）
+             closed = false;
+             var it2 = Object.create(Iterator.prototype);
+             it2.next = function() { return { value: 5, done: false }; };
+             it2.return = function() { closed = true; return { value: undefined, done: true }; };
+             var v = it2.find(function(x){ return x === 5; });
+             if (v !== 5 || closed) throw new Error('find match must not close iterator');
+             // done 后不抛
+             var u = [1].values().find(function(x){ return x === 999; });
+             if (u !== undefined) throw new Error('no match must be undefined');"#,
+        );
+        assert!(r.is_ok(), "eval failed: {r:?}");
+        engine.run_jobs();
+        drop(engine);
     }
 }

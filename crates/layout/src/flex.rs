@@ -26,7 +26,7 @@
 //! - No `flex-shrink` / `flex-basis` (only grow)
 //! - No `order` (DOM order only)
 
-use crate::boxes::{AlignItems, FlexDirection, FlexWrap, JustifyContent, LayoutBox};
+use crate::boxes::{AlignItems, BoxType, FlexDirection, FlexWrap, JustifyContent, LayoutBox};
 use crate::inline::layout_inline_run;
 
 /// Entry point: lay out children of a `display:flex` container.
@@ -261,6 +261,23 @@ fn layout_box_into(bx: &mut LayoutBox, x: f32, y: f32, width: f32, em: f32) {
     bx.dimensions.x = x;
     bx.dimensions.y = y;
     bx.dimensions.width = width;
+
+    // M78.142: nested Flex/Grid containers must run their own layout
+    // algorithm (direction/justify/gap/item positioning). Previously an
+    // all-text-children shortcut inline-run'ed them, so e.g.
+    // `<div style="display:flex;gap:8px"><span>A</span><span>B</span></div>`
+    // nested inside another flex item lost its gap (spans glued together).
+    match bx.box_type {
+        BoxType::Flex => {
+            layout_flex_children(bx, width);
+            return;
+        }
+        BoxType::Grid => {
+            crate::grid::layout_grid_children(bx, width);
+            return;
+        }
+        BoxType::Block | BoxType::Inline | BoxType::Anonymous => {}
+    }
 
     // For text-bearing children, lay out as inline run.
     if !bx.children.is_empty() && bx.children.iter().all(|c| c.text.is_some()) {

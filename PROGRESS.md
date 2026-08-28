@@ -1772,6 +1772,35 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   storage 推送族、per-iframe location 族、RegExp modifiers 引擎语法、
   ReadableStream piping。
 
+**M78.142 —— 批 28 真实站点视觉扫描 + 三大修复（视觉质量批）**：
+
+- **13 站视觉扫描**（render-url 截图 + Read 评审）：优秀 7（example/
+  svelte/vuejs/docusaurus/remix/todomvc/bark 中文）；良好 1（vite，tab
+  面板全渲染 minor）；修复 3（nuxt/nextjs/astro）；已知 2（qwik 暗色
+  对比度、react 水合链）；外因 1（realworld 站点 404）；弱 1（solidjs，
+  缺 import.meta.env 语义致 module 中断，诊断在案）。
+- **astro GC 断言崩溃（进程 abort）根因 = 上游 QuickJS bug**：
+  quickjs.c `js_iterator_proto_func` 的 FIND 分支 `item = JS_UNDEFINED`
+  前漏 `JS_FreeValue`（FOR_EACH 分支有）——每个被 find 跳过的 next() 值
+  泄漏 1 引用，astro 页 `values().find()` 扫 7 个 span → drop 时
+  `assert(list_empty(&rt->gc_obj_list))` abort。修复：纯 JS 按
+  iterator-helpers 规范重写 `Iterator.prototype.find` 覆盖原生
+  （writable+configurable 可安全替换）+ 9 个 GC 泄漏回归测试。下游可向
+  Bellard 上游报 leak，rquickjs 升级后移除 polyfill。
+- **nextjs 词粘连根因比 flex gap 更深**：`<a class="card">` +
+  display:flex 被 build_children 分组进 Anonymous 匿名盒，匿名盒布局只认
+  Block → Flex 盒当 inline 材料丢进 inline run → flex 算法从未运行且多段
+  文本 paint 同一坐标（字符交错叠写 `Addccomponentsowithout...`）。三处
+  分发修复（block.rs 匿名子盒判定 / inline.rs 原子盒分支 / flex.rs 嵌套
+  flex 直分发）——nextjs 5 张卡片标题全部重现。
+- **insertAdjacentHTML 规范违反修复**：旧实现走 set_attr 反模式（规则
+  18 点名）——内容不进 DOM 还留 `innerHTML="..."` 垃圾属性。改为临时 div
+  承载 `__parseHtml` 真解析 + move 语义移入 + 触发 mutation。
+- **视觉评审方法论**：整页长图（>5000px）直接 Read 会被压缩到不可辨读
+  诱发"幻觉标记"（nuxt 误判教训）——判定 markup 泄漏要用 stdout grep
+  或分段裁剪。
+- 814 tests 全绿（+27），各哨兵与 0.901 基线持平，REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
