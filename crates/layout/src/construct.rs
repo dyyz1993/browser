@@ -79,17 +79,22 @@ const UPPERCASE_RATIO_THRESHOLD: f32 = 1.5;
 ///
 /// Default is `ascii_visuals = true` — the historical ASCII crawler output
 /// contract stays byte-identical.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct ConstructOptions {
     /// Apply the ASCII visual proxies to text leaves (`true` for ASCII
     /// rendering, the default; `false` for pixel rendering).
     pub ascii_visuals: bool,
+    /// M80.6: margin/padding 的格换算分母（px 值 ÷ scale = 格数）。
+    /// ASCII 模式 1.0（历史行为：50px→50 格）；像素模式 = 布局行高 px
+    /// （50px→2 格）——否则 50px margin 在像素画布上被放大成 50 行巨隙。
+    pub unit_scale: f32,
 }
 
 impl Default for ConstructOptions {
     fn default() -> Self {
         Self {
             ascii_visuals: true,
+            unit_scale: 1.0,
         }
     }
 }
@@ -100,6 +105,16 @@ impl ConstructOptions {
     pub fn pixel() -> Self {
         Self {
             ascii_visuals: false,
+            unit_scale: 1.0,
+        }
+    }
+    /// M80.6: pixel + margin/padding 格换算分母（传布局行高 px——
+    /// 50px margin ÷ 25 = 2 格，像素画布上即 50px）。
+    #[must_use]
+    pub fn pixel_with_scale(unit_scale: f32) -> Self {
+        Self {
+            ascii_visuals: false,
+            unit_scale,
         }
     }
 }
@@ -137,7 +152,6 @@ pub fn construct_layout_tree_with(
     // anonymous block that contains whatever Document's children produce.
     let mut root = LayoutBox::new(BoxType::Anonymous);
     root.element_id = Some(tree.root());
-    // M78-debug: react 空输出诊断（用完即删）——body 直接子节点的 construct 视角。
     for &child in tree.children_of(tree.root()) {
         build_box(tree, child, "", None, styles, opts, &mut root.children);
     }
@@ -212,7 +226,8 @@ fn build_box(
                 bx.children = build_children(tree, id, bt, &tag_lower, styles, opts);
             }
             // M7.1.3: fill margin/padding from CSS + UA defaults.
-            apply_box_model(&tag_lower, id, styles, &mut bx);
+            // M80.6: unit_scale>1 时（像素模式）px 值 ÷ scale 换算成格。
+            apply_box_model(&tag_lower, id, styles, opts.unit_scale, &mut bx);
             // M72.1: UA-stylesheet visual mapping (ASCII-only proxies).
             // font-size comes from the computed declarations (the UA sheet
             // provides the h1–h6 ladder; author CSS overrides it), so a page
@@ -297,10 +312,19 @@ fn build_box(
 /// Apply CSS margin/padding + UA defaults to a freshly-built box.
 /// CSS overrides non-Zero UA edges. Longhands override shorthand
 /// via parse_box_lengths.
+/// M80.6: Length::Px 值乘系数（格换算）。Em/Percent 不动（消费端按
+/// 字号/容器解析，格语义已对）。
+fn scale_length(l: &mut browser_css_engine::Length, f: f32) {
+    if let browser_css_engine::Length::Px(v) = l {
+        *v *= f;
+    }
+}
+
 fn apply_box_model(
     tag: &str,
     id: NodeId,
     styles: &HashMap<NodeId, Vec<Declaration>>,
+    unit_scale: f32,
     bx: &mut LayoutBox,
 ) {
     bx.margin = ua_default_margins(tag);
@@ -324,6 +348,29 @@ fn apply_box_model(
         }
         if any_padding_decl {
             bx.padding = css_padding;
+        }
+    }
+    // M80.6: 像素模式（unit_scale>1）——margin/padding 的 px 值是"像素
+    // 意图"，而 run_layout 按格消费（1 格 = 1 行高 px）。÷scale 换算：
+    // 50px margin ÷ 25px/行 = 2 格，像素画布上即 50px。UA 默认 margin
+    //（0.67em→Px）同尺度处理。必须在 CSS 替换之后缩放。
+    if unit_scale > 1.0 {
+        let inv = 1.0 / unit_scale;
+        for edge in [
+            &mut bx.margin.top,
+            &mut bx.margin.bottom,
+            &mut bx.margin.right,
+            &mut bx.margin.left,
+        ] {
+            scale_length(edge, inv);
+        }
+        for edge in [
+            &mut bx.padding.top,
+            &mut bx.padding.bottom,
+            &mut bx.padding.right,
+            &mut bx.padding.left,
+        ] {
+            scale_length(edge, inv);
         }
     }
 }

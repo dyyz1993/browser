@@ -473,6 +473,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                             base.clone(),
                             &js_engine,
                             true,
+                            browser_render::pixel::cell_metrics().1,
                         )?;
                         render_ascii(&layout, cols)
                     }
@@ -1091,6 +1092,7 @@ fn render_html_to_string_inner_ex_engine(
         base_url,
         js_engine,
         false,
+        1.0,
     )?;
     let plain = render_ascii(&layout, width);
     let colored = render_ascii_colored(&layout, width);
@@ -1109,6 +1111,7 @@ fn render_html_to_string_inner_ex_engine(
 /// M80: 共用布局管线（parse → JS → style → construct → run_layout），
 /// 返回布局树 + computed styles。ASCII（爬虫契约）与 pixel（近似像素
 /// 渲染）两条渲染路径共用此前半段；JS 只执行一次。
+#[allow(clippy::too_many_arguments)]
 fn layout_tree_after_js_engine(
     html: &str,
     width: usize,
@@ -1117,6 +1120,7 @@ fn layout_tree_after_js_engine(
     base_url: Option<String>,
     js_engine: &str,
     pixel: bool,
+    unit_scale: f32,
 ) -> Result<(browser_layout::LayoutTree, browser_render::StyleMap)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
@@ -1162,9 +1166,10 @@ fn layout_tree_after_js_engine(
     let style_text = extract_style_text(&shared_tree.borrow());
     let sheet = parse_css(&style_text);
     let styles = compute_styles(&shared_tree.borrow(), &sheet);
-    // M80.2: pixel 模式跳过 ASCII 文本改写（大写/加粗星号——像素渲染要原文）。
+    // M80.2: pixel 模式跳过 ASCII 文本改写；M80.6: unit_scale=行高 px
+    // （margin px→格换算，防巨隙）。
     let opts = if pixel {
-        browser_layout::ConstructOptions::pixel()
+        browser_layout::ConstructOptions::pixel_with_scale(unit_scale)
     } else {
         browser_layout::ConstructOptions::default()
     };
@@ -1192,8 +1197,10 @@ fn render_pixel_screenshot(
     max_height: Option<usize>,
 ) -> Result<String> {
     let cols = browser_render::layout_columns_for_px(width_px);
+    let cm = browser_render::pixel::cell_metrics();
+    eprintln!("[dbg-cm] cell_metrics=({:.2},{:.2})", cm.0, cm.1);
     let (layout, styles) =
-        layout_tree_after_js_engine(html, cols, run_js, false, base_url, js_engine, true)?;
+        layout_tree_after_js_engine(html, cols, run_js, false, base_url, js_engine, true, cm.1)?;
     let (w, h, rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
     screenshot::render_rgba_to_png(&rgba, w, h, path, max_height)
         .map_err(|e| anyhow!("pixel screenshot failed: {e}"))?;

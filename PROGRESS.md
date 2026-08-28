@@ -1907,6 +1907,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   第二行正确居中。
 - 855 tests 全绿，clippy 0，ASCII 路径零变化。
 
+**M80.6 —— 批 36 像素模式 CSS 精确 margin（巨隙根因修复）**：
+
+- **根因**：run_layout 按"格"消费 margin/padding（1 格 = 1 行高 px），
+  CSS `margin-top:50px` 的 Px(50) 被当 50 格 → 像素画布上 50 行
+  （~1300px）巨隙，内容被推出画布。
+- **修复**：`ConstructOptions` 加 `unit_scale`（ASCII 1.0 历史行为不变；
+  pixel = 布局行高 px），`apply_box_model` 末尾（**CSS 声明替换之后**——
+  首版插在替换前，Px(50) 根本没被缩放的教训）对 Px 值 ÷scale：50px÷25
+  = 2 格 = 像素画布 50px 精确兑现。UA 默认 margin（0.67em→Px）同尺度。
+- CLI `layout_tree_after_js_engine` 加 unit_scale 参数：pixel 调用点传
+  `cell_metrics().1`（行高），ASCII 传 1.0。
+- 实测：margin_test 1345px→145px，Box A/B 间距精确 50px。
+- 855 tests 全绿，clippy 0，ASCII 路径零变化。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
