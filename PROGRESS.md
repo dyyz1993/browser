@@ -1717,6 +1717,27 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   语法、html-parser 长 script 截断 bug（~426 字节 mid-token 丢失，留证
   /tmp/mid.html，修复后 +3）。
 
+**M78.139 —— 批 26 视觉渲染质量（0.877 维持 + 视觉三修）**：
+
+- **占位符压缩**：layout/construct.rs 的 img 处理改为 `img_placeholder_text`
+  纯函数——data: src 一律跳过、URL 形有宽高输出 `[IMG w×h]`、本地文件保留
+  `[IMG: src]`（M22 真实图像管线不受影响）；CLI post_process_images 不再
+  回显解析失败的 src。svelte/react 截图 URL 噪声清零，正文可读。
+- **默认 UA stylesheet**（新增 css-engine/ua.rs）：17 条规则经 OnceLock
+  解析，compute_styles 注入在页面样式**之前**（UA → 页面 → inline 级联）。
+  layout 消费：font-size ≥1.5em → 文本叶大写映射（ASCII 大字号代理）、
+  strong/b → `**…**`、em/i → `*…*`、hr → 80 字符 `─`、ol 编号 `1. `
+  （ul 保持 `• `）、pre 原始空白保留。二进制 +16KB。
+- **MessageChannel/MessagePort stub**：React scheduler 模块级
+  `new MessageChannel()` 的硬依赖；同批定位 react.dev 水合链——scheduler
+  修复后水合完成（body 33 子节点），但 React 根 div kids=0：客户端渲染
+  静默失败（无任何 JS 错误，React 内部吞错），遗留待追。
+- 诊断基建教训：python str.replace 锚点被并行代理改动时静默 no-op——
+  必须 `assert old in s`；`shared.borrow()` 持有时调 get_text（内部
+  borrow_mut 同一 Rc）→ RefCell 双借 panic——取数在借用作用域内、桥调
+  用在 drop 后。
+- 787 tests 全绿（+29：占位符 9 + UA 14 + e2e 更新）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
