@@ -160,6 +160,18 @@ fn parse_alpha_token(t: &str) -> Option<f32> {
 /// 元素自身的背景声明（含 alpha），按声明顺序 fold、最后一个生效
 /// （镜像 construct.rs::apply_box_style 的 last-write-wins）。
 /// 找不到声明时由调用方回退 `bx.style.background`（不透明，M39 路径）。
+/// M80.4: 本盒自身 font-style 声明是否 italic（UA 表 em/i 系声明）。
+fn own_font_style_italic(styles: &StyleMap, id: Option<NodeId>) -> bool {
+    let Some(id) = id else { return false };
+    let Some(decls) = styles.get(&id) else {
+        return false;
+    };
+    decls.iter().any(|d| {
+        d.property.eq_ignore_ascii_case("font-style")
+            && d.value.trim().eq_ignore_ascii_case("italic")
+    })
+}
+
 /// M80.3: 本盒自身 font-weight 声明（不继承）——"bold"/">=600" → 700，
 /// normal/lighter/数值 → 400。UA 表对 strong/b/th/h1-h6 都有声明。
 fn own_font_weight(styles: &StyleMap, id: Option<NodeId>) -> Option<u16> {
@@ -332,6 +344,9 @@ struct Inherited {
     /// M80.3: text-align:center 继承（text-align 是继承属性；声明盒的
     /// 后代文本叶都居中——paint_text 用该标志 + 盒宽做居中偏移）。
     centered: bool,
+    /// M80.4: font-style:italic 继承（UA 表 em/i/cite/var/dfn 声明）。
+    /// 无真斜体字形 → 逐行右移的斜切变换近似（ shear ≈ 高度的 1/6）。
+    italic: bool,
 }
 
 impl Default for Inherited {
@@ -342,6 +357,7 @@ impl Default for Inherited {
             font_ratio: 1.0,
             weight: 400,
             centered: false,
+            italic: false,
         }
     }
 }
@@ -387,6 +403,8 @@ fn paint_box(p: &mut Painter, bx: &LayoutBox, inh: &Inherited) {
         weight,
         // M80.3: text-align 继承——本盒声明或父级已居中。
         centered: own_text_align_center(p.styles, bx.element_id) || inh.centered,
+        // M80.4: font-style 继承——本盒 italic 声明或父级已斜体。
+        italic: own_font_style_italic(p.styles, bx.element_id) || inh.italic,
     };
 
     // 2) 背景 + border（先父后子）。全透明（a=0）的盒不画（否则 #00000000
@@ -439,6 +457,51 @@ fn word_width(p: &mut Painter, word: &str, font_px: f32) -> f32 {
 /// 文本绘制：`words` 逐词按 (sx, sy) 定位，字形间用真实 advance
 /// （不再对齐字符网格）。链接加下划线。`[IMG`/`[SVG` 占位符跳过
 /// （ASCII 后处理专属产物，像素图里是噪声）。
+/// M80.5: 居中偏移按当前字号实测行宽计算（shrink-to-fit 缩字号后行宽
+/// 变窄，eager 版用旧字号 slack 为负 → h1 大字号居中失效）。
+#[allow(clippy::too_many_arguments)]
+fn center_shifts_for(
+    entries: &[(String, f32, f32)],
+    centered: bool,
+    box_left: f32,
+    avail: f32,
+    p: &mut Painter,
+    font_px: f32,
+) -> Vec<f32> {
+    if !centered {
+        return Vec::new();
+    }
+    let space_w = p.glyphs.get(' ', font_px).0.advance_width;
+    let mut row_w = 0.0_f32;
+    let mut rows: Vec<(f32, f32)> = Vec::new(); // (sy, row_width)
+    let mut prev: Option<f32> = None;
+    for (word, _sx, sy) in entries {
+        if prev != Some(*sy) {
+            if let Some(pw) = prev {
+                rows.push((pw, row_w));
+                row_w = 0.0;
+            }
+            prev = Some(*sy);
+        }
+        row_w += word_width(p, word, font_px) + space_w;
+    }
+    if let Some(pw) = prev {
+        rows.push((pw, row_w));
+    }
+    entries
+        .iter()
+        .map(|(_, sx, sy)| {
+            let rw = rows
+                .iter()
+                .find(|(psy, _)| (psy - sy).abs() < 0.5)
+                .map(|(_, w)| *w)
+                .unwrap_or(0.0);
+            let slack = (avail - rw).max(0.0);
+            (slack / 2.0 - (sx * p.cell_w - box_left)).max(0.0)
+        })
+        .collect()
+}
+
 fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8)) {
     let mut font_px = inh.font_px();
     let entries: Vec<(String, f32, f32)> = if !bx.words.is_empty() {
@@ -483,41 +546,13 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
     let centered = inh.centered;
     // M80.3: 居中实现——按行实测文字 advance 总宽，行首词起点右移
     // "可用宽 - 行宽" 的一半（可用宽 = 盒右缘 - 盒左缘）。
-    let centered_shifts: Vec<f32> = if centered {
-        let box_left = bx.dimensions.x * p.cell_w;
-        let avail = (bx.dimensions.width * p.cell_w).max(1.0);
-        let mut row_w = 0.0_f32;
-        let mut rows: Vec<(f32, f32)> = Vec::new(); // (sy, row_width)
-        let mut prev: Option<f32> = None;
-        for (word, _sx, sy) in &entries {
-            if prev != Some(*sy) {
-                if let Some(pw) = prev {
-                    rows.push((pw, row_w));
-                    row_w = 0.0;
-                }
-                prev = Some(*sy);
-            }
-            row_w += word_width(p, word, font_px) + space_w;
-        }
-        if let Some(pw) = prev {
-            rows.push((pw, row_w));
-        }
-        entries
-            .iter()
-            .map(|(_, sx, sy)| {
-                let rw = rows
-                    .iter()
-                    .find(|(psy, _)| (psy - sy).abs() < 0.5)
-                    .map(|(_, w)| *w)
-                    .unwrap_or(0.0);
-                let slack = (avail - rw).max(0.0);
-                // 布局 sx 已在盒左缘附近（格位），补偿格位占位：取 max 防负。
-                (slack / 2.0 - (sx * p.cell_w - box_left)).max(0.0)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // M80.5: 惰性计算——必须在 shrink-to-fit 之后调（字号被缩小后行宽
+    // 变窄，旧 eager 版用缩小前字号算 slack，h1 大字号场景 slack 为负
+    // 被吃掉 → 居中失效）。
+    let box_left = bx.dimensions.x * p.cell_w;
+    let avail = (bx.dimensions.width * p.cell_w).max(1.0);
+    let mut centered_shifts: Vec<f32> =
+        center_shifts_for(&entries, centered, box_left, avail, p, font_px);
     if !entries.is_empty() {
         let mut max_need = 0.0_f32;
         let mut min_start = f32::MAX;
@@ -546,6 +581,8 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
             d_px = d2;
             pitch = (a_px + d_px + 4.0).max(p.line_h);
             pitch_extra = pitch - p.line_h;
+            // M80.5: 字号变了 → 居中偏移按新字号重算。
+            centered_shifts = center_shifts_for(&entries, centered, box_left, avail, p, font_px);
         }
     }
     let mut prev_sy: Option<f32> = None;
@@ -581,11 +618,13 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
                 let gx = pen_x.round() as i32 + m.xmin;
                 // M25 公式（font.rs 锁定）：y_origin = baseline - ymin - height + 1
                 let gy = baseline - m.ymin - m.height as i32 + 1;
-                p.canvas.blend_glyph(gx, gy, &m, &mask, ink);
+                // 斜率 0.2（≈11° oblique），总位移 = 0.2 × 字形高。
+                let shear = if inh.italic { 0.2 } else { 0.0 };
+                p.canvas.blend_glyph(gx, gy, &m, &mask, ink, shear);
                 // M80.3: 粗体近似——weight>=700 时同一字形在 x+1 再压一次
                 // （笔画加厚 1px；fontdue 单字重，无真粗体字形可用的近似）。
                 if inh.weight >= 700 {
-                    p.canvas.blend_glyph(gx + 1, gy, &m, &mask, ink);
+                    p.canvas.blend_glyph(gx + 1, gy, &m, &mask, ink, shear);
                 }
             }
             pen_x += m.advance_width;
@@ -749,18 +788,25 @@ impl Canvas {
         m: &fontdue::Metrics,
         mask: &[u8],
         ink: (u8, u8, u8),
+        shear: f32,
     ) {
         for dy in 0..m.height {
             let py = gy + dy as i32;
             if py < 0 || py >= self.h as i32 {
                 continue;
             }
+            // M80.4: 斜切（oblique 近似）——总水平位移 = shear px，
+            // 按 dy 相对字形中线归一分布（顶部 -s/2 → 底部 +s/2），
+            // 避免逐行累加导致字形散架/出界。
+            let mid = m.height as f32 / 2.0;
+            let rel = dy as f32 - mid;
+            let row_shift = (shear * rel).round() as i32;
             for dx in 0..m.width {
                 let alpha = u32::from(mask[dy * m.width + dx]);
                 if alpha == 0 {
                     continue;
                 }
-                let px = gx + dx as i32;
+                let px = gx + dx as i32 + row_shift;
                 if px < 0 || px >= self.w as i32 {
                     continue;
                 }

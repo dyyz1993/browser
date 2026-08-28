@@ -1893,6 +1893,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   缩进 / 分节间距——"接近 Chrome 的简化版"定位兑现。
 - 剩余打磨项（记录）：h1 居中×shrink 交互、斜体真渲染、CSS 精确 margin。
 
+**M80.5 —— 批 35 斜体真渲染 + 居中×shrink 交互修复**：
+
+- **斜体 oblique 近似**：Inherited 加 italic（继承链，UA 表 em/i/cite/var/
+  dfn 的 font-style:italic 声明）；blend_glyph 加 shear 参数——总水平
+  位移 = 0.2×字形高，按 dy 相对字形中线归一分布（首版逐行累加 1/6 高度
+  散架出界的教训：位移必须归一到中线）。normal/italic/bold/bold-italic
+  四态可辨。
+- **居中×shrink 交互修复**：centered_shifts 从 eager Vec 改惰性函数
+  `center_shifts_for(entries, centered, box_left, avail, p, font_px)`——
+  shrink-to-fit 缩字号后行宽变窄，eager 版用旧字号算 slack 为负被吃掉
+  → h1 大字号居中失效。shrink 分支末尾按新字号重算。实测 h1 长标题
+  第二行正确居中。
+- 855 tests 全绿，clippy 0，ASCII 路径零变化。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
