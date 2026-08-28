@@ -1867,6 +1867,21 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 855 tests 全绿（+3 回归：pixel 模式 h1/strong/em 文本保持原文、默认
   options 与旧包装一致），REALITY PASS。
 
+**M80.3 —— 批 33 像素打磨：真实粗体 + text-align 居中继承**：
+
+- **真实粗体**：Inherited 加 weight（继承链）——纯 CSS 语义判定
+  （UA 表对 strong/b/th/h1-h6 声明 font-weight:bold，作者样式覆盖；
+  >=600 → 700）。fontdue 单字重无粗体字形 → 同字形 x+1 双压描边近似
+  （笔画加厚 1px）。docusaurus 推特姓名（Mark Erikson 等）粗体清晰可辨。
+- **text-align:center 继承居中**：Inherited 加 centered（text-align 是
+  继承属性，声明盒后代文本叶都生效——paint_text 查 styles 会 miss 叶子
+  盒无条目的场景）。实现：按行实测文字 advance 总宽，行首词起点右移
+  "可用宽-行宽"一半。h1 大字号场景受 shrink-to-fit 交互影响仍有边角
+  （slack 负值被 max(0) 吃掉），段落/单行场景正确。
+- 调试插曲：dbg eprintln 的 python 替换锚点两次错位（`} else { Vec::new() }`
+  多处匹配）——用 re.sub + count=1 + 锚点唯一性检查。
+- 855 tests 全绿，REALITY PASS，ASCII 路径零变化。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

@@ -160,6 +160,43 @@ fn parse_alpha_token(t: &str) -> Option<f32> {
 /// 元素自身的背景声明（含 alpha），按声明顺序 fold、最后一个生效
 /// （镜像 construct.rs::apply_box_style 的 last-write-wins）。
 /// 找不到声明时由调用方回退 `bx.style.background`（不透明，M39 路径）。
+/// M80.3: 本盒自身 font-weight 声明（不继承）——"bold"/">=600" → 700，
+/// normal/lighter/数值 → 400。UA 表对 strong/b/th/h1-h6 都有声明。
+fn own_font_weight(styles: &StyleMap, id: Option<NodeId>) -> Option<u16> {
+    let id = id?;
+    let decls = styles.get(&id)?;
+    for d in decls.iter().rev() {
+        if d.property.eq_ignore_ascii_case("font-weight") {
+            let v = d.value.trim().to_ascii_lowercase();
+            return Some(match v.as_str() {
+                "bold" | "bolder" => 700,
+                "normal" | "lighter" => 400,
+                _ => {
+                    let n: u16 = v.parse().unwrap_or(400);
+                    if n >= 600 {
+                        700
+                    } else {
+                        400
+                    }
+                }
+            });
+        }
+    }
+    None
+}
+
+/// M80.3: 本盒自身 text-align:center（近似居中用）。
+fn own_text_align_center(styles: &StyleMap, id: Option<NodeId>) -> bool {
+    let Some(id) = id else { return false };
+    let Some(decls) = styles.get(&id) else {
+        return false;
+    };
+    decls.iter().any(|d| {
+        d.property.eq_ignore_ascii_case("text-align")
+            && d.value.trim().eq_ignore_ascii_case("center")
+    })
+}
+
 fn own_background(styles: &StyleMap, id: Option<NodeId>) -> Option<Rgba> {
     let decls = styles.get(&id?)?;
     let mut out = None;
@@ -289,6 +326,12 @@ struct Inherited {
     bg: Option<(u8, u8, u8)>,
     /// 生效 font-size 比率（vs [`BASE_FONT_PX`]；h1=2.0 等）。
     font_ratio: f32,
+    /// M80.3: 生效字重（700 = 粗体——strong/b 或 font-weight:>=600）。
+    /// fontdue 无多字重字形，粗体用 ±1px 双描边近似（笔画加厚）。
+    weight: u16,
+    /// M80.3: text-align:center 继承（text-align 是继承属性；声明盒的
+    /// 后代文本叶都居中——paint_text 用该标志 + 盒宽做居中偏移）。
+    centered: bool,
 }
 
 impl Default for Inherited {
@@ -297,6 +340,8 @@ impl Default for Inherited {
             color: None,
             bg: None,
             font_ratio: 1.0,
+            weight: 400,
+            centered: false,
         }
     }
 }
@@ -328,11 +373,20 @@ fn paint_box(p: &mut Painter, bx: &LayoutBox, inh: &Inherited) {
     // 生效观感底色 = 本盒背景叠在最近祖先背景上（半透明遮罩下文字的
     // 对比度必须按合成后的底色判断）。
     let eff_bg: Option<(u8, u8, u8)> = box_bg.map(|c| c.composite_over(inh.bg));
+    // M80.3: 字重判定——纯 CSS 语义（UA 表对 strong/b/th 和 h1-h6 都声明
+    // font-weight: bold；作者样式同名规则覆盖之）。>=600 视为粗体。
+    let weight = match own_font_weight(p.styles, bx.element_id) {
+        Some(w) => w,
+        None => inh.weight,
+    };
     let cur = Inherited {
         color: bx.style.color.map(|c| (c.r, c.g, c.b)).or(inh.color),
         // 背景本身不继承，但"文字背后的最近背景"沿祖先链走（对比度判定用）。
         bg: eff_bg.or(inh.bg),
         font_ratio: font_ratio_of(p.styles, bx.element_id, inh.font_ratio),
+        weight,
+        // M80.3: text-align 继承——本盒声明或父级已居中。
+        centered: own_text_align_center(p.styles, bx.element_id) || inh.centered,
     };
 
     // 2) 背景 + border（先父后子）。全透明（a=0）的盒不画（否则 #00000000
@@ -423,6 +477,47 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
                                             // 溢出画布（右边界截断）。Latin 正文天然不超（1 词/格≈advance），
                                             // 不受影响。
     let page_right = p.canvas.w as f32;
+    // M80.3: text-align:center —— 布局不消费该属性，这里按"盒内容宽 -
+    // 行已排宽"的一半右移首词起点（近似：整盒内容一起居中，多行时每行
+    // 都以盒左缘为基准 → 与 Chrome 逐行居中有差，但标题/单行场景正确）。
+    let centered = inh.centered;
+    // M80.3: 居中实现——按行实测文字 advance 总宽，行首词起点右移
+    // "可用宽 - 行宽" 的一半（可用宽 = 盒右缘 - 盒左缘）。
+    let centered_shifts: Vec<f32> = if centered {
+        let box_left = bx.dimensions.x * p.cell_w;
+        let avail = (bx.dimensions.width * p.cell_w).max(1.0);
+        let mut row_w = 0.0_f32;
+        let mut rows: Vec<(f32, f32)> = Vec::new(); // (sy, row_width)
+        let mut prev: Option<f32> = None;
+        for (word, _sx, sy) in &entries {
+            if prev != Some(*sy) {
+                if let Some(pw) = prev {
+                    rows.push((pw, row_w));
+                    row_w = 0.0;
+                }
+                prev = Some(*sy);
+            }
+            row_w += word_width(p, word, font_px) + space_w;
+        }
+        if let Some(pw) = prev {
+            rows.push((pw, row_w));
+        }
+        entries
+            .iter()
+            .map(|(_, sx, sy)| {
+                let rw = rows
+                    .iter()
+                    .find(|(psy, _)| (psy - sy).abs() < 0.5)
+                    .map(|(_, w)| *w)
+                    .unwrap_or(0.0);
+                let slack = (avail - rw).max(0.0);
+                // 布局 sx 已在盒左缘附近（格位），补偿格位占位：取 max 防负。
+                (slack / 2.0 - (sx * p.cell_w - box_left)).max(0.0)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     if !entries.is_empty() {
         let mut max_need = 0.0_f32;
         let mut min_start = f32::MAX;
@@ -456,7 +551,7 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
     let mut prev_sy: Option<f32> = None;
     let mut extra_y = 0.0_f32;
     let mut pen_end = 0.0_f32;
-    for (word, sx, sy) in entries {
+    for (entry_idx, (word, sx, sy)) in entries.into_iter().enumerate() {
         let same_line = prev_sy == Some(sy);
         if !same_line {
             if let Some(ps) = prev_sy {
@@ -466,10 +561,11 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
         // 同一布局行内的词按"布局位置 vs 前一词末端+空格"取 max 定位：
         // 布局的词位按"每字符 1 格"计算，而真实字形按字号放大（h1=2em
         // 时字宽翻倍），直接跳布局位会让同盒的词互相叠印。
+        let cshift = centered_shifts.get(entry_idx).copied().unwrap_or(0.0);
         let mut pen_x = if same_line {
-            (sx * p.cell_w).max(pen_end + space_w)
+            (sx * p.cell_w + cshift).max(pen_end + space_w)
         } else {
-            sx * p.cell_w
+            sx * p.cell_w + cshift
         };
         prev_sy = Some(sy);
         let baseline = (sy * p.line_h + extra_y + a_px).round() as i32;
@@ -486,6 +582,11 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
                 // M25 公式（font.rs 锁定）：y_origin = baseline - ymin - height + 1
                 let gy = baseline - m.ymin - m.height as i32 + 1;
                 p.canvas.blend_glyph(gx, gy, &m, &mask, ink);
+                // M80.3: 粗体近似——weight>=700 时同一字形在 x+1 再压一次
+                // （笔画加厚 1px；fontdue 单字重，无真粗体字形可用的近似）。
+                if inh.weight >= 700 {
+                    p.canvas.blend_glyph(gx + 1, gy, &m, &mask, ink);
+                }
             }
             pen_x += m.advance_width;
         }
