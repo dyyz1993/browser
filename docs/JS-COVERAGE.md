@@ -164,6 +164,8 @@
 | **history 栈 + state 恢复** | ✅ M78.17（条目存 {url,state}，back/forward/go 恢复 state；⚠️ popstate 事件尚缺 .state 属性——M78.131 待修） | WPT combination_history | QUICKJS_GLOBAL_SHIM |
 | **document.createHTMLDocument** | ✅ M78.126（子文档 createElement/createTextNode/createComment 全游离语义 + 挂 __ownerDoc；旧版元素误挂主文档 body） | WPT Node-removeChild synthetic | QUICKJS_DOCUMENT_SHIM |
 | location.* | ✅ | | QUICKJS_GLOBAL_SHIM |
+| **location.protocol setter 校验** | ✅ M78.135（scheme 语法 `^[a-zA-Z][a-zA-Z0-9+.-]*$`，非法抛 SyntaxError DOMException） | WPT location-protocol-setter 48 断言 | QUICKJS_GLOBAL_SHIM |
+| **location unforgeable own 属性** | ✅ M78.132（valueOf / Symbol.toPrimitive 为 own {writable:false, configurable:false}）；assign/replace 空 host 抛 SyntaxError | WPT Location valueOf/toPrimitive | QUICKJS_GLOBAL_SHIM |
 | setTimeout/clearTimeout | ✅ | integration_settimeout (6) | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
 | **setInterval/clearInterval** | ✅ | 手测（100 次硬上限防死循环） | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
 | Image | ✅ | image_shim 测试 | QUICKJS_GLOBAL_SHIM |
@@ -176,6 +178,8 @@
 | CustomEvent | ✅ | integration_js_features |
 | dispatchEvent | ✅ | integration_js_features（含 DOMContentLoaded 自动 dispatch） |
 | **dispatchEvent 三阶段** | ✅ M78.129（capture→target→bubble，传播路径含 window/document，capture 标志过滤；stopPropagation 延迟生效 / stopImmediatePropagation 立即终止；dispatch 后清 stop 标志可重派发） | WPT stopPropagation/multiple-cancelBubble 系列 |
+| **execCommand('insertText')** | ✅ M78.134（focus→window.__activeEl 追踪 + document.activeElement getter；insertText 写表单 value / contenteditable 追加文本 + 同步派发 input 事件） | WPT uievents/textInput |
+| **value 反射表单语义** | ✅ M78.134b（'value' in el 因原型反射恒 true——非表单元素 getter 回退 textContent，WPT 用 in 分流读值） | WPT textInput |
 | **WebIDL 接口对象属性语义** | ✅ M78.127（57 个接口：{enumerable:false, configurable:true}，for-in 不可见 + 可 delete。QuickJS 顶层 function 声明 non-configurable 无法事后 redefine——必须 globalThis 赋值 + 统一 defineProperty） | WPT interface-objects |
 | addEventListener（真实现） | ✅ | document/element 存回调 + dispatchEvent 触发 |
 
