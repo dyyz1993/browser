@@ -1957,6 +1957,19 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   把转义注释写成真实代理字符——PROGRESS.md 被截断空文件后 git add 提交。
   恢复自 parent commit，重写条目用 "U+D83D" 文字描述而非转义序列。
 
+**M80.9 —— 批 39（定时）body onstorage 属性处理器（storage event 族 no-results 清零）**：
+
+- **根因**：WPT event_basic/case_sensitive/setattribute/body_attribute
+  系列子页用 `<body onstorage="handleStorageEvent(event);">` 属性处理器
+  （JS 代码字符串）——`__fireStorage` 只派发 addEventListener 监听和
+  window['onstorage'] 属性，body 元素的 on* 属性没消费 → 子页脚本
+  push storageEventList 的链条断 → 父页 20ms 轮询超时 → no-results。
+- **修复**：`__fireStorage` 派发时取 body 的 onstorage 属性，new
+  Function('event', code) 包装调用（event 标识符传参注入），再走
+  window.dispatchEvent（addEventListener 监听照旧）。
+- storage **206→208/272**（event 族 no-results 4 个清零；window.open ×2
+  确认结构性）。855 tests 全绿。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

@@ -3074,6 +3074,17 @@ function __fireStorage(area, key, oldV, newV) {
             var ev = new __StorageEvent('storage', { key: key, oldValue: oldV,
                 newValue: newV, url: __evUrl,
                 storageArea: area });
+            // M80.9: body onstorage 属性处理器——WPT event_basic 系列子页用
+            // `<body onstorage="handleStorageEvent(event);">`（属性是 JS 代码
+            // 字符串，需 new Function 包装；event 标识符由传参注入）。
+            var __body = (typeof __getBody === 'function') ? __makeElement(__getBody(0)) : null;
+            var __attr = (__body && typeof __getAttr === 'function') ? __getAttr(__body.__nodeId, 'onstorage') : null;
+            if (__attr) {
+                try {
+                    var __fn = new Function('event', __attr);
+                    __fn.call(__body, ev);
+                } catch (pe) {}
+            }
             window.dispatchEvent(ev);
         } catch (e) {}
     }, 0);
