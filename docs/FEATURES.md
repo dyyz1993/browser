@@ -55,7 +55,12 @@
 - ✅ 块级布局（block，从上到下堆叠）
 - ✅ 行内布局（inline + 字符级折行）
 - ✅ margin / padding（真实 CSS，含 collapsing）
-- ✅ UA 默认样式（`<body>` margin 8px 等）
+- ✅ UA 默认样式（css-engine/ua.rs 17 规则，M78.138：h1-h6 字号阶梯→ASCII 大写映射、
+  p/ul/blockquote 间距缩进、ol 编号 `1.` / ul `•`、hr 分隔线、strong `**…**`、
+  em `*…*`、pre 空白保留；页面 CSS 可覆盖——级联 UA → 页面 → inline）
+- ✅ 图像占位符治理（M78.138）：URL/data-URI 不进渲染流；有尺寸的 img 输出
+  `[IMG w×h]` 紧凑占位，data: 与无尺寸 img 跳过；本地文件保留 `[IMG: src]`
+  （M22 真实图像 ASCII 管线不受影响）
 - ⚠️ flex / grid / table / float（非目标，不做）
 
 ### 渲染（render crate + gui crate）
