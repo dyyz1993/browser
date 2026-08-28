@@ -2450,6 +2450,14 @@ window.MutationObserver = function(cb) {
         if (target && target.__nodeId !== undefined) {
             self.__targets.push(target);
             if (window.__activeObservers.indexOf(self) < 0) window.__activeObservers.push(self);
+        } else if (target === document && typeof __findTag === 'function') {
+            // M78.121: document 的 observe——通过 body 节点代理。
+            var bodyId = __findTag('body');
+            if (bodyId >= 0) {
+                var bodyEl = __makeElement(bodyId);
+                self.__targets.push(bodyEl);
+                if (window.__activeObservers.indexOf(self) < 0) window.__activeObservers.push(self);
+            }
         }
     };
     self.disconnect = function() {
