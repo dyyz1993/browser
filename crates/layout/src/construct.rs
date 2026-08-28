@@ -68,16 +68,70 @@ const HR_LINE_WIDTH: usize = 80;
 /// UPPERCASE — the ASCII proxy for "visibly larger glyphs".
 const UPPERCASE_RATIO_THRESHOLD: f32 = 1.5;
 
+/// M80.1: options for layout tree construction.
+///
+/// `ascii_visuals` gates the three ASCII-only text proxies applied during
+/// construction (font-size ≥ 1.5em → UPPERCASE, strong/b → `**…**`,
+/// em/i/cite/var/dfn → `*…*`). These rewrites are destructive to the text
+/// content and cannot be undone downstream, so the pixel renderer needs
+/// them disabled to see the raw text (it renders real font size / weight
+/// itself from the computed styles).
+///
+/// Default is `ascii_visuals = true` — the historical ASCII crawler output
+/// contract stays byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstructOptions {
+    /// Apply the ASCII visual proxies to text leaves (`true` for ASCII
+    /// rendering, the default; `false` for pixel rendering).
+    pub ascii_visuals: bool,
+}
+
+impl Default for ConstructOptions {
+    fn default() -> Self {
+        Self {
+            ascii_visuals: true,
+        }
+    }
+}
+
+impl ConstructOptions {
+    /// Options with the ASCII visual proxies disabled (pixel rendering).
+    #[must_use]
+    pub fn pixel() -> Self {
+        Self {
+            ascii_visuals: false,
+        }
+    }
+}
+
 /// Build a [`LayoutTree`] from a DOM tree and its computed styles.
 ///
 /// Styles include the UA defaults injected by
 /// `browser_css_engine::compute_styles`; `construct` maps a few of them to
 /// visible ASCII treatments (font-size ≥ 1.5em → UPPERCASE) while page CSS
 /// overrides stay effective through the same cascade.
+///
+/// Equivalent to [`construct_layout_tree_with`] with the default
+/// [`ConstructOptions`] (ASCII visual proxies enabled).
 #[must_use]
 pub fn construct_layout_tree(
     tree: &Tree,
     styles: &HashMap<NodeId, Vec<Declaration>>,
+) -> LayoutTree {
+    construct_layout_tree_with(tree, styles, ConstructOptions::default())
+}
+
+/// Build a [`LayoutTree`] with explicit [`ConstructOptions`].
+///
+/// With `opts.ascii_visuals == false` the three destructive ASCII text
+/// rewrites are skipped and text leaves keep their original content —
+/// required by the pixel renderer (`--render-mode pixel`), which renders
+/// real font size / bold / italic instead of the ASCII proxies.
+#[must_use]
+pub fn construct_layout_tree_with(
+    tree: &Tree,
+    styles: &HashMap<NodeId, Vec<Declaration>>,
+    opts: ConstructOptions,
 ) -> LayoutTree {
     // The DOM root is Document; we model the layout root as an
     // anonymous block that contains whatever Document's children produce.
@@ -85,7 +139,7 @@ pub fn construct_layout_tree(
     root.element_id = Some(tree.root());
     // M78-debug: react 空输出诊断（用完即删）——body 直接子节点的 construct 视角。
     for &child in tree.children_of(tree.root()) {
-        build_box(tree, child, "", None, styles, &mut root.children);
+        build_box(tree, child, "", None, styles, opts, &mut root.children);
     }
     LayoutTree { root }
 }
@@ -104,6 +158,7 @@ fn build_box(
     parent_tag: &str,
     list_index: Option<usize>,
     styles: &HashMap<NodeId, Vec<Declaration>>,
+    opts: ConstructOptions,
     out: &mut Vec<LayoutBox>,
 ) {
     match tree.data(id) {
@@ -154,23 +209,28 @@ fn build_box(
                 bx.box_type = BoxType::Inline;
                 bx.children = Vec::new();
             } else {
-                bx.children = build_children(tree, id, bt, &tag_lower, styles);
+                bx.children = build_children(tree, id, bt, &tag_lower, styles, opts);
             }
             // M7.1.3: fill margin/padding from CSS + UA defaults.
             apply_box_model(&tag_lower, id, styles, &mut bx);
-            // M72.1: UA-stylesheet visual mapping. font-size comes from the
-            // computed declarations (the UA sheet provides the h1–h6 ladder;
-            // author CSS overrides it), so a page resetting
-            // `h1 { font-size: 1em }` also cancels the uppercase.
-            let ratio = font_size_ratio(styles.get(&id));
-            if ratio >= UPPERCASE_RATIO_THRESHOLD {
-                uppercase_text_leaves(&mut bx);
-            } else if matches!(tag_lower.as_str(), "strong" | "b") {
-                // ASCII bold: markdown-style **…** markers.
-                wrap_first_last_text(&mut bx, "**", "**");
-            } else if matches!(tag_lower.as_str(), "em" | "i" | "cite" | "var" | "dfn") {
-                // ASCII italic: markdown-style *…* markers.
-                wrap_first_last_text(&mut bx, "*", "*");
+            // M72.1: UA-stylesheet visual mapping (ASCII-only proxies).
+            // font-size comes from the computed declarations (the UA sheet
+            // provides the h1–h6 ladder; author CSS overrides it), so a page
+            // resetting `h1 { font-size: 1em }` also cancels the uppercase.
+            // M80.1: gated behind `ascii_visuals` — pixel rendering needs
+            // the raw text (real font size / bold / italic), and these
+            // rewrites are destructive (cannot be undone downstream).
+            if opts.ascii_visuals {
+                let ratio = font_size_ratio(styles.get(&id));
+                if ratio >= UPPERCASE_RATIO_THRESHOLD {
+                    uppercase_text_leaves(&mut bx);
+                } else if matches!(tag_lower.as_str(), "strong" | "b") {
+                    // ASCII bold: markdown-style **…** markers.
+                    wrap_first_last_text(&mut bx, "**", "**");
+                } else if matches!(tag_lower.as_str(), "em" | "i" | "cite" | "var" | "dfn") {
+                    // ASCII italic: markdown-style *…* markers.
+                    wrap_first_last_text(&mut bx, "*", "*");
+                }
             }
             // M72.1: <hr> — a horizontal rule line (no children).
             if tag_lower == "hr" {
@@ -521,6 +581,7 @@ fn build_children(
     parent_box: BoxType,
     parent_tag: &str,
     styles: &HashMap<NodeId, Vec<Declaration>>,
+    opts: ConstructOptions,
 ) -> Vec<LayoutBox> {
     let dom_children = tree.children_of(parent_id);
     if dom_children.is_empty() {
@@ -554,6 +615,7 @@ fn build_children(
                     parent_tag,
                     list_index_for(tree, child_id),
                     styles,
+                    opts,
                     &mut tmp,
                 );
                 inline_buf.extend(tmp);
@@ -565,6 +627,7 @@ fn build_children(
                     parent_tag,
                     list_index_for(tree, child_id),
                     styles,
+                    opts,
                     &mut result,
                 );
             }
@@ -582,6 +645,7 @@ fn build_children(
                 parent_tag,
                 list_index_for(tree, child_id),
                 styles,
+                opts,
                 &mut result,
             );
         }
@@ -596,6 +660,7 @@ fn build_children(
                 parent_tag,
                 list_index_for(tree, child_id),
                 styles,
+                opts,
                 &mut result,
             );
         }
@@ -610,6 +675,7 @@ fn build_children(
                 parent_tag,
                 list_index_for(tree, child_id),
                 styles,
+                opts,
                 &mut result,
             );
         }
@@ -1442,6 +1508,78 @@ mod ua_visual_tests {
         let s = first_child_text(&layout);
         assert!(s.contains("**bold**"), "got {s:?}");
         assert!(s.contains("*italic*"), "got {s:?}");
+    }
+
+    /// M80.1: pixel mode (`ascii_visuals = false`) must keep raw text —
+    /// no UPPERCASE for large headings, no markdown emphasis markers.
+    /// The pixel renderer reads real font-size / bold / italic itself.
+    #[test]
+    fn pixel_mode_keeps_h1_text_raw() {
+        let tree = heading_tree("h1", "Example Domain");
+        let mut styles = HashMap::new();
+        styles.insert(
+            3,
+            vec![Declaration {
+                property: "font-size".into(),
+                value: "2em".into(),
+                important: false,
+            }],
+        );
+        let layout = construct_layout_tree_with(&tree, &styles, ConstructOptions::pixel());
+        let s = first_child_text(&layout);
+        assert!(
+            s.contains("Example Domain"),
+            "pixel mode must keep raw heading text, got {s:?}"
+        );
+        assert!(
+            !s.contains("EXAMPLE"),
+            "pixel mode must not uppercase, got {s:?}"
+        );
+    }
+
+    #[test]
+    fn pixel_mode_keeps_strong_em_text_raw() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let body = t.insert(Some(root), elem("body", ""));
+        let strong = t.insert(Some(body), elem("strong", ""));
+        let _ = t.insert(Some(strong), text("bold"));
+        let em = t.insert(Some(body), elem("em", ""));
+        let _ = t.insert(Some(em), text("italic"));
+        let layout = construct_layout_tree_with(&t, &HashMap::new(), ConstructOptions::pixel());
+        let s = first_child_text(&layout);
+        assert!(
+            s.contains("bold") && s.contains("italic"),
+            "raw text present, got {s:?}"
+        );
+        assert!(!s.contains("**"), "no bold markers, got {s:?}");
+        assert!(!s.contains('*'), "no italic markers, got {s:?}");
+    }
+
+    #[test]
+    fn default_options_match_legacy_wrapper() {
+        // The legacy construct_layout_tree must stay byte-identical to
+        // construct_layout_tree_with(default) — existing callers rely on it.
+        let tree = heading_tree("h1", "Example Domain");
+        let mut styles = HashMap::new();
+        styles.insert(
+            3,
+            vec![Declaration {
+                property: "font-size".into(),
+                value: "2em".into(),
+                important: false,
+            }],
+        );
+        let legacy = construct_layout_tree(&tree, &styles);
+        let defaulted = construct_layout_tree_with(&tree, &styles, ConstructOptions::default());
+        let mut a = String::new();
+        let mut b = String::new();
+        all_text(&legacy.root, &mut a);
+        all_text(&defaulted.root, &mut b);
+        assert_eq!(a, b);
+        assert!(a.contains("EXAMPLE DOMAIN"));
+        assert!(ConstructOptions::default().ascii_visuals);
+        assert!(!ConstructOptions::pixel().ascii_visuals);
     }
 
     #[test]

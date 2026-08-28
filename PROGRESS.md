@@ -1850,6 +1850,23 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   （大写/加粗标记无法还原原大小写）、CJK 水平溢出、无居中/float。
 - 852 tests 全绿（+22），REALITY PASS，ascii 路径零回归。
 
+**M80.2 —— 批 32 像素渲染器三项已知限制清除**：
+
+- **ASCII proxy 泄漏（根）**：layout 侧新增 `ConstructOptions { ascii_visuals }`
+  + `construct_layout_tree_with`（旧签名零改动）；三处 ASCII 文本改写
+  （≥1.5em 大写 / strong `**` / em `*`）整体包进 `if opts.ascii_visuals`。
+  pixel 调用点经 `layout_tree_after_js_engine` 新增 pixel 参数接线——
+  **pixel 截图恢复 DOM 原文**（"Example Domain" 混合大小写，与 Chrome
+  一致），ASCII 输出契约字节级不变（仍 EXAMPLE DOMAIN）。
+- **CJK 水平溢出**：shrink-to-fit 从"仅大字号（pitch_extra>0）"扩展到
+  任何绘制宽超限盒——CJK 布局按 1 格/字但字形 advance ≈1.7 格，普通
+  字号中文行同样溢出画布。Latin 正文天然不超不受影响。中文两行完整
+  落画布内、无截断无叠印（字号略缩可读）。
+- **默认翻转**：评估后**维持 ascii 默认**——爬虫输出契约优先，pixel 是
+  显式 opt-in（`--render-mode pixel`）。
+- 855 tests 全绿（+3 回归：pixel 模式 h1/strong/em 文本保持原文、默认
+  options 与旧包装一致），REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

@@ -26,7 +26,7 @@ use browser_js_runtime::{
     current_cookie_jar, drain_captured_console_events, drain_captured_js_errors,
     drain_captured_network_events, ensure_cookie_jar, try_csr_fallback,
 };
-use browser_layout::{construct_layout_tree, layout as run_layout, LayoutConfig};
+use browser_layout::{layout as run_layout, LayoutConfig};
 use browser_net::HttpClient;
 use browser_render::{render_ascii, render_ascii_colored};
 use clap::{Parser, Subcommand};
@@ -472,6 +472,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                             false,
                             base.clone(),
                             &js_engine,
+                            true,
                         )?;
                         render_ascii(&layout, cols)
                     }
@@ -1082,8 +1083,15 @@ fn render_html_to_string_inner_ex_engine(
     base_url: Option<String>,
     js_engine: &str,
 ) -> Result<(String, String)> {
-    let (layout, _styles) =
-        layout_tree_after_js_engine(html, width, run_js, csr_fallback, base_url, js_engine)?;
+    let (layout, _styles) = layout_tree_after_js_engine(
+        html,
+        width,
+        run_js,
+        csr_fallback,
+        base_url,
+        js_engine,
+        false,
+    )?;
     let plain = render_ascii(&layout, width);
     let colored = render_ascii_colored(&layout, width);
     // M22.2/M70.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
@@ -1108,6 +1116,7 @@ fn layout_tree_after_js_engine(
     csr_fallback: bool,
     base_url: Option<String>,
     js_engine: &str,
+    pixel: bool,
 ) -> Result<(browser_layout::LayoutTree, browser_render::StyleMap)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
@@ -1153,7 +1162,14 @@ fn layout_tree_after_js_engine(
     let style_text = extract_style_text(&shared_tree.borrow());
     let sheet = parse_css(&style_text);
     let styles = compute_styles(&shared_tree.borrow(), &sheet);
-    let mut layout = construct_layout_tree(&shared_tree.borrow(), &styles);
+    // M80.2: pixel 模式跳过 ASCII 文本改写（大写/加粗星号——像素渲染要原文）。
+    let opts = if pixel {
+        browser_layout::ConstructOptions::pixel()
+    } else {
+        browser_layout::ConstructOptions::default()
+    };
+    let mut layout =
+        browser_layout::construct_layout_tree_with(&shared_tree.borrow(), &styles, opts);
     run_layout(
         &mut layout,
         LayoutConfig {
@@ -1177,7 +1193,7 @@ fn render_pixel_screenshot(
 ) -> Result<String> {
     let cols = browser_render::layout_columns_for_px(width_px);
     let (layout, styles) =
-        layout_tree_after_js_engine(html, cols, run_js, false, base_url, js_engine)?;
+        layout_tree_after_js_engine(html, cols, run_js, false, base_url, js_engine, true)?;
     let (w, h, rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
     screenshot::render_rgba_to_png(&rgba, w, h, path, max_height)
         .map_err(|e| anyhow!("pixel screenshot failed: {e}"))?;

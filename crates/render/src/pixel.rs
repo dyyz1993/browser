@@ -415,13 +415,15 @@ fn paint_text(p: &mut Painter, bx: &LayoutBox, inh: &Inherited, ink: (u8, u8, u8
     let (mut a_px, mut d_px) = line_extents(font_px);
     let mut pitch = (a_px + d_px + 4.0).max(p.line_h);
     let mut pitch_extra = pitch - p.line_h; // >0 仅当字号 > 基准（标题类）
-                                            // M80.1: 大字号行超页宽 → 整盒按比例缩小字号以适配页宽（Chrome 会
-                                            // 重新布局折行；我们的布局按格数算无法重排，截断丢字、折行又会与
-                                            // 下方内容叠印——vuejs hero 教训。缩放保住"标题完整 + 不叠印"，
-                                            // 代价是极端情况下大标题缩到接近正文字号）。仅对 pitch_extra>0 的
-                                            // 大字号盒启用——正文行布局已按格数折好，天然适配页宽。
+                                            // M80.1: 行绘制宽超页宽 → 整盒按比例缩小字号以适配页宽（Chrome
+                                            // 会重新布局折行；我们的布局按格数算无法重排，截断丢字、折行又
+                                            // 会与下方内容叠印——vuejs hero 教训。缩放保住"完整 + 不叠印"。
+                                            // M80.2: 从"仅大字号（pitch_extra>0）"扩展到**任何宽超限盒**——
+                                            // CJK 布局按 1 格/字但字形 advance ≈1.7 格，普通字号中文行同样
+                                            // 溢出画布（右边界截断）。Latin 正文天然不超（1 词/格≈advance），
+                                            // 不受影响。
     let page_right = p.canvas.w as f32;
-    if pitch_extra > 0.0 && !entries.is_empty() {
+    if !entries.is_empty() {
         let mut max_need = 0.0_f32;
         let mut min_start = f32::MAX;
         let mut prev: Option<f32> = None;
