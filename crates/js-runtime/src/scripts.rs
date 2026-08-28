@@ -4411,8 +4411,45 @@ Object.defineProperty(Element.prototype, 'offsetHeight', {
     get: function() { return 0; },
     enumerable: true, configurable: true
 });
-Element.prototype.focus = function() {};
-Element.prototype.blur = function() {};
+// M78.134: focus/activeElement 追踪 + execCommand('insertText')——WPT
+// uievents/textInput：execCommand 在焦点元素插入文本并同步派发 input 事件
+// （不派发 textInput）。insertText 无光标语义，值写入 value（表单）或
+// 追加文本子节点（contenteditable）。
+window.__activeEl = null;
+Element.prototype.focus = function() { window.__activeEl = this; };
+Element.prototype.blur = function() { if (window.__activeEl === this) window.__activeEl = null; };
+Object.defineProperty(document, 'activeElement', {
+    get: function() { return window.__activeEl || document.body || null; },
+    enumerable: true, configurable: true
+});
+document.execCommand = function(cmd, ui, value) {
+    if (cmd !== 'insertText') return false;
+    var el = window.__activeEl;
+    if (!el || typeof el.__nodeId !== 'number') return false;
+    var tag = String(__getTag(el.__nodeId) || '').toLowerCase();
+    var inserted = false;
+    if (tag === 'input' || tag === 'textarea') {
+        __setAttr(el.__nodeId, 'value', String(value));
+        try { el.value = String(value); } catch (e) {}
+        inserted = true;
+    } else {
+        var ce = __getAttr(el.__nodeId, 'contenteditable');
+        if (ce !== null) {
+            var tn = __createDetachedEl('__text__');
+            __setText(tn, String(value));
+            __appendChild(el.__nodeId, tn);
+            inserted = true;
+        }
+    }
+    if (inserted) {
+        try {
+            var ev = new Event('input', { bubbles: true });
+            ev.data = value;
+            el.dispatchEvent(ev);
+        } catch (e) {}
+    }
+    return inserted;
+};
 Element.prototype.scrollIntoView = function() {};
 // dataset（框架常用 data-* 属性）——Proxy 动态反射到 data-* attribute。
 // dataset.fooBar → __getAttr(nodeId, 'data-foo-bar')，写同步 __setAttr。
