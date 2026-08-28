@@ -1738,6 +1738,40 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   用在 drop 后。
 - 787 tests 全绿（+29：占位符 9 + UA 14 + e2e 更新）。
 
+**M78.140-141 —— 批 27 storage/webapi 长尾 + has_ts_syntax 误判（0.877→0.901）**：
+
+- **Agent A（scripts.rs）**：storage 190→**206**、webapi 59→**62**。
+  - Storage 事件 url（+4）：`__fireStorage` 捕获发起文档 URL（iframe src
+    绝对化 / srcdoc 继承父页），event.url 不再是监听方 URL。
+  - 004.html（+3）：hash-only 导航入 history 栈 + `history.go(n)` 排队执行
+    （back/forward 保持同步兼容 fixture）+ 每步遍历派发 hashchange。
+  - 007.html（+3）：DOMContentLoaded/load 移到首轮 drain 之后（脚本期
+    `go(-1)` 的 popstate 先于 onload）+ `__drainDueTimers` 毫秒竞态修复
+    （fresh `Date.now()` 替代轮次起点冻结值）。
+  - document_location（+3）：子文档 location=null + Document 构造器并入
+    own location accessor（[Unforgeable] 语义）。
+  - pushState/replaceState 跨源 SecurityError（+2）+ location.ancestorOrigins（+1）
+    + webapi timer 三件套（+3）：contentWindow stub 转发 setTimeout/
+    Function/Error + `__drainDueTimers` 异常上报帧标记的 onerror。
+- **Agent B（html-parser）**：证伪"长 script 截断"前提（1MB 逐字节无损，
+  ~426 字节是字节数/字符数混淆的误诊）；顺手修复 **innerHTML 丢 script**
+  真 bug——以 `<script>`/`<style>` 开头的片段被 html5ever 挪进 head，bridge
+  只拷 body 子节点导致丢失。新增 `parse_fragment()`（body 上下文片段解析）
+  + bridge 两处 innerHTML setter 切换。70KB 脚本 600 标记完整保留，
+  +11 回归测试。
+- **主线程 has_ts_syntax 双修**：
+  - `: void` 收紧到返回位置（`): void`）——对象字面量 `{ toString: void 0 }`
+    是合法 JS，裸子串曾整脚本误杀（+2）。
+  - strip_js_comments 加正则字面量状态机（state 6：前一 token 启发式判定
+    `/` 是正则还是除法、`[...]` 字符类、`\/` 转义）——正则内容参与注释
+    判定曾打偏状态机，JSDoc 里的 `: string` 误杀正常脚本。
+- **VERDICT: PASS 0.901**（js 0.951 / html 0.891 / css 1.000 /
+  webapi 0.899 / storage 0.757，spa_task 1.000）。**M78 全程
+  0.3334 → 0.901（+170%）**。799 tests 全绿 + REALITY PASS。
+- 结构性放弃（已论证）：window.open 多窗口 session history 族、跨 realm
+  storage 推送族、per-iframe location 族、RegExp modifiers 引擎语法、
+  ReadableStream piping。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

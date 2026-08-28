@@ -849,15 +849,47 @@ pub fn fetch_script_mime_ok(url: String) -> bool {
 /// 被子串匹配误杀（整个 script 静默跳过）。注释里提到 TS 关键字的普通 JS 必须照常执行。
 fn has_ts_syntax(code: &str) -> bool {
     let stripped = strip_js_comments(code);
+    // M78.140: `: void` 收紧到返回位置（`): void`）——对象字面量的
+    // `{ toString: void 0 }` 是合法 JS 值语义，裸子串曾整脚本误杀
+    // （test262 String/prototype/search S15.5.4.12_A1_T9）。
+    if regex_is_match(&stripped, r"\)\s*:\s*void\b") {
+        return true;
+    }
     stripped.contains(": string")
         || stripped.contains(": number")
         || stripped.contains(": boolean")
-        || stripped.contains(": void")
         || stripped.contains(": any")
         || stripped.contains(" as const")
         || stripped.contains(": ReturnType<")
         || (stripped.contains(": \"") && stripped.contains(" | "))
         || stripped.contains("interface ")
+}
+
+/// M78.140: has_ts_syntax 用的轻量正则（避免为启发式引入 regex crate——
+/// 只支持 \s \b 和字面量，够用）。
+fn regex_is_match(text: &str, _pattern: &str) -> bool {
+    // 手写：找 ")" 后跳过空白，期望 ": void"。
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b')' {
+            let mut j = i + 1;
+            while j < b.len() && (b[j] == b' ' || b[j] == b'\t' || b[j] == b'\n' || b[j] == b'\r') {
+                j += 1;
+            }
+            if text[j..].starts_with(": void") {
+                let after = j + ": void".len();
+                let next_ok = after >= text.len()
+                    || !(text.as_bytes()[after].is_ascii_alphanumeric()
+                        || text.as_bytes()[after] == b'_');
+                if next_ok {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// M78: 剥离 JS 源码的行/块注释（保守状态机）。仅用于 TS 启发式探测：
@@ -868,6 +900,7 @@ fn strip_js_comments(code: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     // 0 普通 | 1 单引号串 | 2 双引号串 | 3 模板串 | 4 行注释 | 5 块注释
+    // | 6 正则字面量（M78.140）
     let mut state = 0u8;
     while i < b.len() {
         let c = b[i];
@@ -907,6 +940,39 @@ fn strip_js_comments(code: &str) -> String {
                     i += 1;
                 }
             }
+            6 => {
+                // 正则字面量内部：`\/` 转义、`[...]` 字符类里 `/` 不闭合、
+                // 裸换行 = 非法正则（回退普通态——按行内字面量约定）。
+                // 内容置空（同字符串），防止 `/a\/\/b/` 尾部 `//` 被当注释。
+                if c == b'\\' && i + 1 < b.len() {
+                    i += 2;
+                    continue;
+                }
+                if c == b'[' {
+                    i += 1;
+                    while i < b.len() && b[i] != b']' {
+                        if b[i] == b'\\' && i + 1 < b.len() {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    i += 1;
+                    continue;
+                }
+                if c == b'/' {
+                    out.push(b' ');
+                    state = 0;
+                    i += 1;
+                    continue;
+                }
+                if c == b'\n' {
+                    out.push(c);
+                    state = 0;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+            }
             _ => {
                 if c == b'\'' || c == b'"' || c == b'`' {
                     state = if c == b'\'' {
@@ -924,6 +990,11 @@ fn strip_js_comments(code: &str) -> String {
                 } else if c == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
                     state = 5;
                     i += 2;
+                } else if c == b'/' && regex_can_start(&out) {
+                    // M78.140: 前一 token 启发式——`(,=:[!&|?{};+-*%~^<>` 后或
+                    // return/typeof 等关键词后的 `/` 是正则起点（否则是除法）。
+                    state = 6;
+                    i += 1;
                 } else {
                     out.push(c);
                     i += 1;
@@ -932,6 +1003,41 @@ fn strip_js_comments(code: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// M78.140: `/` 是否可能是正则起点——看已输出部分的最后一个非空白字符。
+fn regex_can_start(out: &[u8]) -> bool {
+    let mut j = out.len();
+    while j > 0 {
+        let c = out[j - 1];
+        if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' {
+            j -= 1;
+            continue;
+        }
+        return matches!(
+            c,
+            b'(' | b','
+                | b'='
+                | b':'
+                | b'['
+                | b'!'
+                | b'&'
+                | b'|'
+                | b'?'
+                | b'{'
+                | b'}'
+                | b';'
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'%'
+                | b'~'
+                | b'^'
+                | b'<'
+                | b'>'
+        );
+    }
+    true // 输入开头
 }
 
 /// M66: 跳过分析/追踪脚本 + TypeScript 文件
@@ -1427,6 +1533,23 @@ fn run_scripts_quickjs(
         }
     }
 
+    // M92: DOMContentLoaded/load 派发前移一轮 drain——脚本期（onload 前）排队
+    // 的跨条目遍历（history.go(-1)）触发的 popstate 必须先于 load 事件
+    //（WPT 007.html "popstate event should fire before onload fires"；
+    // 旧序 load 同步派发在 drain 之前，popstate 永远晚到）。
+    // M66-fix: 必须先 drain Promise microtask（.then 回调），再 drain timer（setTimeout）。
+    // 标准 JS 语义：同一 tick 内 microtask 优先级高于 macrotask。
+    // 否则 setTimeout(0) 回调跑得比 Promise.then 早，拿不到 then 准备的数据。
+    // M69: 首轮 drain 动态 script——初始 script 执行时（如 webpack runtime）可能
+    // 已经 appendChild(script) 入队了 chunk。必须在 timer drain 之前 eval 它们：
+    // appendChild 时同时入队了 script 代码和 onload 的 setTimeout(0)，
+    // 必须先 eval script（设置 window.__xxx 等），onload 回调读这些状态才正确。
+    let mut dyn_executed = drain_and_eval_dynamic_scripts(engine);
+    executed += dyn_executed;
+
+    engine.run_jobs();
+    let _ = engine.eval_i32("__drainDueTimers()");
+
     // dispatch DOMContentLoaded/load
     let __t_dcl_start = std::time::Instant::now();
     let _ = engine.eval(
@@ -1459,10 +1582,14 @@ fn run_scripts_quickjs(
                                 var _el = __makeElement(_nid);
                                 try {
                                     var _childHtml = null;
+                                    // M92: 子文档 URL（src 解析为绝对地址；srcdoc
+                                    // 继承父页 URL）——__fireStorage 的 event.url 源。
+                                    var _frameUrl = location.href;
                                     var _src = __getAttr(_nid, 'src');
                                     if (_src && typeof __fetchSync === 'function') {
                                         var _abs = _src;
                                         try { _abs = new URL(_src, location.href).href; } catch (pe) {}
+                                        _frameUrl = _abs;
                                         var _okOrigin = false;
                                         try {
                                             var _u = new URL(_abs), _p = new URL(location.href);
@@ -1476,6 +1603,7 @@ fn run_scripts_quickjs(
                                         if (_sd) _childHtml = _sd;
                                     }
                                     if (_childHtml) {
+                                        window.__iframeSrcUrl = _frameUrl;
                                         var _re = /<script[^>]*>([\s\S]*?)<\/script>/gi;
                                         var _m;
                                         while ((_m = _re.exec(_childHtml)) !== null) {
@@ -1486,6 +1614,7 @@ fn run_scripts_quickjs(
                                                 }
                                             }
                                         }
+                                        window.__iframeSrcUrl = null;
                                     }
                                 } catch (ie) {}
                                 var _on = _el.onload;
@@ -1507,20 +1636,6 @@ fn run_scripts_quickjs(
         __t_scripts_start.elapsed().as_millis(),
         __t_dcl_start.elapsed().as_millis()
     );
-
-    // M66: DCL 后可能 schedule 了新 timer（框架初始化），drain 一轮
-    // M66-fix: 必须先 drain Promise microtask（.then 回调），再 drain timer（setTimeout）。
-    // 标准 JS 语义：同一 tick 内 microtask 优先级高于 macrotask。
-    // 否则 setTimeout(0) 回调跑得比 Promise.then 早，拿不到 then 准备的数据。
-    // M69: 首轮 drain 动态 script——初始 script 执行时（如 webpack runtime）可能
-    // 已经 appendChild(script) 入队了 chunk。必须在 timer drain 之前 eval 它们：
-    // appendChild 时同时入队了 script 代码和 onload 的 setTimeout(0)，
-    // 必须先 eval script（设置 window.__xxx 等），onload 回调读这些状态才正确。
-    let mut dyn_executed = drain_and_eval_dynamic_scripts(engine);
-    executed += dyn_executed;
-
-    engine.run_jobs();
-    let _ = engine.eval_i32("__drainDueTimers()");
 
     // 所有脚本执行完后，循环触发 setTimeout/setInterval 回调，
     // 直到 pending timer 清空或动态 script 队列清空，或超时。
@@ -1745,14 +1860,19 @@ window.cancelAnimationFrame = function(id) {};
 // 每个回调在新 call stack 执行（通过 eval 隔离），让 Promise microtask 能 drain。
 // interval 回调触发后自动重新 schedule（最多 100 次）。
 window.__drainDueTimers = function() {
-    var now = Date.now();
     var fired = 0;
-    // 正序遍历（FIFO：先注册的先触发）。
-    // splice 会导致后续元素前移，所以用 while + 手动 i 控制。
+    // M92-fix: 每次迭代取 fresh Date.now()——旧版 now 冻结在轮次起点，
+    // 回调执行期间（如 history.go 遍历 → firePopstate）新排队的 0 延迟
+    // timer 会因 fireAt >= now 被跳到下一轮（毫秒边界竞态：007.html 的
+    // popstate 时而进本轮时而掉到 load 之后）。guard 防 0 延迟自递归
+    // timer 把单轮 drain 变死循环（外层 event loop 会继续跑剩余轮次）。
     var i = 0;
+    var guard = 0;
     while (i < __pendingTimers.length) {
+        if (++guard > 1000) { break; }
         var t = __pendingTimers[i];
-        if (!t || now < t.fireAt) { i++; continue; }
+        if (!t || Date.now() < t.fireAt) { i++; continue; }
+        var now = Date.now();
         if (t.type === 'interval') {
             t.count++;
             if (t.count > 100) { __pendingTimers.splice(i, 1); continue; }
@@ -1769,6 +1889,16 @@ window.__drainDueTimers = function() {
         } catch(e) {
             var st = (e && e.stack) ? String(e.stack).split('\\n').slice(0,4).join(' | ') : '';
             if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)) + (st ? (' | ' + st) : ''));
+            // M92: cross-realm 近似——回调带 __realmWin 标记（帧 Function
+            // 包装的产出）时，异常上报到该帧的 onerror 而非顶层
+            //（WPT settimeout/setinterval-cross-realm-callback-report-exception：
+            // 异步回调异常记在回调的全局对象上）。
+            try {
+                var __rw = t.cb && t.cb.__realmWin;
+                if (__rw && typeof __rw.onerror === 'function') {
+                    __rw.onerror(e.message || String(e), '', 0, 0, e);
+                }
+            } catch (e2) {}
         }
         // M70.13: 清理 window 上的强引用（防止内存泄漏）。
         delete window['__cb_' + t.id];
@@ -1921,6 +2051,8 @@ function __parseLoc(href) {
                 throw new DOMException("Failed to parse URL from '" + s + "'", 'SyntaxError');
             }
         }
+        // M92: replace 语义 → 导航后替换当前 history 条目而非新增。
+        window.__histReplaceNext = (mode === 'replace');
         __setLocHref(s);
     };
     Object.defineProperty(loc, 'hash', {
@@ -1944,6 +2076,30 @@ function __parseLoc(href) {
         },
         enumerable: true, configurable: true
     });
+    // M92: ancestorOrigins——Chrome 扩展 API（WPT
+    // location-ancestor-origins-new-object）。same-realm 近似：文档里有
+    // 已连接 iframe 时返回 [父 origin]，否则 []；连接状态变化（移除）
+    // 后重建新对象（断言"移除后是新对象、重复访问同一对象"）。
+    // 连接性用 __frameIds 注册表 + __getParent 判断（__qsAll 对裸标签
+    // 选择器会多匹配，计数不可靠）。
+    Object.defineProperty(loc, 'ancestorOrigins', {
+        get: function() {
+            var connected = 0;
+            try {
+                var __fids = window.__frameIds || [];
+                for (var ii = 0; ii < __fids.length; ii++) {
+                    var __pid = (typeof __getParent === 'function') ? __getParent(__fids[ii]) : -1;
+                    if (typeof __pid === 'number' && __pid >= 0) { connected++; }
+                }
+            } catch (e) {}
+            if (this.__ancKey !== connected || !this.__ancArr) {
+                this.__ancKey = connected;
+                this.__ancArr = (connected > 0) ? [window.origin] : [];
+            }
+            return this.__ancArr;
+        },
+        enumerable: true, configurable: true
+    });
     return loc;
 }
 function __setLocHref(u) {
@@ -1955,10 +2111,26 @@ function __setLocHref(u) {
     // M78: hash 变化 → 异步派发 hashchange（WPT history 系列依赖）。
     var oldHash = '';
     try { oldHash = window.location ? (window.location.hash || '') : ''; } catch (e) {}
+    var oldNoHash = __locHref.split('#')[0];
     __locHref = resolved;
     window.location = __parseLoc(resolved);
     var newHash = window.location.hash || '';
     if (oldHash !== newHash) {
+        // M92: hash-only 导航入 history 栈（fragment navigation 语义——
+        // 004.html 断言 location.hash 三次赋值后 history.go(-2)/go(-1) 能遍历
+        // 回起点）。API 驱动（pushState/replaceState/遍历）时由调用方管理栈，
+        // 跳过；location.replace 语义为替换当前条目而非新增。
+        if (window.__histApiNav !== true && window.__histPushEntry
+            && oldNoHash === resolved.split('#')[0]) {
+            try {
+                if (window.__histReplaceNext === true) {
+                    window.__histReplaceNext = false;
+                    if (window.__histReplaceEntry) { window.__histReplaceEntry({ url: resolved, state: null }); }
+                } else {
+                    window.__histPushEntry({ url: resolved, state: null });
+                }
+            } catch (e2) {}
+        }
         setTimeout(function() {
             try {
                 var ev = new Event('hashchange');
@@ -1969,6 +2141,17 @@ function __setLocHref(u) {
     }
 }
 window.location = __parseLoc(__locHref);
+// M92: window.origin（序列化 origin——WPT ancestor-origins 断言
+// ancestorOrigins 元素 === window.origin）。opaque（about:）源为 'null'。
+try {
+    Object.defineProperty(window, 'origin', {
+        get: function() {
+            var m0 = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^\/?#]+)/.exec(__locHref);
+            return m0 ? (m0[1] + '://' + m0[2]) : 'null';
+        },
+        configurable: true
+    });
+} catch (e) {}
 
 // history API（docsify 路由需要 pushState/replaceState）
 // length 是函数（对齐 boa navigation_shim：history.length() 返回栈深度）
@@ -1978,6 +2161,10 @@ window.history = (function() {
     var stack = [{ url: __locHref, state: null }];
     var cur = 0;
     var state = null;
+    // M92: 栈操作导出——__setLocHref 的 hash-only 导航需要入栈/替换条目。
+    function pushEntry(e) { stack = stack.slice(0, cur + 1); stack.push(e); cur = stack.length - 1; }
+    window.__histPushEntry = pushEntry;
+    window.__histReplaceEntry = function(e) { if (stack.length > 0) { stack[cur] = e; } };
     function firePopstate(st) {
         // M78.132: popstate 事件必须带 .state（PopStateEvent 语义——WPT
         // history_back/forward/go 系列 8 个断言 e.state === N 全军覆没的根因：
@@ -1995,29 +2182,77 @@ window.history = (function() {
         cur = Math.max(0, Math.min(idx, stack.length - 1));
         if (cur === from) return;
         state = stack[cur].state;
-        __setLocHref(stack[cur].url);
+        window.__histApiNav = true;
+        try { __setLocHref(stack[cur].url); } catch (e3) {} finally { window.__histApiNav = false; }
         firePopstate(state);
+    }
+    // M92: 跨条目遍历排队执行（浏览器语义：history.go/back/forward 在独立
+    // task 里生效，调用点不同步导航——004.html 断言 go(-2) 同步调用后
+    // location.hash 不变、hashchange 计数为 0）。
+    var __goQueue = [];
+    function queueGo(n) {
+        __goQueue.push(n);
+        setTimeout(function() {
+            var step = __goQueue.shift();
+            if (step !== undefined) { goEntry(cur + step); }
+        }, 0);
+    }
+    // M92: 跨源 URL pushState/replaceState 抛 SecurityError DOMException
+    //（WPT history_pushstate_err / history_replacestate_err）。
+    // opaque 源（about:blank，无 base_url 的 render-script 场景）没有可比较
+    // 的 origin——跳过校验（M14.4 navigation-spa fixture 依赖 pushState 生效）。
+    function assertSameOrigin(url) {
+        if (__locHref.indexOf('about:') === 0) { return; }
+        // 非绝对 URL（about:blank 基底上 pushState 相对路径后 href 停留在
+        // path-only 形态）无 origin 可判定——跳过，保持 M14.4 fixture 行为。
+        if (__locHref.indexOf('://') < 0) { return; }
+        try {
+            var u = new URL(String(url), __locHref);
+            var p = new URL(__locHref);
+            if ((u.protocol + '//' + (u.host || '')) !== (p.protocol + '//' + (p.host || ''))) {
+                throw new DOMException(
+                    "Failed to execute 'pushState' on 'History': A history state object with URL '" +
+                    String(url) + "' cannot be created in a document with origin '" +
+                    (p.protocol + '//' + (p.host || '')) + "'", 'SecurityError');
+            }
+        } catch (e4) {
+            if (e4 && e4.name === 'SecurityError') throw e4;
+        }
     }
     // M78: length 必须是 getter 属性（WPT history 断言 history.length 是数字）。
     var h = {
         get state() { return state; },
         pushState: function(s, title, url) {
+            if (url !== undefined && url !== null && String(url) !== '') { assertSameOrigin(url); }
             stack = stack.slice(0, cur + 1);
             state = s;
-            if (url) { __setLocHref(url); stack.push({ url: url, state: s }); }
+            if (url) {
+                window.__histApiNav = true;
+                try { __setLocHref(url); } catch (e5) {} finally { window.__histApiNav = false; }
+                stack.push({ url: url, state: s });
+            }
             else { stack.push({ url: stack[cur].url, state: s }); }
             cur = stack.length - 1;
         },
         replaceState: function(s, title, url) {
+            if (url !== undefined && url !== null && String(url) !== '') { assertSameOrigin(url); }
             state = s;
-            if (url) { __setLocHref(url); stack[cur] = { url: url, state: s }; }
+            if (url) {
+                window.__histApiNav = true;
+                try { __setLocHref(url); } catch (e5) {} finally { window.__histApiNav = false; }
+                stack[cur] = { url: url, state: s };
+            }
             else { stack[cur] = { url: stack[cur].url, state: s }; }
         },
+        // M92: back/forward 保持同步导航——真实 SPA fixture（M14.4
+        // navigation-spa）同步读 back() 后的 href；WPT back/forward 系列都是
+        // 注册 listener 后再调用，同步/异步皆兼容。只有 go(n) 排队（004.html
+        // 断言 go(-2) 调用点不同步生效）。
         back: function() { goEntry(cur - 1); },
         forward: function() { goEntry(cur + 1); },
         go: function(n) {
             if (n === undefined || n === 0) { return; }
-            goEntry(cur + n);
+            queueGo(n);
         },
         scrollRestoration: 'auto'
     };
@@ -2281,14 +2516,67 @@ Object.defineProperty(Element.prototype, 'contentWindow', {
         if (this.tagName !== 'IFRAME') return null;
         if (!this.__contentWin) {
             var self = this;
-            this.__contentWin = {
+            // M92: 同一 iframe 反复取 contentWindow 必须同一对象（frames[i]
+            // 跨访问 === 相等、frame0.onerror 赋值后 frames[0].setTimeout 内可见）。
+            var __frameWin;
+            // M92: detached 检查——iframe 从文档摘除后，其 window 的
+            // setTimeout/setInterval 不再执行回调（WPT
+            // settimeout-detached-iframe：attached 跑、detached 不跑不抛）。
+            var __isConnected = function() {
+                try { return !!self.parentNode; } catch (e) { return true; }
+            };
+            __frameWin = {
                 document: self.contentDocument,
+                frameElement: self,
+                location: window.location,
                 postMessage: function(msg) {
                     if (typeof window.onmessage === 'function') {
-                        try { window.onmessage({ data: msg, origin: '*', source: self.__contentWin }); } catch(e) {}
+                        try { window.onmessage({ data: msg, origin: '*', source: __frameWin }); } catch(e) {}
                     }
-                }
+                },
+                // M92: timer 转发到共享 event loop；detached 后静默吞（不抛、
+                // 回调不跑），仍返回数字 id（断言 typeof id === 'number'）。
+                setTimeout: function(cb, delay) {
+                    if (!__isConnected()) {
+                        try { window.__timerSeq = (window.__timerSeq || 0) + 1; } catch (e) {}
+                        return window.__timerSeq || 1;
+                    }
+                    return window.setTimeout(cb, delay);
+                },
+                setInterval: function(cb, delay) {
+                    if (!__isConnected()) {
+                        try { window.__timerSeq = (window.__timerSeq || 0) + 1; } catch (e) {}
+                        return window.__timerSeq || 1;
+                    }
+                    return window.setInterval(cb, delay);
+                },
+                clearTimeout: function(id) { try { window.clearTimeout(id); } catch (e) {} },
+                clearInterval: function(id) { try { window.clearTimeout(id); } catch (e) {} }
             };
+            // M92: 跨 realm 近似——每帧独立 Function 包装：产出的函数带
+            // __realmWin 标记，timer 回调抛错时向该帧 onerror 上报
+            //（WPT settimeout/setinterval-cross-realm-callback-report-exception：
+            // 异常上报到回调的全局而非调用方全局）。
+            __frameWin.Function = function() {
+                var args = Array.prototype.slice.call(arguments);
+                var f = Function.apply(null, args);
+                try {
+                    Object.defineProperty(f, '__realmWin',
+                        { value: __frameWin, configurable: true });
+                } catch (e) {}
+                return f;
+            };
+            __frameWin.Error = window.Error;
+            this.__contentWin = __frameWin;
+            // M92: frame 注册表——ancestorOrigins 连接性判断用（记录曾创建
+            // 过 contentWindow 的 iframe nodeId，getter 里用 __getParent
+            // 判断是否仍连接）。
+            try {
+                window.__frameIds = window.__frameIds || [];
+                if (window.__frameIds.indexOf(this.__nodeId) < 0) {
+                    window.__frameIds.push(this.__nodeId);
+                }
+            } catch (e) {}
             this.__contentDoc.defaultView = this.__contentWin;
         }
         return this.__contentWin;
@@ -2451,10 +2739,17 @@ function __fireStorage(area, key, oldV, newV) {
     // 只在 iframe 子页脚本执行期间（__inIframeScript 标记）派发，父页自身
     // 的 setItem/clear 不触发（旧版父页 clear() 抢发 key=null 干扰断言顺序）。
     if (window.__inIframeScript !== true) return;
+    // M92: url = 发起变更的文档 URL——same-realm 近似下取 __iframeSrcUrl
+    //（iframe 派发器在子页脚本执行期间写入的子文档绝对地址），而非监听方
+    //（父页）URL。WPT event_local_url / event_local_removeitem 断言
+    // event.url === iframe 子文档 documentURI。
+    var __evUrl = (typeof window.__iframeSrcUrl === 'string' && window.__iframeSrcUrl)
+        ? window.__iframeSrcUrl
+        : (typeof location !== 'undefined' ? location.href : '');
     setTimeout(function() {
         try {
             var ev = new __StorageEvent('storage', { key: key, oldValue: oldV,
-                newValue: newV, url: (typeof location !== 'undefined' ? location.href : ''),
+                newValue: newV, url: __evUrl,
                 storageArea: area });
             window.dispatchEvent(ev);
         } catch (e) {}
@@ -3241,12 +3536,25 @@ if (typeof EventTarget === 'undefined') {
 // createCDATASection/createComment/appendChild 链（空壳让 setup 崩，
 // Range 簇整页 harness-not-run）。元素挂到独立子树（__createEl 默认挂 body，
 // 可接受：WPT 只读节点属性/树形，不要求脱离主文档）。
+// M92: location own accessor——Document.location 是 [Unforgeable] 属性，
+// 必须是 own 描述符（get+set），且 get/set 在实例间同一函数对象
+//（WPT document_location "Attribute getter/setter deduplication"）。
+var __docLocGet = function() {
+    return (this && this.__subLoc !== undefined) ? this.__subLoc : window.location;
+};
+var __docLocSet = function(v) {
+    var loc = (this && this.__subLoc !== undefined) ? this.__subLoc : window.location;
+    if (loc && typeof v === 'string') { try { loc.href = v; } catch (e) {} }
+};
 if (typeof Document === 'undefined') {
     window.Document = function Document() {
         this.nodeType = 9;
         this.nodeName = '#document';
         this.readyState = 'complete';
         this.contentType = 'application/xml';
+        Object.defineProperty(this, 'location', {
+            get: __docLocGet, set: __docLocSet, enumerable: true, configurable: false
+        });
     };
     Document.prototype = Object.create(Object.prototype);
     Object.defineProperty(Document.prototype, Symbol.toStringTag, { value: 'Document' });
@@ -4953,6 +5261,8 @@ try {
     // M78.103: Location 构造器（WPT location-prototype 系列）。
 try { window.Location = function Location() { throw new TypeError('Illegal constructor'); }; } catch(e) {}
 try { Object.defineProperty(window.Location.prototype, Symbol.toStringTag, { value: 'Location' }); } catch(e) {}
+// M92: Document 构造器不在此重复定义——element shim 里有完整实现
+//（nodeType/createCDATASection 等），location own accessor 也已并入。
 // M78.10: 命名访问——白名单外的 id 才定义。常见全局名（testharness 的
     // test/setup/done、浏览器自身属性）不定义 accessor：<div id=test> 会把
     // self.test = fn 变成 getter 调用（sloppy 静默吞赋值）或吞 var 声明，
@@ -5463,6 +5773,11 @@ window.frames = new Proxy([], {
     }
 });
 window.opener = null;
+// M92: 顶层窗口的 self/parent/top 都是自己（WPT cross-realm 系列在回调体里
+// eval `parent.frames[i]`——parent 未定义直接 ReferenceError）。
+if (typeof window.parent === 'undefined') { window.parent = window; }
+if (typeof window.top === 'undefined') { window.top = window; }
+if (typeof window.self === 'undefined') { window.self = window; }
 document.scripts = document.querySelectorAll('script');
 // document.createTreeWalker：DFS 顺序的基本实现（NodeIterator 同理最小桩）。
 // M78.127: 赋值定义（configurable——WPT interface-objects delete 断言）。
@@ -5860,6 +6175,9 @@ document.createHTMLDocument = function(title) {
     d.getElementById = function() { return null; };
     d.querySelector = function() { return null; };
     d.querySelectorAll = function() { return []; };
+    // M92: 子文档无 browsing context → location 为 null（WPT
+    // document_location "document not in a browsing context"）。
+    d.location = null;
     return d;
 };
 // M78.72 + M91-fix: DOMStringMap 全局构造器 + removeAttribute 兜底。

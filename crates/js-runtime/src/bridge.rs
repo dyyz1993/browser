@@ -872,8 +872,10 @@ fn parse_html(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult
         if node_id >= t.len() {
             return;
         }
-        // 使用 html5ever 解析 HTML
-        let parsed = browser_html_parser::parse(&html);
+        // 使用 html5ever 解析 HTML（innerHTML 语义 = 片段解析：
+        // 开头是 <script>/<style> 的片段必须留在 body 上下文里，
+        // document 解析会把它们挪进 <head> 导致 setter 丢失节点）
+        let parsed = browser_html_parser::parse_fragment(&html);
         // 找到 body（html5ever 总是生成完整 html/head/body 结构）
         let body_id = find_first_element(&parsed, "body");
         if let Some(body_id) = body_id {
@@ -3033,7 +3035,9 @@ pub mod qjs_bridge {
             if node_id >= t.len() {
                 return;
             }
-            let parsed = browser_html_parser::parse(&html);
+            // innerHTML 语义 = 片段解析（见 boa 版 parse_html 注释）：
+            // document 解析会把片段开头的 <script> 挪进 <head>，setter 丢节点
+            let parsed = browser_html_parser::parse_fragment(&html);
             let body_id = super::find_first_element(&parsed, "body");
             if let Some(body_id) = body_id {
                 t.get_mut(node_id).children.clear();

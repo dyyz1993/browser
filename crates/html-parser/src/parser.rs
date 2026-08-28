@@ -32,6 +32,74 @@ pub fn parse(html: &str) -> Tree {
         .one(html.as_bytes())
 }
 
+/// Parse an HTML **fragment** (as set via `innerHTML` / `outerHTML`) into a
+/// [`browser_dom::Tree`].
+///
+/// Unlike [`parse`], this uses the HTML5 *fragment parsing algorithm* with a
+/// `body` context element, so leading `<script>` / `<style>` / `<template>`
+/// content lands as direct children of the context element instead of being
+/// relocated into `<head>` by the document tree-construction modes.
+///
+/// The returned tree always has the shape `Document → body → [fragment
+/// nodes]`, so callers can collect the parsed nodes via the `body` element.
+///
+/// # Example
+/// ```
+/// use browser_html_parser::parse_fragment;
+///
+/// // A fragment starting with <script> must keep the script as a node
+/// // (document parsing would move it into <head>).
+/// let tree = parse_fragment("<script>var a = 1;</script>");
+/// assert!(tree.len() > 1);
+/// ```
+#[must_use]
+pub fn parse_fragment(source: &str) -> Tree {
+    let sink = Sink::new();
+    let mut tree = html5ever::parse_fragment(
+        sink,
+        html5ever::ParseOpts::default(),
+        // 片段上下文 = body：开头是 <script>/<style> 的节点不会被挪进 head
+        QualName::new(
+            None,
+            markup5ever::Namespace::from("http://www.w3.org/1999/xhtml"),
+            markup5ever::LocalName::from("body"),
+        ),
+        Vec::new(),
+    )
+    .from_utf8()
+    .one(source.as_bytes());
+
+    // html5ever fragment 语义（HTML5 spec「parse a fragment」步骤 5–7）：
+    // 解析期间会新建一个 root `html` 元素承接片段节点；context `body` 只参与
+    // tokenizer 状态与插入模式判定，不承载结果。这里把 root html 的子节点搬到
+    // context body 下，使产物结构恒为 `Document → body → [fragment nodes]`，
+    // 调用方（js-runtime bridge 的 innerHTML setter）从 body 收集节点即可。
+    let root = tree.root();
+    let root_children = tree.children_of(root).to_vec();
+    let mut body_id = None;
+    let mut html_id = None;
+    for &child in &root_children {
+        if let NodeData::Element { tag, .. } = tree.data(child) {
+            match tag.as_str() {
+                "body" => body_id = Some(child),
+                "html" => html_id = Some(child),
+                _ => {}
+            }
+        }
+    }
+    if let (Some(body), Some(html)) = (body_id, html_id) {
+        let fragment_nodes = tree.children_of(html).to_vec();
+        for &node in &fragment_nodes {
+            tree.get_mut(node).parent = Some(body);
+            tree.get_mut(body).children.push(node);
+        }
+        tree.get_mut(html).children.clear();
+        // 从 Document 摘掉空的 root html；arena 中的孤儿节点保持不可达
+        tree.get_mut(root).children.retain(|&c| c != html);
+    }
+    tree
+}
+
 /// html5ever `TreeSink` implementation that builds a `browser_dom::Tree`.
 ///
 /// We keep a `QualName` cache per element node id so that
