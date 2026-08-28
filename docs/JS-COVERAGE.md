@@ -108,9 +108,16 @@
 | insertBefore | ✅ | | QUICKJS_ELEMENT_SHIM |
 | removeChild | ✅ | | QUICKJS_ELEMENT_SHIM |
 | setAttribute/getAttribute | ✅ | | bridge.rs __setAttr/__getAttr |
-| textContent | ✅ | | QUICKJS_ELEMENT_SHIM |
+| textContent | ✅ M78.128（'' 赋值清全部子节点不留空 Text；setter 对原生 Text 节点直写 data） | WPT outertext/textContent | QUICKJS_ELEMENT_SHIM + bridge.rs set_text_inner |
 | innerHTML | ✅ M62（html5ever 解析为真实 DOM 节点，支持 querySelector 后续查找） | bark.day.app | bridge.rs set_inner_html |
 | outerHTML | ✅ M62（简化实现 = innerHTML，docsify initRender 用） | bark.day.app | QUICKJS_ELEMENT_SHIM |
+| **outerText setter** | ✅ M78.128（innerText 转换 + 替换自身 + 相邻文本合并；游离节点抛 NoModificationAllowedError；SVG/MathML no-op；\n/\r→`<br>`） | WPT outertext-setter | QUICKJS_ELEMENT_SHIM |
+| **localName getter** | ✅ M78.128（元素小写 / SVG 原始大小写 / 伪文本 #text / 伪注释 #comment） | WPT outerText newlines | QUICKJS_ELEMENT_SHIM |
+| **childNodes 元素包装** | ✅ M78.128（返回 __makeElement 包装数组——裸 NodeId 数字上 localName/data/nodeType 全 undefined） | WPT outerText append 系列 | QUICKJS_ELEMENT_SHIM |
+| **Element.remove()** | ✅ M78.130（真摘除——旧 no-op 让 :dir() first-strong 等语义失效） | WPT dir-selector-auto | QUICKJS_ELEMENT_SHIM |
+| **querySelector 复杂选择器** | ✅ M78.130（`#id:dir()` 等含 : . [ 的选择器走 css-engine——旧 id 快路径把 `#div1:dir(ltr)` 当纯 id 查找直接 None，css-engine 从未被调用） | WPT dir-selector | bridge.rs find_by_selector |
+| **:nth-last-child 选择器** | ✅（M78 批23：枚举+解析+从末尾 1-based 元素兄弟位置匹配） | css-engine 单元测试 | css-engine/selector.rs |
+| **Response.formData()** | ✅ M78.129（严格 multipart 状态机：dash-boundary 开头、padding+CRLF、bare CR/LF/缺 Content-Disposition 一律 reject；合法空表单 resolve 空 FormData；FormData body 自动 multipart 序列化） | WPT response-form-data 13 用例 | QUICKJS_XHR_SHIM |
 | **querySelector (Element)** | ✅ M62（Vue/React createElement 后查找子元素） | integration_js_features | bridge.rs qs |
 | **querySelectorAll (Element)** | ✅ 全部（M62，简化版从 document 根搜索） | integration_js_features | bridge.rs qs_all |
 | cloneNode | ✅ | | QUICKJS_ELEMENT_SHIM |
@@ -154,6 +161,8 @@
 | localStorage | ✅ | storage_shim 测试 | bridge.rs __getCookie/__setCookie + JS wrap |
 | sessionStorage | ✅ | 共享后端 | bridge.rs (same backend) |
 | history.* | ✅ | navigation_shim 测试 | QUICKJS_GLOBAL_SHIM |
+| **history 栈 + state 恢复** | ✅ M78.17（条目存 {url,state}，back/forward/go 恢复 state；⚠️ popstate 事件尚缺 .state 属性——M78.131 待修） | WPT combination_history | QUICKJS_GLOBAL_SHIM |
+| **document.createHTMLDocument** | ✅ M78.126（子文档 createElement/createTextNode/createComment 全游离语义 + 挂 __ownerDoc；旧版元素误挂主文档 body） | WPT Node-removeChild synthetic | QUICKJS_DOCUMENT_SHIM |
 | location.* | ✅ | | QUICKJS_GLOBAL_SHIM |
 | setTimeout/clearTimeout | ✅ | integration_settimeout (6) | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
 | **setInterval/clearInterval** | ✅ | 手测（100 次硬上限防死循环） | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
@@ -166,6 +175,8 @@
 | EventTarget | ✅ | integration_js_features |
 | CustomEvent | ✅ | integration_js_features |
 | dispatchEvent | ✅ | integration_js_features（含 DOMContentLoaded 自动 dispatch） |
+| **dispatchEvent 三阶段** | ✅ M78.129（capture→target→bubble，传播路径含 window/document，capture 标志过滤；stopPropagation 延迟生效 / stopImmediatePropagation 立即终止；dispatch 后清 stop 标志可重派发） | WPT stopPropagation/multiple-cancelBubble 系列 |
+| **WebIDL 接口对象属性语义** | ✅ M78.127（57 个接口：{enumerable:false, configurable:true}，for-in 不可见 + 可 delete。QuickJS 顶层 function 声明 non-configurable 无法事后 redefine——必须 globalThis 赋值 + 统一 defineProperty） | WPT interface-objects |
 | addEventListener（真实现） | ✅ | document/element 存回调 + dispatchEvent 触发 |
 
 ### 编码/加密/二进制
