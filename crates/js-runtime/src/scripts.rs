@@ -39,6 +39,20 @@ enum ScriptEntry {
     InlineModule(String),
 }
 
+/// M79: Vite `import.meta.env` 生产构建缺省语义（`__vite_env__` 初始值）。
+///
+/// 背景：QuickJS 的 `import.meta` 不可赋（M76 发现），无法直接挂 `env` 属性，
+/// 采用源码替换 `import.meta.env` → `__vite_env__` 模块级变量。Vite 生产构建的
+/// `import.meta.env.VITE_*` 已被替换为静态值；运行时读**未定义键返回 undefined
+/// 不抛错**（普通对象语义），`import.meta.env.MODE` 等取这里的缺省值。
+///
+/// 三处共用（单一事实来源）：
+/// - `engine_quickjs::HttpLoader`（依赖模块，loader 路径）
+/// - scripts.rs ExternalModule preamble（入口模块）
+/// - `try_strip_esm_for_eval`（strip 退化路径）
+pub(crate) const VITE_ENV_DEFAULT_JS: &str =
+    "{MODE:'production',DEV:false,PROD:true,BASE_URL:'/',SSR:false}";
+
 /// Collect the text content of every `<script>` element in `tree`,
 /// in document order. Empty scripts are filtered out.
 #[must_use]
@@ -139,12 +153,9 @@ fn try_strip_esm_for_eval(code: &str, base_url: &str) -> Option<String> {
         };
         patched = patched.replace("import.meta.url", &format!("\"{url}\""));
     }
-    // 替换 import.meta.env → 简单对象（Vite 环境变量桩）
+    // 替换 import.meta.env → Vite 环境变量桩（M79: 统一用 VITE_ENV_DEFAULT_JS）
     if patched.contains("import.meta.env") {
-        patched = patched.replace(
-            "import.meta.env",
-            "({MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'})",
-        );
+        patched = patched.replace("import.meta.env", &format!("({VITE_ENV_DEFAULT_JS})"));
     }
     // 其他裸 import.meta → 替换为带 url 属性的对象（防 import.meta["url"] 等）
     if patched.contains("import.meta") {
@@ -153,7 +164,10 @@ fn try_strip_esm_for_eval(code: &str, base_url: &str) -> Option<String> {
         } else {
             base_url.to_string()
         };
-        patched = patched.replace("import.meta", &format!("({{url:\"{url}\",env:{{MODE:'production',DEV:false,PROD:true,SSR:false,BASE_URL:'/'}}}})"));
+        patched = patched.replace(
+            "import.meta",
+            &format!("({{url:\"{url}\",env:{VITE_ENV_DEFAULT_JS}}})"),
+        );
     }
     Some(patched)
 }
@@ -1260,7 +1274,9 @@ fn run_scripts_quickjs(
                                     // 修补 import.meta.env / import.meta.hot
                                     //（QuickJS 模块作用域不可写 meta 属性）
                                     // __vite_hot_stub__ + __vite_env__ 必须提前定义
-                                    let preamble = "if(typeof __vite_hot_stub__==='undefined')var __vite_hot_stub__={accept:function(){},dispose:function(){},on:function(){},decline:function(){},invalidate:function(){},data:{}};\nif(typeof __vite_env__==='undefined')var __vite_env__={};\n";
+                                    let preamble = format!(
+                                        "if(typeof __vite_hot_stub__==='undefined')var __vite_hot_stub__={{accept:function(){{}},dispose:function(){{}},on:function(){{}},decline:function(){{}},invalidate:function(){{}},data:{{}}}};\nif(typeof __vite_env__==='undefined')var __vite_env__={VITE_ENV_DEFAULT_JS};\n"
+                                    );
                                     let patched = preamble.to_string()
                                         + &raw_code
                                             .replace("import.meta.env", "__vite_env__")
@@ -1276,7 +1292,8 @@ fn run_scripts_quickjs(
                                             "[js-runtime] module eval (strip fallback): {url}"
                                         );
                                     }
-                                    // M76ter: 仅当模块 eval 失败时，strip import/export 后 eval 为普通 script
+                                    // M76ter→M79: 仅当模块 eval 失败时，strip import/export 后 eval 为普通 script
+                                    // preamble 用 VITE_ENV_DEFAULT_JS（完整 Vite 生产语义）
                                     let mut stripped = String::new();
                                     for line in raw_code.lines() {
                                         let t = line.trim_start();
@@ -2843,22 +2860,148 @@ window.URL = function(input, base) {
     this.toJSON = function() { return this.href; };
 };
 
-// URLSearchParams（简化）
+// URLSearchParams（WHATWG url-3x 子集，M79）
+// 内部存 [key,value] 对数组：支持重复键（get→首个 / getAll→全部 / set→替换首个）。
+// solid-router 的 parsePath 返回 searchParams 后调 forEach 转对象——此前缺 forEach
+// 直接 TypeError "not a function"，module eval 中断 → solidjs.com 整页空白。
 window.URLSearchParams = function(init) {
-    var params = {};
-    if (typeof init === 'string') {
-        init.replace(/^\?/, '').split('&').forEach(function(p) {
-            var kv = p.split('=');
-            params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || '');
-        });
+    this.__entries = [];
+    var self = this;
+    function pushDecoded(pair) {
+        var kv = pair.split('=');
+        var k = decodeURIComponent((kv[0] || '').replace(/\+/g, ' '));
+        var v = decodeURIComponent((kv[1] || '').replace(/\+/g, ' '));
+        self.__entries.push([k, v]);
     }
-    this.get = function(k) { return (k in params) ? params[k] : null; };
-    this.set = function(k, v) { params[k] = v; };
-    this.has = function(k) { return k in params; };
-    this.toString = function() {
-        return Object.keys(params).map(function(k) { return k + '=' + params[k]; }).join('&');
-    };
+    if (typeof init === 'string') {
+        var s = init.replace(/^\?/, '');
+        if (s.length > 0) {
+            var parts = s.split('&');
+            for (var i = 0; i < parts.length; i++) {
+                if (parts[i] !== '') pushDecoded(parts[i]);
+            }
+        }
+    } else if (init && typeof init === 'object') {
+        if (init.__entries) {
+            // 另一个 URLSearchParams（拷贝）
+            for (var j = 0; j < init.__entries.length; j++) {
+                this.__entries.push([init.__entries[j][0], init.__entries[j][1]]);
+            }
+        } else if (Array.isArray(init)) {
+            // sequence<sequence<USVString>>（如 Object.fromEntries 后的数组）
+            for (var m = 0; m < init.length; m++) {
+                if (Array.isArray(init[m]) && init[m].length >= 2) {
+                    this.__entries.push([String(init[m][0]), String(init[m][1])]);
+                }
+            }
+        } else {
+            // record（普通对象）
+            for (var key in init) {
+                if (Object.prototype.hasOwnProperty.call(init, key)) {
+                    this.__entries.push([String(key), String(init[key])]);
+                }
+            }
+        }
+    }
 };
+window.URLSearchParams.prototype.append = function(k, v) {
+    this.__entries.push([String(k), String(v)]);
+};
+window.URLSearchParams.prototype['delete'] = function(k) {
+    k = String(k);
+    var out = [];
+    for (var i = 0; i < this.__entries.length; i++) {
+        if (this.__entries[i][0] !== k) out.push(this.__entries[i]);
+    }
+    this.__entries = out;
+};
+window.URLSearchParams.prototype.get = function(k) {
+    k = String(k);
+    for (var i = 0; i < this.__entries.length; i++) {
+        if (this.__entries[i][0] === k) return this.__entries[i][1];
+    }
+    return null;
+};
+window.URLSearchParams.prototype.getAll = function(k) {
+    k = String(k);
+    var out = [];
+    for (var i = 0; i < this.__entries.length; i++) {
+        if (this.__entries[i][0] === k) out.push(this.__entries[i][1]);
+    }
+    return out;
+};
+window.URLSearchParams.prototype.has = function(k) {
+    return this.get(String(k)) !== null;
+};
+window.URLSearchParams.prototype.set = function(k, v) {
+    k = String(k);
+    v = String(v);
+    var found = false;
+    var out = [];
+    for (var i = 0; i < this.__entries.length; i++) {
+        if (this.__entries[i][0] === k) {
+            if (!found) {
+                out.push([k, v]);
+                found = true;
+            }
+        } else {
+            out.push(this.__entries[i]);
+        }
+    }
+    if (!found) out.push([k, v]);
+    this.__entries = out;
+};
+window.URLSearchParams.prototype.sort = function() {
+    this.__entries.sort(function(a, b) {
+        return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
+    });
+};
+window.URLSearchParams.prototype.forEach = function(cb, thisArg) {
+    for (var i = 0; i < this.__entries.length; i++) {
+        cb.call(thisArg, this.__entries[i][1], this.__entries[i][0], this);
+    }
+};
+// 迭代器协议：entries/keys/values + Symbol.iterator（解构 for-of / [...sp] 用）
+function __uspMakeIter(get, len) {
+    var idx = 0;
+    var it = {
+        next: function() {
+            if (idx >= len()) return { done: true, value: undefined };
+            return { done: false, value: get(idx++) };
+        }
+    };
+    // 迭代器自身必须可迭代（协议：iterator[Symbol.iterator]() === iterator）
+    it[Symbol.iterator] = function() { return it; };
+    return it;
+}
+window.URLSearchParams.prototype.entries = function() {
+    var e = this.__entries;
+    return __uspMakeIter(function(i) { return [e[i][0], e[i][1]]; }, function() { return e.length; });
+};
+window.URLSearchParams.prototype.keys = function() {
+    var e = this.__entries;
+    return __uspMakeIter(function(i) { return e[i][0]; }, function() { return e.length; });
+};
+window.URLSearchParams.prototype.values = function() {
+    var e = this.__entries;
+    return __uspMakeIter(function(i) { return e[i][1]; }, function() { return e.length; });
+};
+window.URLSearchParams.prototype[Symbol.iterator] = window.URLSearchParams.prototype.entries;
+window.URLSearchParams.prototype.toString = function() {
+    function enc(s) {
+        // application/x-www-form-urlencoded 序列化：空格→+，!'()* 也编码
+        return encodeURIComponent(s)
+            .replace(/%20/g, '+')
+            .replace(/!/g, '%21').replace(/'/g, '%27')
+            .replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\*/g, '%2A');
+    }
+    return this.__entries
+        .map(function(e) { return enc(e[0]) + '=' + enc(e[1]); })
+        .join('&');
+};
+Object.defineProperty(window.URLSearchParams.prototype, 'size', {
+    get: function() { return this.__entries.length; }
+});
 
 // FileReader（爬虫场景：文件上传前读内容）
 window.FileReader = function() {
@@ -3866,26 +4009,12 @@ Element.prototype.cloneNode = function(deep) {
     var newId = __createEl(tag);
     if (newId < 0) return null;
     var copy = __makeElement(newId);
-    // 复制文本内容（仅叶子元素）。
-    // GAP-J: 不能对父元素无条件 __setText——__getText(父) 返回子节点文本拼接，
-    // __setText 会给克隆的父元素加一个不该有的文本子节点（导致 cloneNode 多复制）。
-    // 只在没有元素子节点（纯文本叶子，如 <li>text</li>）时才复制文本。
-    try {
-        var hasElementChild = false;
-        var rawChildren = __children(this.__nodeId);
-        if (rawChildren) {
-            var childIds = rawChildren.split(',').filter(function(s) { return s; });
-            for (var ci = 0; ci < childIds.length; ci++) {
-                var ctag = __getTag(parseInt(childIds[ci], 10));
-                if (ctag && ctag !== '__text__') { hasElementChild = true; break; }
-            }
-        }
-        if (!hasElementChild) {
-            var txt = __getText(this.__nodeId);
-            if (txt) __setText(newId, String(txt));
-        }
-    } catch(e) {}
-    // 深拷贝：递归克隆子元素（重建子树）
+    // M79: 深拷贝改为克隆**全部子节点类型**（元素 + 文本 + 注释）。
+    // 旧版 GAP-J 只克隆元素子节点、叶子文本靠 __setText 兜底——注释子节点
+    // 全部丢失。solid 等编译型框架的模板克隆（template().content.firstChild
+    // .cloneNode(true)）依赖注释占位符 `<!--#-->` 保留，节点链
+    // （z.firstChild.nextSibling...）缺一环即 TypeError（nextSibling of null）。
+    // 全量克隆后叶子文本自然被克隆，不再需要旧 __setText 特例（避免双份文本）。
     if (deep !== false) {
         try {
             var cs = __children(this.__nodeId);
@@ -3894,11 +4023,25 @@ Element.prototype.cloneNode = function(deep) {
                 for (var i = 0; i < ids.length; i++) {
                     var cid = parseInt(ids[i], 10);
                     var ctag = __getTag(cid);
-                    if (ctag && ctag !== '__text__') {
-                        var childCopy = __makeElement(cid) ? __makeElement(cid).cloneNode(true) : null;
-                        if (childCopy) {
-                            try { __appendChild(newId, childCopy.__nodeId); } catch(e2) {}
-                        }
+                    var childCopy = null;
+                    if (ctag === '__text__') {
+                        var td = (typeof __textData === 'function') ? __textData(cid) : '';
+                        childCopy = document.createTextNode(String(td || __getText(cid) || ''));
+                    } else if (ctag === '__comment__') {
+                        var cd = (typeof __textData === 'function') ? __textData(cid) : '';
+                        childCopy = document.createComment(String(cd || __getText(cid) || ''));
+                    } else if (ctag) {
+                        childCopy = __makeElement(cid) ? __makeElement(cid).cloneNode(true) : null;
+                    } else {
+                        // M79: getTag 空串 = 真解析的 Text（textData 非空）或真 Comment
+                        // （textData 恒空——现有 bridge 读不出 Comment 数据，按空注释克隆；
+                        // solid 标记靠节点身份而非内容，nextSibling 链不因数据缺失断裂）。
+                        var td2 = (typeof __textData === 'function') ? __textData(cid) : '';
+                        childCopy = td2 ? document.createTextNode(td2)
+                                        : document.createComment('');
+                    }
+                    if (childCopy) {
+                        try { __appendChild(newId, childCopy.__nodeId); } catch(e2) {}
                     }
                 }
             }
@@ -3951,6 +4094,8 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
                 // 子树对文本节点本身返回空（M78.21 重写时曾丢失此 fallback）。
                 var td = (typeof __textData === 'function') ? __textData(id) : '';
                 out += td || text;
+            } else if (tag === '__comment__') {
+                // M79: 注释节点不可见于 innerHTML（与序列化器 html_ser.rs 对齐）
             } else {
                 // M78.21: 属性序列化 + void 元素无闭合（innerText setter 断言
                 // innerHTML === 'abc<br>def'）。
@@ -5360,7 +5505,19 @@ document.createDocumentFragment = function() {
     frag.__isFragment = true;
     return frag;
 };
-document.createComment = function(text) { return document.createElement('div'); };
+// M79: 真 Comment 节点。旧版返回 div——solid 模板克隆依赖 Comment 节点身份
+// （cloneNode 保留占位符、insert 以注释为锚点、nodeType===8 检查）。
+// 实现：`__comment__` 伪元素（nodeType getter 映射 8、nodeName '#comment'、
+// innerHTML/collect_text 均输出空——不污染爬取文本）。注释数据存 JS 包装
+// 对象 __data（现有 bridge 读不出树内 Comment 数据，克隆时空数据可接受）。
+document.createComment = function(text) {
+    var id = (typeof __createDetachedEl === 'function')
+        ? __createDetachedEl('__comment__')
+        : __createEl('__comment__');
+    var node = __makeElement(id);
+    if (node) node.__data = String(text || '');
+    return node;
+};
 document.getElementById = function(id) {
     var nodeId = __getElById(String(id));
     return (nodeId >= 0) ? __makeElement(nodeId) : null;

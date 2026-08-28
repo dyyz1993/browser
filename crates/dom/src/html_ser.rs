@@ -26,6 +26,21 @@ fn serialize_node(tree: &Tree, id: NodeId, out: &mut String) {
             out.push('>');
         }
         NodeData::Element { tag, attrs } => {
+            // M79: JS bridge 的伪标签不得泄漏进序列化输出。
+            // `__text__` = createTextNode 的透明包装（Element+Text 子节点）→
+            // 只输出子节点；`__comment__` = createComment 包装（树内无数据）→
+            // 不可见（注释本就不参与文本/HTML 语义）。此前 solidjs.com 等
+            // SPA 的 html 输出会漏出 `<__text__>` 垃圾标签。
+            match tag.as_str() {
+                "__text__" => {
+                    for &child in tree.children_of(id) {
+                        serialize_node(tree, child, out);
+                    }
+                    return;
+                }
+                "__comment__" => return,
+                _ => {}
+            }
             out.push('<');
             out.push_str(tag);
             for (k, v) in attrs {

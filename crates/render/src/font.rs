@@ -43,6 +43,75 @@ const FONT_SIZE: f32 = 16.0;
 /// Extra spacing beyond ascent+descent (M25 measured value).
 const LINE_GAP: usize = 6;
 
+/// M72: 默认背景色（白，与 RGBA 缓冲区初始化一致）。
+const WHITE: (u8, u8, u8) = (255, 255, 255);
+/// M30: W3C link 蓝 #0000EE。
+const LINK_BLUE: (u8, u8, u8) = (0, 0, 238);
+/// M72: 对比度门槛（WCAG AA 大字号标准 3.0:1）。低于此值自动翻转文字色。
+const MIN_CONTRAST: f64 = 3.0;
+
+/// M72: sRGB 单通道线性化（WCAG 2.x 相对亮度用）。
+fn srgb_channel(c: u8) -> f64 {
+    let c = f64::from(c) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// M72: WCAG 2.x 相对亮度 `L = 0.2126R + 0.7152G + 0.0722B`（线性化后）。
+fn relative_luminance(rgb: (u8, u8, u8)) -> f64 {
+    0.2126 * srgb_channel(rgb.0) + 0.7152 * srgb_channel(rgb.1) + 0.0722 * srgb_channel(rgb.2)
+}
+
+/// M72: WCAG 对比度 `(L1+0.05)/(L2+0.05)`，值域 [1, 21]。
+fn contrast_ratio(l1: f64, l2: f64) -> f64 {
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// M72: 对比度保障（暗色主题截图可读性的核心）。
+///
+/// 墨色与背景的 WCAG 对比度 ≥ [`MIN_CONTRAST`] 时保留原色（尊重站点配色）；
+/// 不足时**保背景色块不动**，把文字翻成黑/白中与背景对比更高的那个：
+/// 暗底上的黑字/蓝字 → 白，白底上的浅灰字 → 黑。
+#[must_use]
+pub(crate) fn ensure_contrast(ink: (u8, u8, u8), bg: (u8, u8, u8)) -> (u8, u8, u8) {
+    let l_bg = relative_luminance(bg);
+    if contrast_ratio(relative_luminance(ink), l_bg) >= MIN_CONTRAST {
+        return ink;
+    }
+    let black = contrast_ratio(0.0, l_bg);
+    let white = contrast_ratio(1.0, l_bg);
+    if white >= black {
+        (255, 255, 255)
+    } else {
+        (0, 0, 0)
+    }
+}
+
+/// M72: 查找该列所在格子的背景色（span 按列的半开区间匹配）。
+fn bg_at(spans: &[(usize, usize, (u8, u8, u8))], col: usize) -> Option<(u8, u8, u8)> {
+    spans
+        .iter()
+        .find(|&&(s, e, _)| col >= s && col < e)
+        .map(|&(_, _, c)| c)
+}
+
+/// M70: 查找该列的 CSS 前景色。
+fn fg_color_of(spans: &[(usize, usize, (u8, u8, u8))], col: usize) -> Option<(u8, u8, u8)> {
+    spans
+        .iter()
+        .find(|&&(s, e, _)| col >= s && col < e)
+        .map(|&(_, _, c)| c)
+}
+
+/// M72: 单通道 alpha 合成 `out = ink*a + bg*(1-a)`（`a`: 0..=255 coverage）。
+fn blend_channel(ink: u8, bg: u8, a: u32) -> u8 {
+    ((u32::from(ink) * a + u32::from(bg) * (255 - a)) / 255) as u8
+}
+
 /// RGBA layout metrics — all the numbers a caller needs to size its buffer.
 /// Computed once from the embedded DejaVuSans at FONT_SIZE.
 #[derive(Debug, Clone, Copy)]
@@ -93,8 +162,8 @@ impl FontRenderer {
         self.metrics
     }
 
-    /// Rasterize `text` into a freshly-allocated RGBA buffer (white
-    /// background, black text). Link spans get W3C link blue (#0000EE).
+    /// Rasterize `text` into a freshly-allocated RGBA buffer (default
+    /// white background, black text). Link spans get W3C link blue (#0000EE).
     ///
     /// - `link_spans`: per-line list of `(start_col, end_col)` half-open
     ///   ranges to paint blue. Pass empty for plain black text.
@@ -103,6 +172,13 @@ impl FontRenderer {
     /// - `fg_spans`: M70 per-line list of `(start_col, end_col, (r,g,b))`
     ///   half-open ranges to paint text in CSS color (overrides default black).
     ///   Priority: link > fg > default black.
+    ///
+    /// M72 (dark-theme readability): glyph pixels are alpha-composited
+    /// against the actual background color under each cell
+    /// (`out = ink*a + bg*(1-a)`), and when the ink-vs-background WCAG
+    /// contrast ratio is below [`MIN_CONTRAST`] the ink is flipped to
+    /// black/white (whichever contrasts more) — background blocks are kept.
+    /// This keeps light text visible on dark backgrounds and vice versa.
     ///
     /// Returns `(width, height, rgba_buffer)`. Buffer length is
     /// `width * height * 4`.
@@ -158,6 +234,7 @@ impl FontRenderer {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             let fg_spans = fg_spans_per_line.get(row).map(Vec::as_slice).unwrap_or(&[]);
+            let bgs = bg_spans_per_line.get(row).map(Vec::as_slice).unwrap_or(&[]);
             let row_top = row * line_height;
             for (col, ch) in raw_line.chars().enumerate() {
                 let (m, mask) = self.cached_glyph(ch);
@@ -167,13 +244,18 @@ impl FontRenderer {
                 let y_origin = baseline as i32 - m.ymin - m.height as i32 + 1;
                 let is_link = spans.iter().any(|&(s, e)| col >= s && col < e);
                 // M70: 查找该列的 CSS 前景色（仅非 link 时生效）。
-                let fg_color = fg_spans
-                    .iter()
-                    .find(|&&(s, e, _)| col >= s && col < e)
-                    .map(|&(_, _, rgb)| rgb);
+                // M72: 墨色优先级 link(蓝) > CSS fg > 默认黑。
+                let ink = if is_link {
+                    LINK_BLUE
+                } else {
+                    fg_color_of(fg_spans, col).unwrap_or((0, 0, 0))
+                };
+                // M72: 按 cell 记忆（bg 查找 + WCAG 对比度计算），避免逐像素重复算。
+                let mut memo_cell = usize::MAX;
+                let mut memo = (WHITE, (0, 0, 0)); // (bg, adjusted ink)
                 for dy in 0..m.height {
                     for dx in 0..m.width {
-                        let alpha = mask[dy * m.width + dx];
+                        let alpha = u32::from(mask[dy * m.width + dx]); // coverage, 255 = full ink
                         if alpha == 0 {
                             continue;
                         }
@@ -186,28 +268,24 @@ impl FontRenderer {
                         if pxu >= img_w || pyu >= img_h {
                             continue;
                         }
+                        // M72: 逐 cell 查背景（bg span 覆盖整格，格子序号 = px / col_width；
+                        // 无 span 视为白底，与缓冲区初始化一致）。
+                        let cell = pxu / col_width;
+                        if cell != memo_cell {
+                            let bg = bg_at(bgs, cell).unwrap_or(WHITE);
+                            memo = (bg, ensure_contrast(ink, bg));
+                            memo_cell = cell;
+                        }
+                        let (bg, ink_adj) = memo;
                         let idx = (pyu * img_w + pxu) * 4;
-                        let v = 255 - alpha; // coverage 0..=255 (255=full ink)
-                                             // M30/M70 blend priority: link(blue) > CSS fg color > default black.
-                                             // 文字颜色 = 基色，再用 alpha 调制亮度（白底上抗锯齿淡边缘）。
-                        let (r, g, b) = if is_link {
-                            // link blue: darken 0xEE by coverage.
-                            let bf = (v as u32 * 0xEE / 255) as u8;
-                            (0u8, 0u8, bf)
-                        } else if let Some((fr, fg, fb)) = fg_color {
-                            // CSS color: scale each channel by coverage.
-                            (
-                                (v as u32 * fr as u32 / 255) as u8,
-                                (v as u32 * fg as u32 / 255) as u8,
-                                (v as u32 * fb as u32 / 255) as u8,
-                            )
-                        } else {
-                            // default black on white.
-                            (v, v, v)
-                        };
-                        buf[idx] = r;
-                        buf[idx + 1] = g;
-                        buf[idx + 2] = b;
+                        // M72: 正确的 alpha 合成 out = ink*a + bg*(1-a)。
+                        // 旧实现 `v = 255 - alpha` 再乘墨色，墨色强度与 coverage **反向**：
+                        // 彩色/浅色文字笔画核心（coverage=255）被画成黑色 —— 白底上看不出
+                        // （近似深色文字），暗底上核心隐形（qwik.dev 截图根因）。
+                        // 新公式在默认黑/白底下与旧结果完全一致（255-a），无回归。
+                        buf[idx] = blend_channel(ink_adj.0, bg.0, alpha);
+                        buf[idx + 1] = blend_channel(ink_adj.1, bg.1, alpha);
+                        buf[idx + 2] = blend_channel(ink_adj.2, bg.2, alpha);
                     }
                 }
             }
@@ -408,11 +486,16 @@ mod tests {
         let mut r = FontRenderer::new();
         // 2 chars "go", link span covers col 0..2 → all blue.
         let (w, h, buf) = r.render_text_to_rgba("go", &[vec![(0, 2)]], &[], &[]);
-        // Find a non-white pixel and check its blue channel dominates.
+        // M72 fix: link core pixel is now saturated #0000EE (proper alpha
+        // compositing). Old inverted formula made the core BLACK with only
+        // blue fringe pixels (b<200) — update expectation accordingly.
         let blue_pixel = buf
             .chunks_exact(4)
-            .any(|px| px[2] > px[0] && px[2] > px[1] && px[2] < 200);
-        assert!(blue_pixel, "expected at least one blue link pixel");
+            .any(|px| px[2] > px[0] && px[2] > px[1] && px[2] >= 200);
+        assert!(
+            blue_pixel,
+            "expected at least one saturated blue link pixel"
+        );
         let _ = (w, h);
     }
 
@@ -435,7 +518,10 @@ mod tests {
         // Compare: default black text has equal RGB channels; colored does not.
         let mut r = FontRenderer::new();
         let (_, _, buf_default) = r.render_text_to_rgba("Hi", &[], &[], &[]);
-        let (_, _, buf_green) = r.render_text_to_rgba("Hi", &[], &[], &[vec![(0, 2, (0, 200, 0))]]);
+        // green: some ink pixel with g > r. M72: uses WCAG-passing green
+        // (0,150,0) = 3.9:1 on white; (0,200,0) would be 2.3:1 and correctly
+        // flipped to black by the contrast guard.
+        let (_, _, buf_green) = r.render_text_to_rgba("Hi", &[], &[], &[vec![(0, 2, (0, 150, 0))]]);
         // default: some ink pixel with r==g==b (gray)
         let has_gray_ink = buf_default
             .chunks_exact(4)
@@ -459,12 +545,150 @@ mod tests {
             &[vec![(0, 2, (255, 0, 0))]], // fg = red (should be overridden by link blue)
         );
         // Expect a blue-ish pixel (b > r), NOT a red pixel.
-        let blue_pixel = buf.chunks_exact(4).any(|px| px[2] > px[0] && px[2] < 200);
+        let blue_pixel = buf.chunks_exact(4).any(|px| px[2] > px[0] && px[2] > px[1]);
         let red_pixel = buf
             .chunks_exact(4)
             .any(|px| px[0] > 100 && px[1] < px[0] && px[2] < px[0]);
         assert!(blue_pixel, "link should override fg → blue");
         assert!(!red_pixel, "fg red should NOT win over link blue");
+    }
+
+    // ── M72: dark-theme contrast guard + proper alpha compositing ──
+
+    #[test]
+    fn wcag_contrast_ratio_values_are_correct() {
+        // Locked reference values: black/white = 21:1, equal colors = 1:1.
+        assert!((contrast_ratio(0.0, 1.0) - 21.0).abs() < 1e-9);
+        assert!((contrast_ratio(0.5, 0.5) - 1.0).abs() < 1e-9);
+        // #777 vs white ≈ 4.48 (well-known WCAG reference).
+        let l777 = relative_luminance((119, 119, 119));
+        assert!((contrast_ratio(l777, 1.0) - 4.48).abs() < 0.05);
+    }
+
+    #[test]
+    fn dark_bg_flips_default_black_text_to_white() {
+        // qwik.dev symptom: dark bg + default (black) ink → invisible.
+        // M72: ink must flip to white; the dark background block stays.
+        let mut r = FontRenderer::new();
+        let cols = 2;
+        let (_, _, buf) = r.render_text_to_rgba("Hi", &[], &[vec![(0, cols, (26, 26, 46))]], &[]);
+        // Some glyph pixel must be bright (white-ish ink on dark bg).
+        let bright_ink = buf
+            .chunks_exact(4)
+            .any(|px| px[0] > 200 && px[1] > 200 && px[2] > 200);
+        assert!(bright_ink, "black ink on dark bg must flip to white");
+        // Background block must remain dark (kept, not inverted).
+        let dark_bg = buf
+            .chunks_exact(4)
+            .any(|px| px[0] == 26 && px[1] == 26 && px[2] == 46);
+        assert!(dark_bg, "dark background block must be preserved");
+        // No black-core text: darkest pixel sum must stay well above pure
+        // black (old inverted formula gave sum=0 cores). The bg itself
+        // (26,26,46) sums to 98, so anything < 60 means a black text core.
+        let darkest = buf
+            .chunks_exact(4)
+            .map(|px| u32::from(px[0]) + u32::from(px[1]) + u32::from(px[2]))
+            .min()
+            .unwrap_or(765);
+        assert!(
+            darkest >= 60,
+            "no near-black ink pixels allowed, got {darkest}"
+        );
+    }
+
+    #[test]
+    fn dark_bg_keeps_light_fg_text_light() {
+        // Author sets light text (#eaeaea) on dark bg — contrast is fine,
+        // M72 must KEEP the author color (proper compositing makes core light).
+        let mut r = FontRenderer::new();
+        let cols = 2;
+        let (_, _, buf) = r.render_text_to_rgba(
+            "Hi",
+            &[],
+            &[vec![(0, cols, (26, 26, 46))]],
+            &[vec![(0, cols, (234, 234, 234))]],
+        );
+        let light_ink = buf
+            .chunks_exact(4)
+            .any(|px| px[0] > 180 && px[1] > 180 && px[2] > 180);
+        assert!(light_ink, "light ink on dark bg must stay light");
+    }
+
+    #[test]
+    fn link_blue_on_dark_bg_flips_to_white() {
+        // Link blue #0000EE on dark navy: WCAG ratio ≈ 1.8 < 3 → flip to white.
+        let mut r = FontRenderer::new();
+        let cols = 2;
+        let (_, _, buf) = r.render_text_to_rgba(
+            "go",
+            &[vec![(0, cols)]],
+            &[vec![(0, cols, (26, 26, 46))]],
+            &[],
+        );
+        let bright = buf
+            .chunks_exact(4)
+            .any(|px| px[0] > 200 && px[1] > 200 && px[2] > 200);
+        assert!(bright, "link blue on dark bg must flip to readable white");
+    }
+
+    #[test]
+    fn light_fg_on_implicit_white_bg_flips_to_black() {
+        // Inverse case: author sets near-white text but page bg is white
+        // (no bg span → implicit white) → flip to black for readability.
+        let mut r = FontRenderer::new();
+        let (_, _, buf) = r.render_text_to_rgba("Hi", &[], &[], &[vec![(0, 2, (234, 234, 234))]]);
+        let dark_ink = buf
+            .chunks_exact(4)
+            .any(|px| px[0] < 100 && px[1] < 100 && px[2] < 100);
+        assert!(dark_ink, "near-white ink on white bg must flip to black");
+    }
+
+    #[test]
+    fn colored_fg_core_pixel_matches_exact_color_on_white() {
+        // Lock the M72 compositing fix: red ink at full coverage must be
+        // exactly (255,0,0). The old inverted formula produced (0,0,0).
+        let mut r = FontRenderer::new();
+        let (_, _, buf) = r.render_text_to_rgba("HH", &[], &[], &[vec![(0, 2, (255, 0, 0))]]);
+        let core = buf
+            .chunks_exact(4)
+            .any(|px| px[0] == 255 && px[1] == 0 && px[2] == 0);
+        assert!(core, "red ink core must be exactly (255,0,0)");
+    }
+
+    #[test]
+    fn default_black_on_white_blend_unchanged() {
+        // No bg/fg spans → black ink on white: M72 blend reduces to the old
+        // `v = 255 - alpha` formula (byte-identical), so plain pages don't move.
+        let mut r = FontRenderer::new();
+        let (_, _, buf) = r.render_text_to_rgba("Hi", &[], &[], &[]);
+        let black_core = buf
+            .chunks_exact(4)
+            .any(|px| px[0] == 0 && px[1] == 0 && px[2] == 0);
+        let gray_edge = buf
+            .chunks_exact(4)
+            .any(|px| px[0] == px[1] && px[1] == px[2] && px[0] > 0 && px[0] < 255);
+        assert!(black_core, "black core expected on white");
+        assert!(gray_edge, "grayscale AA edge expected on white");
+    }
+
+    #[test]
+    fn ensure_contrast_keeps_high_contrast_author_colors() {
+        // Black on light gray keeps black (21-ish margin, well above 3).
+        assert_eq!(ensure_contrast((0, 0, 0), (240, 240, 240)), (0, 0, 0));
+        // Red ink on white: 4.0:1 ≥ 3 → keep author color.
+        assert_eq!(ensure_contrast((255, 0, 0), (255, 255, 255)), (255, 0, 0));
+        // White ink on dark navy keeps white.
+        assert_eq!(
+            ensure_contrast((255, 255, 255), (26, 26, 46)),
+            (255, 255, 255)
+        );
+        // Black on dark navy flips to white.
+        assert_eq!(ensure_contrast((0, 0, 0), (26, 26, 46)), (255, 255, 255));
+        // Near-white on white flips to black.
+        assert_eq!(ensure_contrast((234, 234, 234), (255, 255, 255)), (0, 0, 0));
+        // White on Material green #4CAF50 is only 2.78:1 → correctly flips
+        // to black (7.6:1), even though many sites pair them.
+        assert_eq!(ensure_contrast((255, 255, 255), (76, 175, 80)), (0, 0, 0));
     }
 
     // ── M36: CJK font fallback ──
