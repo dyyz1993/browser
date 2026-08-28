@@ -4985,7 +4985,7 @@ TextEvent.prototype.initTextEvent = function(type, b, c, v, data, m, locale) {
     if (arguments.length < 1) throw new TypeError('Argument 1 is required.');
     this.initEvent(type, b, c);
     this.view = v || null;
-    this.data = (data === undefined) ? '' : data; this.locale = locale || '';
+    this.data = data; this.locale = locale || '';
 };
 window.TextEvent = TextEvent;
 function PointerEvent(type, opts) {
