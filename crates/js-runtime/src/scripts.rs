@@ -2970,9 +2970,27 @@ Object.defineProperty(Element.prototype, 'translate', {
         enumerable: true, configurable: true
     });
     // M78.87: 表单元素反射属性（value/checked/disabled/selected——M78.73 放错位置）。
+    // M78.134b: value 反射仅表单元素语义（'value' in div 旧版为 true——
+    // WPT textInput execCommand 用 `'value' in el` 分流读值，非表单元素
+    // 应走 textContent，否则拿到空串断言失败）。
 Object.defineProperty(Element.prototype, 'value', {
-    get: function() { return __getAttr(this.__nodeId, 'value') || ''; },
-    set: function(v) { __setAttr(this.__nodeId, 'value', String(v)); },
+    get: function() {
+        var tg = String((typeof __getTag === 'function') ? __getTag(this.__nodeId) : '').toLowerCase();
+        var __formTags = '|input|textarea|select|option|button|meter|progress|param|li|';
+        if (__formTags.indexOf('|' + tg + '|') >= 0) {
+            return __getAttr(this.__nodeId, 'value') || '';
+        }
+        // M78.134b: 非表单元素回退 textContent（'value' in el 因原型反射恒
+        // true，WPT textInput 用它分流读值——div 需要拿到内容而非空串）。
+        return __getText(this.__nodeId) || '';
+    },
+    set: function(v) {
+        var tg2 = String((typeof __getTag === 'function') ? __getTag(this.__nodeId) : '').toLowerCase();
+        var __formTags2 = '|input|textarea|select|option|button|meter|progress|param|li|';
+        if (__formTags2.indexOf('|' + tg2 + '|') >= 0) {
+            __setAttr(this.__nodeId, 'value', String(v));
+        }
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'checked', {
@@ -4451,7 +4469,9 @@ document.execCommand = function(cmd, ui, value) {
         inserted = true;
     } else {
         var ce = __getAttr(el.__nodeId, 'contenteditable');
-        if (ce !== null) {
+        // M78.134b: contenteditable=""（空串）也要命中——旧 if (ce !== null)
+        // 逻辑本身对，但保险起见显式区分 undefined/null 与值（含空串）。
+        if (ce !== null && ce !== undefined) {
             var tn = __createDetachedEl('__text__');
             __setText(tn, String(value));
             __appendChild(el.__nodeId, tn);
