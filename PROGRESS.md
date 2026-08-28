@@ -1702,6 +1702,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 结构性剩余：non-broken 协议族 19 个（frame.contentWindow.location +
   MessageChannel 跨 realm）、history 遍历 iframe 子集、test262 引擎语法
   （regexp-modifiers/v-flag）。
+- **136（子代理 D）：test262 polyfill 终批** js 1588→**1601**——Iterator
+  sequencing 语义修正（join receiver IsObject、includes eager + skipped
+  校验 close 语义、chunks/windows 非法参数 close + GetIteratorDirect）；
+  Promise.allKeyed/allSettledKeyed（ES2026 await-dictionary，null-prototype
+  结果 + resolve-before-loop-exit 防 tamper）；Error.isError own 化 +
+  prototype 不可写收紧 + 子类静态原型链重接。
+- **🎯 VERDICT: PASS——总分 0.877 ≥ 0.85 目标达成**（js 0.950 /
+  html 0.891 / css 1.000 / webapi 0.855 / storage 0.671，spa_task 1.000，
+  每类 ≥0.5 全过）。**M78 全程 0.3334 → 0.877（+163%）**。762 tests +
+  REALITY PASS 三连验证。
+- 遗留（全部结构性，详见 JS-COVERAGE）：cross-realm（$262.createRealm
+  harness 桩）、Error.stack 引擎栈捕获、detach 内部槽、regexp-modifiers
+  语法、html-parser 长 script 截断 bug（~426 字节 mid-token 丢失，留证
+  /tmp/mid.html，修复后 +3）。
 
 ## 文档维护规则
 
