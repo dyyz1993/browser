@@ -613,6 +613,15 @@ pub(crate) fn fetch_sync(url: &str) -> Result<String, String> {
     if let Some(cached) = FETCH_CACHE.with(|c| c.borrow_mut().remove(url)) {
         return Ok(cached);
     }
+    // PERF-M80: 共享读 SCRIPT_CACHE（外链 script / 动态 chunk MIME 探测写入）。
+    // 同一 URL 同一资源 = 浏览器 HTTP 缓存语义（script/XHR/iframe 共享缓存）。
+    // 只读不写：XHR GET 的动态响应不进缓存（无 validator/过期语义，写回会破坏
+    // 期望新鲜响应的用例）；SCRIPT_CACHE 只由 script 加载路径写入。
+    if let Ok(cache) = crate::scripts::script_cache_public().lock() {
+        if let Some(code) = cache.get(url) {
+            return Ok(code.clone());
+        }
+    }
     fetch_sync_with_method(url, "GET", None, None).map(|(_status, body)| body)
 }
 

@@ -78,6 +78,42 @@ pub fn render_text_to_png<P: AsRef<Path>>(
     Ok(())
 }
 
+/// M80: RGBA 位图 → PNG 文件（pixel 渲染模式专用；ASCII 路径不受影响）。
+///
+/// `max_height`：像素高度上限，超出时从底部截断（保留顶部）。
+///
+/// # Errors
+/// PNG 编码失败时返回错误。
+pub fn render_rgba_to_png<P: AsRef<Path>>(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    path: P,
+    max_height: Option<usize>,
+) -> anyhow::Result<()> {
+    if width == 0 || height == 0 || rgba.len() != width * height * 4 {
+        anyhow::bail!(
+            "invalid pixel buffer: {}x{}, {} bytes",
+            width,
+            height,
+            rgba.len()
+        );
+    }
+    let h = max_height.map(|mh| mh.min(height)).unwrap_or(height);
+    let file = File::create(path)?;
+    let w = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, width as u32, h as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| anyhow::anyhow!("png header: {e}"))?;
+    writer
+        .write_image_data(&rgba[..h * width * 4])
+        .map_err(|e| anyhow::anyhow!("png write: {e}"))?;
+    Ok(())
+}
+
 /// M30: 解析 ANSI escape，提取纯字符序列 + link span 范围。
 ///
 /// 识别 `\x1b[4;34m`（link 开始）和 `\x1b[0m`（link 结束）。

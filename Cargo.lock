@@ -614,6 +614,7 @@ name = "browser-render"
 version = "0.0.1"
 dependencies = [
  "browser-css-engine",
+ "browser-dom",
  "browser-layout",
  "fontdue",
  "image",

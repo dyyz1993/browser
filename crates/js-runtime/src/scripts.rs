@@ -53,6 +53,20 @@ enum ScriptEntry {
 pub(crate) const VITE_ENV_DEFAULT_JS: &str =
     "{MODE:'production',DEV:false,PROD:true,BASE_URL:'/',SSR:false}";
 
+/// PERF-M80: 动态外链 script 的延迟加载标记（QuickJS shim ↔ pump 的私有约定）。
+///
+/// `Element.prototype.appendChild` 遇到带 src 的 `<script>` 时**不再同步
+/// fetch**（webpack 一 tick 连挂多个 chunk 时会串行阻塞，react.dev 实测
+/// 3 chunk 串行 ~6.6s），而是把 `DYN_URL_PREFIX + src` 经既有的
+/// `__enqueueDynamicScript` 桥入队。pump（`drain_and_eval_dynamic_scripts`）
+/// 展开标记：并行 fetch（去重 + MIME 强制）→ 按入队顺序 eval → eval 后
+/// 触发该元素的 onload/onerror（经 `__dynPending` 注册表，保住
+/// eval-before-onload 语义）。
+///
+/// U+0001 控制字符不可能出现在正常 JS 源码开头，不会与用户代码冲突。
+/// 两侧字符串必须逐字符一致（shim 是 JS 字面量 `"\u0001DYNURL\u0001"`）。
+pub(crate) const DYN_URL_PREFIX: &str = "\u{1}DYNURL\u{1}";
+
 /// Collect the text content of every `<script>` element in `tree`,
 /// in document order. Empty scripts are filtered out.
 #[must_use]
@@ -701,10 +715,196 @@ fn resolve_script_url(src: &str, base_url: Option<&str>) -> Option<String> {
     None
 }
 
+/// PERF-M80: 从模块源码扫描静态 import 说明符（宽松扫描）。
+///
+/// 命中形态：`from"x"` / `from 'x'` / `import"x"` / `import 'x'` /
+/// `import("x")` / `import ('x')`（覆盖 Vite/Nuxt 压缩产物）。
+///
+/// 宽松的代价是可能扫出假说明符（字符串字面量里的 `from"` 等）——
+/// 后果只是一个 404 的投机请求（被忽略），无语义影响；漏扫的模块走
+/// 原有的 loader 串行 fetch，也无回归。保序去重交由调用方。
+#[cfg(feature = "quickjs")]
+fn scan_import_specifiers(code: &str) -> Vec<String> {
+    let mut specs: Vec<String> = Vec::new();
+    let mut push = |spec: &str| {
+        let s = spec.trim();
+        // 过滤明显不是模块路径的（空串 / 含空白 / 含 <> 的注入形态）。
+        if !s.is_empty() && !s.chars().any(char::is_whitespace) && !s.contains('<') {
+            specs.push(s.to_string());
+        }
+    };
+    let bytes = code.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+
+    // `from"..."`：要求 from 前是非标识符字符（排除 removeFrom" 这类）。
+    let mut i = 0usize;
+    while i + 4 <= bytes.len() {
+        if &bytes[i..i + 4] == b"from" && (i == 0 || !is_word(bytes[i - 1])) {
+            let mut j = i + 4;
+            while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                let q = bytes[j];
+                if let Some(end) = code[j + 1..].find(q as char) {
+                    push(&code[j + 1..j + 1 + end]);
+                    i = j + 1 + end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // `import"..."` / `import("...")`：要求 import 前是非标识符字符。
+    let mut i = 0usize;
+    while i + 6 <= bytes.len() {
+        if &bytes[i..i + 6] == b"import" && (i == 0 || !is_word(bytes[i - 1])) {
+            let mut j = i + 6;
+            while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                let q = bytes[j];
+                if let Some(end) = code[j + 1..].find(q as char) {
+                    push(&code[j + 1..j + 1 + end]);
+                    i = j + 1 + end;
+                    continue;
+                }
+            } else if j < bytes.len() && bytes[j] == b'(' {
+                let mut k = j + 1;
+                while k < bytes.len() && (bytes[k] as char).is_whitespace() {
+                    k += 1;
+                }
+                if k < bytes.len() && (bytes[k] == b'"' || bytes[k] == b'\'') {
+                    let q = bytes[k];
+                    if let Some(end) = code[k + 1..].find(q as char) {
+                        push(&code[k + 1..k + 1 + end]);
+                        i = k + 1 + end;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    specs
+}
+
+/// PERF-M80: 解析模块说明符为绝对 URL（镜像 engine_quickjs HttpResolver 的
+/// 规则；bare specifier 打包器已内联，返回 None 跳过）。
+#[cfg(feature = "quickjs")]
+fn resolve_module_specifier(base_url: &str, name: &str) -> Option<String> {
+    if name.starts_with("http://") || name.starts_with("https://") {
+        return Some(name.to_string());
+    }
+    if let Ok(base) = url::Url::parse(base_url) {
+        if let Ok(full) = base.join(name) {
+            return Some(full.to_string());
+        }
+    }
+    None
+}
+
+/// PERF-M80: 模块依赖图 BFS 并行预取。
+///
+/// 背景：nuxt.com 的 ESM 依赖图有 **119 个模块**，loader
+/// （engine_quickjs HttpLoader::load → bridge::fetch_sync）按 import 发现
+/// 顺序**串行**拉取，每个一次网络往返，合计 ~75s。
+///
+/// 本函数从入口模块出发，扫描源码静态 import（`scan_import_specifiers`）、
+/// 解析为绝对 URL、逐层并行 fetch 进 SCRIPT_CACHE。loader 的 fetch_sync
+/// （M80 起会查 SCRIPT_CACHE）随后全部命中缓存 → 串行链变成 0ms。
+///
+/// 预算：MAX_MODULES / MAX_DEPTH / 单波 FETCH_BATCH=48（66 模块一波拉完，
+/// 避免小批串行把波次拉长）。运行时（数据驱动）才会发现的动态 import 无法
+/// 静态预取——那些仍由 loader 串行拉，属可接受残余。
+///
+/// 语义安全：fetch 路径与结果内容完全不变（loader 仍走 fetch_sync，缓存
+/// 命中返回同一份字节）；投机请求最坏情况是几个 404 被忽略。
+#[cfg(feature = "quickjs")]
+fn prefetch_module_graph(entry_urls: &[String], trace: bool, t0: std::time::Instant) {
+    const MAX_MODULES: usize = 256;
+    const MAX_DEPTH: usize = 6;
+    const FETCH_BATCH: usize = 48;
+    let _ = t0;
+    let mut seen: std::collections::HashSet<String> = entry_urls.iter().cloned().collect();
+    let mut frontier: Vec<String> = Vec::new();
+    // 入口模块体已在 prefetch_urls 阶段拉好（在 SCRIPT_CACHE）。
+    for url in entry_urls {
+        if script_cache()
+            .lock()
+            .ok()
+            .map(|c| c.contains_key(url.as_str()))
+            .unwrap_or(false)
+        {
+            frontier.push(url.clone());
+        }
+    }
+    // 并行 fetch 一组 URL（fetch_external_script 自带缓存/MIME/写回）。
+    fn fetch_batch(urls: &[String]) {
+        for batch in urls.chunks(FETCH_BATCH) {
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|url| {
+                    let url = url.clone();
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = fetch_external_script(&url);
+                        let _ = tx.send(());
+                    })
+                })
+                .collect();
+            drop(tx);
+            for _ in rx.iter() {}
+            for h in handles {
+                let _ = h.join();
+            }
+        }
+    }
+
+    for _depth in 0..MAX_DEPTH {
+        if frontier.is_empty() || seen.len() >= MAX_MODULES {
+            break;
+        }
+        // 扫描当前层的 import 说明符，解析入 next。
+        // 注意 base 用**被扫模块自身的 URL**（HttpResolver 语义：相对说明符
+        // 相对导入模块所在目录解析，不是页面 URL）。
+        let mut next: Vec<String> = Vec::new();
+        for url in &frontier {
+            let code = script_cache().lock().ok().and_then(|c| c.get(url).cloned());
+            let Some(code) = code else { continue };
+            for spec in scan_import_specifiers(&code) {
+                if let Some(abs) = resolve_module_specifier(url, &spec) {
+                    if !should_skip_script(&abs)
+                        && !seen.contains(&abs)
+                        && seen.insert(abs.clone())
+                        && seen.len() <= MAX_MODULES
+                    {
+                        next.push(abs);
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        if trace {
+            eprintln!(
+                "[js-runtime] M80 module graph depth {}: prefetching {} modules",
+                _depth + 1,
+                next.len()
+            );
+        }
+        fetch_batch(&next);
+        frontier = next;
+    }
+}
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-
 /// M70.13: 脚本 fetch 用全局复用 HttpClient（避免每脚本新建 TLS 连接）。
 static SCRIPT_FETCH_CLIENT: OnceLock<browser_net::HttpClient> = OnceLock::new();
 
@@ -805,55 +1005,16 @@ fn script_mime_executable(mime: Option<&str>) -> bool {
 
 /// M78: 动态 script（appendChild）加载前的 MIME 检查。
 /// 放行时把 body 写入 script cache（后续 __fetchSync 命中，只发一次请求）。
+///
+/// PERF-M80: 原实现自带一份 fetch（缓存 key 用**原始 URL**，而 __fetchSync 用
+/// **绝对 URL** 查 FETCH_CACHE——key 不匹配导致同一 chunk 被完整下载两次，
+/// react.dev 实测 6 次 fetch_sync 共 17.6s）。现统一委托 `fetch_external_script`
+///（MIME 强制 + 绝对 URL key + 写 SCRIPT_CACHE），配合 `fetch_sync` 的
+/// SCRIPT_CACHE 只读查询，同一 URL 全程只发一次请求。
 #[cfg(feature = "quickjs")]
 pub fn fetch_script_mime_ok(url: String) -> bool {
-    if let Ok(cache) = script_cache().lock() {
-        if cache.contains_key(&url) {
-            return true;
-        }
-    }
-    // M78.37-fix: 相对 URL 先解析（reqwest 需绝对 URL；无 host 的 fetch 失败
-    // 曾被 M78.7-fix 的"网络错误放行"误放行——block-mime 回退根因）。
-    let url_owned = crate::bridge::resolve_url(&url);
-    let handle = std::thread::spawn(move || {
-        let client = SCRIPT_FETCH_CLIENT.get_or_init(browser_net::HttpClient::new);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .ok()?;
-        rt.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                client.get_with_headers(&url_owned, None),
-            )
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-        })
-    });
-    let fetched = handle.join().ok().and_then(|r| r);
-    let Some((bytes, headers)) = fetched else {
-        // M78-fix: 网络错误放行——__fetchSync 会走既有的失败路径（onerror）。
-        // 门只在拿到明确被禁 MIME 时拦截（release 模式下测试服务器的
-        // 连接时序曾让这里的 fetch 偶发失败，误杀正常 chunk）。
-        return true;
-    };
-    let mime = headers
-        .iter()
-        .find(|(k, _)| k.as_str().eq_ignore_ascii_case("content-type"))
-        .and_then(|(_, v)| v.to_str().ok())
-        .map(str::to_string);
-    if !script_mime_executable(mime.as_deref()) {
-        return false;
-    }
-    if let Ok(s) = String::from_utf8(bytes) {
-        if let Ok(mut cache) = script_cache().lock() {
-            cache.insert(url, s);
-        }
-        true
-    } else {
-        false
-    }
+    let resolved = crate::bridge::resolve_url(&url);
+    fetch_external_script(&resolved).is_ok()
 }
 
 /// M16.3: Drain due timer callbacks until the wheel is idle or the
@@ -1073,37 +1234,153 @@ fn should_skip_script(url: &str) -> bool {
 /// M69: 取出动态 script 队列里的所有代码，逐个 eval。
 ///
 /// 由 `run_scripts_quickjs` 的 event loop pump 每轮调用。appendChild(script)
-/// 的 JS shim 检测到 script 标签后，把代码（inline textContent 或 __fetchSync
-/// 拿到的外链源码）入队；这里取出用 `eval_safe` 执行（GC 安全，CaughtError
-/// 在 ctx.with 闭包内 drop）。
+/// 的 JS shim 检测到 script 标签后，把代码（inline textContent）入队；这里取出
+/// 用 `eval_user_script` 执行（GC 安全，CaughtError 在 ctx.with 闭包内 drop）。
 ///
-/// 跳过 TypeScript 代码（`: string` / `as Type` 等，QuickJS 不支持 TS）。
 /// eval 出的代码可能又 appendChild 新 script 入队，下一轮 pump 处理（多层链式加载）。
 ///
 /// 返回本轮执行的 script 数（用于 pump 判断是否还有进展）。
+///
+/// PERF-M80: 外链 script 由 shim 入队 `DYN_URL_PREFIX + src` 标记（不再在
+/// appendChild 内同步 fetch）。本函数展开标记：
+/// 1. 收集全部标记 URL（按解析后的绝对 URL 去重）；
+/// 2. 并行 fetch（M75 模式：一线程一 URL，共享连接池；`fetch_external_script`
+///    自带缓存 + MIME 强制）；
+/// 3. 按入队顺序 eval（fetch 并行、执行串行，保住 chunk 注册顺序）；
+/// 4. 每条 URL 处理完立刻触发该元素的 onload/onerror——JS shim 在
+///    `window.__dynPending[rawSrc]` 挂了回调，成败状态在
+///    `window.__dynStatus[rawSrc]`（'loaded'/'failed'）。触发时机从
+///    "pump eval 之后" 保证 eval-before-onload（链式加载时 shim 侧
+///    setTimeout(0) 会早于下一轮 eval，故改由 pump 侧触发）。
 #[cfg(feature = "quickjs")]
 fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEngine) -> usize {
     let codes = crate::bridge::drain_dynamic_scripts();
     let n = codes.len();
-    for code in codes {
-        // M71.4: 用户 script 用 sloppy mode（eval_user_script），
-        // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
-        match engine.eval_user_script(&code) {
-            Ok(()) => {}
-            Err(e) => {
-                // M75: JSX 语法（<tag>）不是 ES 规范产物，Chrome/V8 也不解析。
-                // QuickJS 解析含 < 的表达式时会报 unexpected token '<'。
-                // 这是构建时转换（Babel/SWC）的产物，不是运行时缺口。
-                let err_str = e.to_string();
-                if !err_str.contains("token in expression: '<'")
-                    && !err_str.contains("unexpected token")
-                {
-                    eprintln!("[js] [quickjs dynamic] {e}");
+    if n == 0 {
+        return 0;
+    }
+
+    // 1. 收集标记（rawSrc → 绝对 URL 映射；同一绝对 URL 只 fetch 一次）。
+    let mut marks: Vec<(usize, String, String)> = Vec::new(); // (idx, raw_src, resolved)
+    for (i, code) in codes.iter().enumerate() {
+        if let Some(raw) = code.strip_prefix(DYN_URL_PREFIX) {
+            let resolved = crate::bridge::resolve_url(raw);
+            marks.push((i, raw.to_string(), resolved));
+        }
+    }
+
+    // 2. 并行 fetch 未命中的 URL（上限 16 并发，分批；已缓存的命中零成本）。
+    let mut results: std::collections::HashMap<String, Result<String, String>> =
+        std::collections::HashMap::new();
+    {
+        let mut unique: Vec<String> = marks
+            .iter()
+            .map(|(_, _, resolved)| resolved.clone())
+            .collect();
+        unique.sort();
+        unique.dedup();
+        // fetch_external_script 自带缓存查询（命中零网络）+ MIME 强制 + 写缓存。
+        const FETCH_BATCH: usize = 16;
+        for batch in unique.chunks(FETCH_BATCH) {
+            let __t_wave = std::time::Instant::now();
+            let (tx, rx) = std::sync::mpsc::channel::<(String, Result<String, String>)>();
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|url| {
+                    let url = url.clone();
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        let r = fetch_external_script(&url);
+                        let _ = tx.send((url, r));
+                    })
+                })
+                .collect();
+            drop(tx);
+            for (url, r) in rx.iter() {
+                results.insert(url, r);
+            }
+            for h in handles {
+                let _ = h.join();
+            }
+            if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+                eprintln!(
+                    "[js-runtime] pump fetch wave: {} urls in {}ms",
+                    batch.len(),
+                    __t_wave.elapsed().as_millis()
+                );
+            }
+        }
+    }
+
+    // 3 + 4. 按入队顺序处理：标记 URL → eval + 触发 pending；普通代码 → eval。
+    for (i, code) in codes.into_iter().enumerate() {
+        let mark = marks.iter().find(|(mi, _, _)| *mi == i);
+        if let Some((_, raw, resolved)) = mark {
+            let raw = raw.clone();
+            let resolved = resolved.clone();
+            match results.get(&resolved) {
+                Some(Ok(body)) => {
+                    // 与原 shim 语义对齐：
+                    // - 空响应体（404 空页等）→ 原 `if (!code)` → onerror；
+                    // - 含 < 和 > 的"chunk"（HTML 404 页等）不是 ES 规范产物
+                    //   （原 JSX 检查）→ onerror 而非 eval。
+                    if body.is_empty() || (body.contains('<') && body.contains('>')) {
+                        fire_dyn_pending(engine, &raw, false);
+                        continue;
+                    }
+                    match engine.eval_user_script(body) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            if !err_str.contains("token in expression: '<'")
+                                && !err_str.contains("unexpected token")
+                            {
+                                eprintln!("[js] [quickjs dynamic] {e}");
+                            }
+                        }
+                    }
+                    fire_dyn_pending(engine, &raw, true);
+                }
+                _ => {
+                    // fetch 失败（404/网络错误/MIME 被禁）→ onerror。
+                    fire_dyn_pending(engine, &raw, false);
+                }
+            }
+        } else {
+            // M71.4: 用户 script 用 sloppy mode（eval_user_script），
+            // 兼容 SvelteKit 等框架的裸全局赋值（`__sveltekit_x = {}`）。
+            match engine.eval_user_script(&code) {
+                Ok(()) => {}
+                Err(e) => {
+                    // M75: JSX 语法（<tag>）不是 ES 规范产物，Chrome/V8 也不解析。
+                    // QuickJS 解析含 < 的表达式时会报 unexpected token '<'。
+                    // 这是构建时转换（Babel/SWC）的产物，不是运行时缺口。
+                    let err_str = e.to_string();
+                    if !err_str.contains("token in expression: '<'")
+                        && !err_str.contains("unexpected token")
+                    {
+                        eprintln!("[js] [quickjs dynamic] {e}");
+                    }
                 }
             }
         }
     }
     n
+}
+
+/// PERF-M80: 在 JS 侧记录 URL 成败并触发该元素的 onload/onerror 回调
+///（shim 在 `__dynPending[rawSrc]` 挂的闭包）。rawSrc 里的 `\` 和 `'`
+/// 转义后嵌入 JS 字符串字面量（同 ws 事件派发的转义方式）。
+#[cfg(feature = "quickjs")]
+fn fire_dyn_pending(engine: &mut crate::engine_quickjs::QuickJsEngine, raw_src: &str, ok: bool) {
+    let esc = raw_src.replace('\\', "\\\\").replace('\'', "\\'");
+    let status = if ok { "loaded" } else { "failed" };
+    let js = format!(
+        "try{{window.__dynStatus=window.__dynStatus||{{}};window.__dynStatus['{esc}']='{status}';}}catch(e){{}}\
+         try{{var __f=(window.__dynPending||{{}})['{esc}'];if(typeof __f==='function'){{try{{__f()}}catch(e2){{}}}}}}catch(e1){{}}\
+         try{{delete window.__dynPending['{esc}'];}}catch(e3){{}}"
+    );
+    let _ = engine.eval_safe(&js);
 }
 
 /// M66-B: QuickJS 专用执行路径。
@@ -1208,21 +1485,43 @@ fn run_scripts_quickjs(
     // M75: 并行预取所有 external module 到 cache，避免串行 timeout。
     // GitHub 152 个 rspack chunk 通过 globalThis 共享 registry，
     // 并行 fetch 后 cache 命中 = 0ms，eval 时不会缺模块。
+    //
+    // PERF-M80: 预取范围扩大到 pass-2 的 `<script src>` 外链。原实现在 pass-2
+    // 循环里逐个 `fetch_external_script`（串行，每条完整 TLS 往返）——react.dev
+    // 9 条外链脚本串行 56s，是「脚本阶段 61.7s」的主体。并行预取后 pass-2
+    // 全部 cache 命中，墙钟时间 = max(单请求) 而非 sum(所有请求)。
     {
-        let module_urls: Vec<String> = scripts
-            .iter()
-            .filter_map(|s| match s {
-                ScriptEntry::ExternalModule(src) => resolve_script_url(src, base_url.as_deref()),
-                _ => None,
-            })
-            .collect();
-        if !module_urls.is_empty() {
-            let module_count = module_urls.len();
+        let mut prefetch_urls: Vec<String> = Vec::new();
+        let mut module_entry_urls: Vec<String> = Vec::new();
+        for s in &scripts {
+            match s {
+                ScriptEntry::ExternalModule(src) => {
+                    if let Some(url) = resolve_script_url(src, base_url.as_deref()) {
+                        prefetch_urls.push(url.clone());
+                        module_entry_urls.push(url);
+                    }
+                }
+                ScriptEntry::External(src) => {
+                    if let Some(url) = resolve_script_url(src, base_url.as_deref()) {
+                        // 与 pass-2 一致：跳过 analytics 类（今天也不会 fetch，
+                        // 预取它们等于新增请求）。
+                        if !should_skip_script(&url) {
+                            prefetch_urls.push(url);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        prefetch_urls.sort();
+        prefetch_urls.dedup();
+        if !prefetch_urls.is_empty() {
+            let module_count = prefetch_urls.len();
             if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
-                eprintln!("[js-runtime] M75 pre-fetching {module_count} external modules");
+                eprintln!("[js-runtime] M75+M80 pre-fetching {module_count} external scripts");
             }
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
-            let handles: Vec<_> = module_urls
+            let handles: Vec<_> = prefetch_urls
                 .into_iter()
                 .filter_map(|url| {
                     if std::time::Instant::now() >= deadline {
@@ -1238,9 +1537,22 @@ fn run_scripts_quickjs(
             }
             if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
                 eprintln!(
-                    "[js-runtime] M75 pre-fetch done ({:?})",
+                    "[js-runtime] M75+M80 pre-fetch done ({:?})",
                     __t_scripts_start.elapsed()
                 );
+            }
+            // PERF-M80: 模块依赖图 BFS 预取——nuxt.com 119 个依赖模块原本由
+            // loader 串行 fetch（~75s）；预取后 loader 的 fetch_sync 全部命中
+            // SCRIPT_CACHE（见 bridge::fetch_sync）。
+            if !module_entry_urls.is_empty() {
+                let trace = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
+                prefetch_module_graph(&module_entry_urls, trace, __t_scripts_start);
+                if trace {
+                    eprintln!(
+                        "[js-runtime] M80 module graph prefetch done ({:?})",
+                        __t_scripts_start.elapsed()
+                    );
+                }
             }
         }
     }
@@ -1538,13 +1850,7 @@ fn run_scripts_quickjs(
             match engine.eval_user_script(&code) {
                 Ok(_) => executed += 1,
                 Err(e) => {
-                    let err_str = e.to_string();
-                    // M75: JSX 级联错误——非 ES 规范缺口
-                    if !err_str.contains("not a function")
-                        && !err_str.contains("cannot read property")
-                    {
-                        eprintln!("[js] [quickjs] {e}");
-                    }
+                    eprintln!("[js-runtime] QuickJS eval failed: {e}");
                 }
             }
         }
@@ -3889,37 +4195,33 @@ Element.prototype.appendChild = function(child) {
             // 所以这里双 fallback——先读 DOM attr（setAttribute 路径），再读 JS 属性。
             var src = __getAttr(child.__nodeId, 'src');
             if (!src && typeof child.src === 'string') src = child.src;
-            var code = null;
             if (src) {
-                // M78: 脚本 MIME 强制（对齐浏览器）：非 JS MIME 触发 onerror 而非执行。
-                var mimeOk = (typeof __fetchScriptMimeOk === 'function') ? __fetchScriptMimeOk(src) : true;
-                if (!mimeOk) {
-                    var _m_err = child;
-                    setTimeout(function() {
-                        if (typeof _m_err.onerror === 'function') {
-                            try { _m_err.onerror.call(_m_err, { type: 'error', target: _m_err }); } catch(e) {}
+                // PERF-M80: 外链 script 不再在 appendChild 内同步 fetch（M78 的
+                // __fetchScriptMimeOk + __fetchSync 双重拉取且串行阻塞——webpack
+                // 一 tick 连挂多个 chunk 时逐个等 TLS 往返，react.dev 实测 3 chunk
+                // 串行 ~6.6s、9 条首屏外链串行 56s）。改为入队 URL 标记，pump
+                // （drain_and_eval_dynamic_scripts）并行 fetch + 按入队顺序 eval，
+                // eval 后经 __dynPending 触发 onload/onerror。
+                // MIME 强制（WPT block-mime）：pump 侧 fetch_external_script 检查，
+                // 被禁 MIME → __dynStatus='failed' → 下面回调走 onerror 分支。
+                __enqueueDynamicScript("\u0001DYNURL\u0001" + src);
+                window.__dynPending = window.__dynPending || {};
+                window.__dynStatus = window.__dynStatus || {};
+                var _s = child;
+                window.__dynPending[src] = function() {
+                    if (window.__dynStatus[src] === 'failed') {
+                        if (typeof _s.onerror === 'function') {
+                            try { _s.onerror.call(_s, { type: 'error', target: _s }); } catch (e1) {}
                         }
-                    }, 0);
-                    return child;
-                }
-                // 外链 script：同步 fetch（复用 __fetchSync，相对 URL 自动解析）。
-                // 同步阻塞是期望行为——保证 webpack chunk loader 的 Promise.resolve 顺序。
-                code = (typeof __fetchSync === 'function') ? __fetchSync(src) : null;
-                if (!code) {
-                    // fetch 失败（404/网络错误）→ 异步触发 onerror
-                    var _err = child;
-                    setTimeout(function() {
-                        if (typeof _err.onerror === 'function') {
-                            try { _err.onerror.call(_err, { type: 'error', target: _err }); } catch(e) {}
-                        }
-                    }, 0);
-                    return child;
-                }
-            } else {
-                // inline script：读 textContent（同样双 fallback：DOM + JS 属性）。
-                code = __getText(child.__nodeId);
-                if (!code && typeof child.textContent === 'string') code = child.textContent;
+                    } else if (typeof _s.onload === 'function') {
+                        try { _s.onload.call(_s, { type: 'load', target: _s }); } catch (e2) {}
+                    }
+                };
+                return child;
             }
+            // inline script：读 textContent（同样双 fallback：DOM + JS 属性）。
+            var code = __getText(child.__nodeId);
+            if (!code && typeof child.textContent === 'string') code = child.textContent;
             if (code) {
                 // M75: 跳过含 JSX 语法（<div>）的 chunk——非 ES 规范产物。
                 // Chrome/V8 也不解析 JSX，生产构建时 Babel/SWC 编译掉。
@@ -3935,10 +4237,10 @@ Element.prototype.appendChild = function(child) {
                 // 入队，pump 循环（run_scripts_quickjs 里的 loop）取出 eval_safe。
                 __enqueueDynamicScript(code);
                 // 异步触发 onload（推迟到 event loop 下一轮，符合 HTML5 语义）。
-                var _s = child;
+                var _s2 = child;
                 setTimeout(function() {
-                    if (typeof _s.onload === 'function') {
-                        try { _s.onload.call(_s, { type: 'load', target: _s }); } catch(e) {}
+                    if (typeof _s2.onload === 'function') {
+                        try { _s2.onload.call(_s2, { type: 'load', target: _s2 }); } catch(e) {}
                     }
                 }, 0);
             }

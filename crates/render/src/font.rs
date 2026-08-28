@@ -35,13 +35,15 @@ pub type FgSpan = (usize, usize, (u8, u8, u8));
 /// M70: per-line foreground spans.
 pub type FgSpans = Vec<FgSpan>;
 
-const FONT_BYTES: &[u8] = include_bytes!("../assets/font.ttf");
+// M80: pub(crate) — pixel.rs (近似像素渲染器) 复用同一对内嵌字体，
+// 仅放开可见性，ASCII 路径行为零变化。
+pub(crate) const FONT_BYTES: &[u8] = include_bytes!("../assets/font.ttf");
 /// M36: CJK fallback font (NotoSansSC GB2312 subset, ~1.6MB).
 /// Covers 6763 most common Chinese chars + CJK punctuation.
-const CJK_FONT_BYTES: &[u8] = include_bytes!("../assets/cjk.ttf");
+pub(crate) const CJK_FONT_BYTES: &[u8] = include_bytes!("../assets/cjk.ttf");
 const FONT_SIZE: f32 = 16.0;
 /// Extra spacing beyond ascent+descent (M25 measured value).
-const LINE_GAP: usize = 6;
+pub(crate) const LINE_GAP: usize = 6;
 
 /// M72: 默认背景色（白，与 RGBA 缓冲区初始化一致）。
 const WHITE: (u8, u8, u8) = (255, 255, 255);

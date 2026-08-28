@@ -1828,6 +1828,28 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   react 14.9x，已知优化空间）。
 - 830 tests 全绿（+16），test262 1603 持平，REALITY PASS。
 
+**M80 —— 批 30/31 渲染性能 8.3x + 像素化渲染器（用户决策路线 B）**：
+
+- **性能（批 30）**：react.dev **65.4s → 7.9s（8.3x）**，内容 7530 字符逐字
+  一致；nuxt 47s（CDN 波动，本地 CPU 仅 0.4s）。**根因推翻预期**：17,654
+  次桥调用合计仅 5ms（QJS_BRIDGE_PROFILE 实测）——真凶是**串行网络**：
+  ① pass-2 九条外链 script 逐个 TLS 拉取（~56s）；② 动态 chunk 缓存 key
+  不匹配（相对 vs 绝对 URL）重复下载（23.7s）；③ nuxt 119 个 ESM 模块
+  被 loader 串行拉取。修复：A 外链并行预取 / B fetch_sync 读共享
+  SCRIPT_CACHE + key 归一 / C 动态 script 异步入队（\u{1}DYNURL\u{1} 标记
+  + pump 并行 + eval-before-onload）/ D 模块依赖图 BFS 投机预取。
+- **像素化近似渲染器（批 31，路线 B 立项——用户确认，AGENTS.md 非目标
+  边界已更新）**：新增 `crates/render/src/pixel.rs`（~800 行含测试）+
+  CLI `--render-mode ascii|pixel`（默认 ascii，爬虫契约不变）。架构：
+  复用 LayoutBox 像素坐标 + M39 样式色 + FontRenderer 逐字形光栅化
+  （含 CJK）+ 批 29 alpha 合成/WCAG 对比度；字号从 styles map 真实取值
+  （UA 阶梯 h1 2em 在像素模式画真大字）；布局格 → CSS px 换算
+  （cell≈9.2px）；大字号超页宽整盒缩放防叠印。**example.com 像素截图
+  与 Chrome 肉眼接近**；vuejs 暗色侧栏 + 白色导航文字正确（该站真实
+  设计）；docusaurus 版本列表结构清晰。已知限制：ASCII proxy 泄漏
+  （大写/加粗标记无法还原原大小写）、CJK 水平溢出、无居中/float。
+- 852 tests 全绿（+22），REALITY PASS，ascii 路径零回归。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

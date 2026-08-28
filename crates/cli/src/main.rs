@@ -74,6 +74,10 @@ enum Cmd {
         /// truncate from top (bottom content discarded).
         #[arg(long)]
         max_height: Option<usize>,
+        /// M80: 截图渲染模式（ascii | pixel）。ascii = 字符网格 PNG（爬虫
+        /// 契约，默认）；pixel = 2D 画布近似渲染，此时 --width 按 CSS px 解释。
+        #[arg(long, default_value = "ascii")]
+        render_mode: String,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -88,6 +92,9 @@ enum Cmd {
         /// truncate from top (bottom content discarded).
         #[arg(long)]
         max_height: Option<usize>,
+        /// M80: 截图渲染模式（ascii | pixel）。含义同 render-file。
+        #[arg(long, default_value = "ascii")]
+        render_mode: String,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -108,6 +115,9 @@ enum Cmd {
         /// truncate from top (bottom content discarded).
         #[arg(long)]
         max_height: Option<usize>,
+        /// M80: 截图渲染模式（ascii | pixel）。含义同 render-file。
+        #[arg(long, default_value = "ascii")]
+        render_mode: String,
         /// M18.2: after rendering, assert network is idle (no pending
         /// timers / fetches). Exits non-zero if SPA left work pending.
         /// No-op with --no-js.
@@ -356,9 +366,22 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             width,
             screenshot,
             max_height,
+            render_mode,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
+            // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
+            // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
+            if render_mode == "pixel" {
+                let text = match &screenshot {
+                    Some(p) => {
+                        render_pixel_screenshot(&html, width, true, None, "boa", p, max_height)?
+                    }
+                    None => render_html_to_string(&html, width, true, None)?,
+                };
+                print!("{text}");
+                return Ok(());
+            }
             // M37: render-file 现在执行 JS + 等待异步（setTimeout/fetch/XHR/WS）。
             // 之前 run_js=false 导致 SPA 动态内容永远不渲染。
             let text = render_html_to_string(&html, width, true, None)?;
@@ -375,17 +398,29 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             width,
             screenshot,
             max_height,
+            render_mode,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            let text = render_html_to_string(&html, width, true, None)?;
-            print!("{text}");
-            if let Some(p) = screenshot {
-                let colored = render_html_to_string_colored(&html, width, true, None)?;
-                screenshot::render_text_to_png(&colored, &p, max_height)
-                    .map_err(|e| anyhow!("screenshot failed: {e}"))?;
-                eprintln!("[screenshot] wrote {}", p.display());
+            // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
+            if render_mode == "pixel" {
+                let text = match &screenshot {
+                    Some(p) => {
+                        render_pixel_screenshot(&html, width, true, None, "boa", p, max_height)?
+                    }
+                    None => render_html_to_string(&html, width, true, None)?,
+                };
+                print!("{text}");
+            } else {
+                let text = render_html_to_string(&html, width, true, None)?;
+                print!("{text}");
+                if let Some(p) = screenshot {
+                    let colored = render_html_to_string_colored(&html, width, true, None)?;
+                    screenshot::render_text_to_png(&colored, &p, max_height)
+                        .map_err(|e| anyhow!("screenshot failed: {e}"))?;
+                    eprintln!("[screenshot] wrote {}", p.display());
+                }
             }
             // M18.2: 断言 networkidle。
             if assert_network_idle && !browser_js_runtime::is_network_idle() {
@@ -407,6 +442,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             no_js,
             screenshot,
             max_height,
+            render_mode,
             assert_network_idle,
             js_memory_limit_mb,
             js_engine,
@@ -414,46 +450,78 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
-            // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。
-            // M66: QuickJS 引擎内存效率高，跳过沙箱直接进程内渲染。
-            let (text, colored) = if !no_js && js_memory_limit_mb > 0 && js_engine == "boa" {
-                match sandbox::run_js_render_in_sandbox(&html, &url, width, js_memory_limit_mb) {
-                    Ok(Some(text)) => {
-                        // 沙箱只返回纯文本；colored 仅截图用，按需在进程内补算。
-                        let colored = if screenshot.is_some() {
-                            render_html_to_string_colored(&html, width, true, base.clone())?
-                        } else {
-                            String::new()
-                        };
-                        (text, colored)
+            // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
+            // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
+            if render_mode == "pixel" {
+                let text = match &screenshot {
+                    Some(p) => render_pixel_screenshot(
+                        &html,
+                        width,
+                        !no_js,
+                        base.clone(),
+                        &js_engine,
+                        p,
+                        max_height,
+                    )?,
+                    None => {
+                        let cols = browser_render::layout_columns_for_px(width);
+                        let (layout, _styles) = layout_tree_after_js_engine(
+                            &html,
+                            cols,
+                            !no_js,
+                            false,
+                            base.clone(),
+                            &js_engine,
+                        )?;
+                        render_ascii(&layout, cols)
                     }
-                    Ok(None) => {
-                        // 沙箱失败 = JS 太重（OOM 被 kill）或超时。**不重跑 JS**
-                        // （会再次 OOM），改为渲染静态壳 + CSR 数据兜底拿正文。
-                        eprintln!("[sandbox] JS render failed/OOM → static shell + CSR fallback (no JS re-run)");
-                        render_html_to_string_inner_ex(&html, width, false, true, base.clone())?
-                    }
-                    Err(e) => {
-                        eprintln!("[sandbox] infra error: {e}; falling back to in-process render");
-                        render_html_to_string_inner_ex(&html, width, false, true, base.clone())?
-                    }
-                }
+                };
+                print!("{text}");
             } else {
-                // M66: QuickJS 或 no_js → 直接进程内渲染
-                render_html_to_string_inner_ex_engine(
-                    &html,
-                    width,
-                    !no_js,
-                    false,
-                    base.clone(),
-                    &js_engine,
-                )?
-            };
-            print!("{text}");
-            if let Some(p) = screenshot {
-                screenshot::render_text_to_png(&colored, &p, max_height)
-                    .map_err(|e| anyhow!("screenshot failed: {e}"))?;
-                eprintln!("[screenshot] wrote {}", p.display());
+                // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。
+                // M66: QuickJS 引擎内存效率高，跳过沙箱直接进程内渲染。
+                let (text, colored) = if !no_js && js_memory_limit_mb > 0 && js_engine == "boa" {
+                    match sandbox::run_js_render_in_sandbox(&html, &url, width, js_memory_limit_mb)
+                    {
+                        Ok(Some(text)) => {
+                            // 沙箱只返回纯文本；colored 仅截图用，按需在进程内补算。
+                            let colored = if screenshot.is_some() {
+                                render_html_to_string_colored(&html, width, true, base.clone())?
+                            } else {
+                                String::new()
+                            };
+                            (text, colored)
+                        }
+                        Ok(None) => {
+                            // 沙箱失败 = JS 太重（OOM 被 kill）或超时。**不重跑 JS**
+                            // （会再次 OOM），改为渲染静态壳 + CSR 数据兜底拿正文。
+                            eprintln!("[sandbox] JS render failed/OOM → static shell + CSR fallback (no JS re-run)");
+                            render_html_to_string_inner_ex(&html, width, false, true, base.clone())?
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[sandbox] infra error: {e}; falling back to in-process render"
+                            );
+                            render_html_to_string_inner_ex(&html, width, false, true, base.clone())?
+                        }
+                    }
+                } else {
+                    // M66: QuickJS 或 no_js → 直接进程内渲染
+                    render_html_to_string_inner_ex_engine(
+                        &html,
+                        width,
+                        !no_js,
+                        false,
+                        base.clone(),
+                        &js_engine,
+                    )?
+                };
+                print!("{text}");
+                if let Some(p) = screenshot {
+                    screenshot::render_text_to_png(&colored, &p, max_height)
+                        .map_err(|e| anyhow!("screenshot failed: {e}"))?;
+                    eprintln!("[screenshot] wrote {}", p.display());
+                }
             }
             // M18.2: 断言 networkidle（爬虫调试用）。
             if assert_network_idle && !no_js {
@@ -1014,6 +1082,33 @@ fn render_html_to_string_inner_ex_engine(
     base_url: Option<String>,
     js_engine: &str,
 ) -> Result<(String, String)> {
+    let (layout, _styles) =
+        layout_tree_after_js_engine(html, width, run_js, csr_fallback, base_url, js_engine)?;
+    let plain = render_ascii(&layout, width);
+    let colored = render_ascii_colored(&layout, width);
+    // M22.2/M70.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
+    // colored 路径用彩色 ASCII（每字符带像素 RGB），plain 路径用灰度（爬虫安全）。
+    // http(s) URL 或不存在的文件 → 保留占位符（不报错，爬虫场景容错）。
+    let plain = post_process_images(&plain, width, false);
+    let colored = post_process_images(&colored, width, true);
+    // M70.3: 把 [SVG: ...] 占位符替换为 ASCII art。
+    Ok((
+        post_process_svgs(&plain, width),
+        post_process_svgs(&colored, width),
+    ))
+}
+
+/// M80: 共用布局管线（parse → JS → style → construct → run_layout），
+/// 返回布局树 + computed styles。ASCII（爬虫契约）与 pixel（近似像素
+/// 渲染）两条渲染路径共用此前半段；JS 只执行一次。
+fn layout_tree_after_js_engine(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    csr_fallback: bool,
+    base_url: Option<String>,
+    js_engine: &str,
+) -> Result<(browser_layout::LayoutTree, browser_render::StyleMap)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
@@ -1065,19 +1160,34 @@ fn render_html_to_string_inner_ex_engine(
             viewport_width: width as f32,
         },
     );
-    // M78-debug: layout 树状态（react 空输出诊断，用完即删）。
-    let plain = render_ascii(&layout, width);
-    let colored = render_ascii_colored(&layout, width);
-    // M22.2/M70.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
-    // colored 路径用彩色 ASCII（每字符带像素 RGB），plain 路径用灰度（爬虫安全）。
-    // http(s) URL 或不存在的文件 → 保留占位符（不报错，爬虫场景容错）。
-    let plain = post_process_images(&plain, width, false);
-    let colored = post_process_images(&colored, width, true);
-    // M70.3: 把 [SVG: ...] 占位符替换为 ASCII art。
-    Ok((
-        post_process_svgs(&plain, width),
-        post_process_svgs(&colored, width),
-    ))
+    Ok((layout, styles))
+}
+
+/// M80: pixel 模式截图管线。`width_px` 按 CSS px 解释：先换算布局列数
+/// 喂给布局（折行按格数），再把 px 宽度交给像素光栅化。JS 只执行一次。
+/// 返回 ASCII 纯文本供 stdout（与截图解耦，方便 pipe）。
+fn render_pixel_screenshot(
+    html: &str,
+    width_px: usize,
+    run_js: bool,
+    base_url: Option<String>,
+    js_engine: &str,
+    path: &PathBuf,
+    max_height: Option<usize>,
+) -> Result<String> {
+    let cols = browser_render::layout_columns_for_px(width_px);
+    let (layout, styles) =
+        layout_tree_after_js_engine(html, cols, run_js, false, base_url, js_engine)?;
+    let (w, h, rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
+    screenshot::render_rgba_to_png(&rgba, w, h, path, max_height)
+        .map_err(|e| anyhow!("pixel screenshot failed: {e}"))?;
+    eprintln!(
+        "[screenshot] wrote {} ({}x{} px, pixel mode)",
+        path.display(),
+        w,
+        h
+    );
+    Ok(render_ascii(&layout, cols))
 }
 
 /// M22.2/M70.2: 扫描渲染输出里的 `[IMG: src]` 占位符，尝试把 src 解析为本地

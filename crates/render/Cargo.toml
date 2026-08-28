@@ -8,6 +8,7 @@ description = "Rasterization via tiny-skia"
 
 [dependencies]
 browser-css-engine = { path = "../css-engine" }
+browser-dom = { path = "../dom" }
 browser-layout = { path = "../layout" }
 fontdue = "0.9"
 # M22.1: <img> 解码为 ASCII art（替代 [IMG: src] 占位符）。
