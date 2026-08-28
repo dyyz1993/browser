@@ -1442,6 +1442,13 @@ fn run_scripts_quickjs(
                 }
                 // M78.14: 静态 iframe 的 load 派发——WPT iframe 页在
                 // iframe.onload 里跑断言（子文档 script 执行超目标，属性近似）。
+                // M78.133: 同源 iframe 子页脚本 same-realm 执行——WPT storage
+                // 事件系列（~14 个）依赖子页 setItem 在父窗口触发 StorageEvent。
+                // 跨 realm 基建被拒（非目标），same-realm 近似：取 src（或
+                // srcdoc）里的内联 <script> 在当前 realm eval，执行期间打
+                // __inIframeScript 标记——__fireStorage 只在标记时派发（规范：
+                // storage 事件不回发起变更的同一窗口；此前父页自己的
+                // localStorage.clear() 抢发 key=null 干扰断言顺序）。
                 if (typeof __qsAll === 'function') {
                     var _ifrIds = __qsAll('iframe');
                     (_ifrIds || '').split(',').forEach(function(_sid) {
@@ -1450,6 +1457,37 @@ fn run_scripts_quickjs(
                         setTimeout(function() {
                             try {
                                 var _el = __makeElement(_nid);
+                                try {
+                                    var _childHtml = null;
+                                    var _src = __getAttr(_nid, 'src');
+                                    if (_src && typeof __fetchSync === 'function') {
+                                        var _abs = _src;
+                                        try { _abs = new URL(_src, location.href).href; } catch (pe) {}
+                                        var _okOrigin = false;
+                                        try {
+                                            var _u = new URL(_abs), _p = new URL(location.href);
+                                            _okOrigin = (_u.protocol + '//' + _u.host) === (_p.protocol + '//' + _p.host);
+                                        } catch (pe2) {}
+                                        if (_okOrigin && _abs.indexOf('http') === 0) {
+                                            try { _childHtml = __fetchSync(_abs); } catch (fe) {}
+                                        }
+                                    } else {
+                                        var _sd = __getAttr(_nid, 'srcdoc');
+                                        if (_sd) _childHtml = _sd;
+                                    }
+                                    if (_childHtml) {
+                                        var _re = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+                                        var _m;
+                                        while ((_m = _re.exec(_childHtml)) !== null) {
+                                            if (_m[1] && _m[1].trim()) {
+                                                window.__inIframeScript = true;
+                                                try { (0, eval)(_m[1]); } catch (ce) {} finally {
+                                                    window.__inIframeScript = false;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (ie) {}
                                 var _on = _el.onload;
                                 if (typeof _on === 'function') _on.call(_el, { type: 'load', target: _el });
                                 if (_el.__listeners && _el.__listeners['load']) {
@@ -2355,6 +2393,10 @@ __StorageEvent.prototype = Object.create(Event.prototype);
 Object.defineProperty(__StorageEvent.prototype, Symbol.toStringTag, { value: 'StorageEvent' });
 window.StorageEvent = __StorageEvent;
 function __fireStorage(area, key, oldV, newV) {
+    // M78.133: 规范——storage 事件不回发起变更的同一窗口。same-realm 近似：
+    // 只在 iframe 子页脚本执行期间（__inIframeScript 标记）派发，父页自身
+    // 的 setItem/clear 不触发（旧版父页 clear() 抢发 key=null 干扰断言顺序）。
+    if (window.__inIframeScript !== true) return;
     setTimeout(function() {
         try {
             var ev = new __StorageEvent('storage', { key: key, oldValue: oldV,
@@ -2408,7 +2450,7 @@ window.URL = function(input, base) {
         var b0 = String(base);
         input = b0.split('?')[0].split('#')[0] + input;
     }
-    if (base && input.indexOf('://') < 0) {
+    if (base && input.indexOf('://') < 0 && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(input)) {
         var baseURL = String(base);
         if (input.charAt(0) === '.') {
             // 相对路径：取 base 的目录部分
@@ -2422,6 +2464,11 @@ window.URL = function(input, base) {
                 var slashIdx = hostPart.indexOf('/');
                 input = baseURL.substring(0, protoEnd + 3) + (slashIdx > 0 ? hostPart.substring(0, slashIdx) : hostPart) + input;
             }
+        } else {
+            // M78.133: 无前缀裸相对路径（'resources/child.html'）——旧版漏了
+            // 这个分支原样返回，iframe src 解析全挂。取 base 目录拼接。
+            var baseDir2 = baseURL.substring(0, baseURL.lastIndexOf('/') + 1);
+            input = baseDir2 + input;
         }
     }
     this.href = input;
