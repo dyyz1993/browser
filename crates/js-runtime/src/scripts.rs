@@ -1881,6 +1881,23 @@ function __parseLoc(href) {
             writable: false, enumerable: false, configurable: false
         });
     } catch (e) {}
+    // M78.135: protocol setter——scheme 语法校验（首字符必须 ASCII 字母、
+    // 其后字母/数字/+/-/.；非法抛 SyntaxError DOMException——WPT
+    // location-protocol-setter 48 个 "is not a scheme" 断言）。
+    Object.defineProperty(loc, 'protocol', {
+        get: function() { return proto; },
+        set: function(v) {
+            var s = String(v).replace(/:$/, '');
+            if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(s)) {
+                throw new DOMException(
+                    "Failed to set 'protocol' on 'Location': '" + String(v) +
+                    "' is not a valid scheme", 'SyntaxError');
+            }
+            var rest = __locHref.slice(__locHref.indexOf(':') + 1);
+            __setLocHref(s + ':' + rest);
+        },
+        enumerable: true, configurable: true
+    });
     // M78: href/hash setter——赋值触发导航语义（相对解析 + hashchange）。
     Object.defineProperty(loc, 'href', {
         get: function() { return __locHref; },
