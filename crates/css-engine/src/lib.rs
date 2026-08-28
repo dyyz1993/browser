@@ -15,12 +15,14 @@ pub mod computed;
 pub mod parser;
 pub mod properties;
 pub mod selector;
+pub mod ua;
 
 pub use ast::{Declaration, Rule, Stylesheet};
 pub use computed::compute_styles;
 pub use parser::{parse, parse_declaration_list};
 pub use properties::{parse_box_lengths, parse_color, parse_length, BoxEdges, Length};
 pub use selector::{CompoundSelector, Selector, SelectorChain};
+pub use ua::{ua_stylesheet, UA_STYLESHEET};
 
 #[cfg(test)]
 mod tests {

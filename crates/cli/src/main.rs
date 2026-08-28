@@ -1065,6 +1065,7 @@ fn render_html_to_string_inner_ex_engine(
             viewport_width: width as f32,
         },
     );
+    // M78-debug: layout 树状态（react 空输出诊断，用完即删）。
     let plain = render_ascii(&layout, width);
     let colored = render_ascii_colored(&layout, width);
     // M22.2/M70.2: 把 [IMG: src] 占位符替换为本地图像的 ASCII art。
@@ -1135,9 +1136,13 @@ fn post_process_images(rendered: &str, width: usize, colored: bool) -> String {
             }
             let src: String = src_raw.chars().filter(|c| !c.is_whitespace()).collect();
             let advance = if found_close { j + 1 } else { j };
-            if src.is_empty() {
-                // 空 src：原样输出已扫描部分
-                out.push_str(&chars[i..advance].iter().collect::<String>());
+            // M72 噪声治理：data-URI 绝不进输出（防御性兜底——construct
+            // 层已跳过 data: src，这里防 JS 动态注入等其他来源）。
+            if src.is_empty() || src.to_ascii_lowercase().starts_with("data:") {
+                if src.is_empty() {
+                    // 空 src：原样输出已扫描部分
+                    out.push_str(&chars[i..advance].iter().collect::<String>());
+                }
                 i = advance;
                 continue;
             }
@@ -1159,12 +1164,14 @@ fn post_process_images(rendered: &str, width: usize, colored: bool) -> String {
                     out.push_str("\n└──────────────\n");
                     eprintln!("[img] rendered {src} as ASCII");
                 }
+                // M72 噪声治理：解析失败（文件不存在）或解码失败时不再
+                // 回显 `[IMG: {src}]`——路径/URL 留在输出里就是截图噪声。
+                // 丢弃占位符（stderr 记日志，stdout/PNG 保持干净）。
                 Some(Err(e)) => {
-                    eprintln!("[img] decode {src} failed: {e}");
-                    out.push_str(&format!("[IMG: {src}]"));
+                    eprintln!("[img] decode {src} failed: {e} (placeholder dropped)");
                 }
                 None => {
-                    out.push_str(&format!("[IMG: {src}]"));
+                    eprintln!("[img] unresolvable src, placeholder dropped: {src}");
                 }
             }
             i = advance;

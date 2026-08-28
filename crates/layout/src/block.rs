@@ -145,6 +145,33 @@ fn layout_inline_self(bx: &mut LayoutBox, containing_width: f32) {
     let base_x = bx.dimensions.x;
     let base_y = bx.dimensions.y;
     if bx.children.is_empty() {
+        // M72.1: `<pre>` — one words-entry per source line at a fixed x, so
+        // newlines and internal spacing survive into the renderer (the
+        // paint pass writes every char of a words entry verbatim). No
+        // word-wrap: long lines overflow, matching <pre> semantics.
+        if bx.preserve_whitespace {
+            if let Some(text) = &bx.text {
+                let lines: Vec<&str> = if text.is_empty() {
+                    Vec::new()
+                } else {
+                    text.split('\n').collect()
+                };
+                bx.words.clear();
+                for (i, line) in lines.iter().enumerate() {
+                    bx.words
+                        .push(((*line).to_string(), base_x, base_y + i as f32));
+                }
+                bx.dimensions.width = lines
+                    .iter()
+                    .map(|l| text_chars(l))
+                    .max()
+                    .unwrap_or(0)
+                    .min(containing_width.max(0.0) as usize)
+                    as f32;
+                bx.dimensions.height = lines.len() as f32;
+                return;
+            }
+        }
         let chars = bx.text.as_deref().map(text_chars).unwrap_or(0);
         bx.dimensions.width = chars as f32;
         bx.dimensions.height = if chars == 0 { 0.0 } else { 1.0 };

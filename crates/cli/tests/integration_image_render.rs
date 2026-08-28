@@ -1,7 +1,8 @@
 //! M22.2 e2e: `<img src>` 本地图像渲染成 ASCII art。
 //!
 //! 验证 render 时 `[IMG: src]` 占位符被替换为解码的 ASCII art。
-//! http(s) URL 或不存在文件 → 保留占位符（容错）。
+//! M72 噪声治理：http(s)/data-URI/不存在的文件 → 占位符被丢弃或输出
+//! 紧凑 `[IMG w×h]`，URL 不再进输出（旧行为是保留 `[IMG: src]` 噪声）。
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -75,15 +76,15 @@ fn local_img_replaced_with_ascii_art() {
 }
 
 #[test]
-fn nonexistent_img_keeps_placeholder() {
-    // src 指向不存在的文件 → 保留 [IMG: src] 占位符
+fn nonexistent_img_drops_placeholder() {
+    // M72 噪声治理：src 指向不存在的文件 → 占位符被丢弃（不再回显路径）。
     let tmp = std::env::temp_dir();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let html = tmp.join(format!("m22-missing-{ts}.html"));
-    write_html_fixture(&html, "/nope/x.png"); // 短 src 避免超宽
+    write_html_fixture(&html, "/nope/x.png");
 
     let mut cmd = bin();
     cmd.args(["render-file", html.to_str().unwrap(), "--width", "60"]);
@@ -92,20 +93,30 @@ fn nonexistent_img_keeps_placeholder() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        predicate::str::contains("[IMG: /nope/x.png]").eval(&stdout),
-        "missing img should keep placeholder. stdout={stdout:?}"
+        !predicate::str::contains("[IMG").eval(&stdout),
+        "missing img should NOT leak placeholder. stdout={stdout:?}"
+    );
+    assert!(
+        !predicate::str::contains("/nope/x.png").eval(&stdout),
+        "missing img path should NOT appear in output. stdout={stdout:?}"
     );
     assert!(
         !predicate::str::contains("image:").eval(&stdout),
         "missing img should NOT render ASCII. stdout={stdout:?}"
+    );
+    // 正文不受影响。
+    assert!(
+        predicate::str::contains("before").eval(&stdout) && stdout.contains("after"),
+        "surrounding text should survive. stdout={stdout:?}"
     );
 
     let _ = std::fs::remove_file(&html);
 }
 
 #[test]
-fn https_img_url_keeps_placeholder() {
-    // http(s) URL 不下载 → 保留占位符
+fn https_img_url_is_dropped() {
+    // M72 噪声治理：http(s) URL 不下载 → 不输出 URL 噪声（旧行为是
+    // 保留 `[IMG: https://...]`，截图里淹没正文）。
     let tmp = std::env::temp_dir();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -121,8 +132,80 @@ fn https_img_url_keeps_placeholder() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        predicate::str::contains("[IMG: https://example.com/logo.png]").eval(&stdout),
-        "http URL should keep placeholder. stdout={stdout:?}"
+        !predicate::str::contains("[IMG").eval(&stdout),
+        "http URL img should NOT leak placeholder. stdout={stdout:?}"
+    );
+    assert!(
+        !predicate::str::contains("example.com/logo.png").eval(&stdout),
+        "http URL should NOT appear in output. stdout={stdout:?}"
+    );
+
+    let _ = std::fs::remove_file(&html);
+}
+
+#[test]
+fn data_uri_img_is_skipped_entirely() {
+    // M72 噪声治理：data-URI img 一律跳过（超长、零信息量）。
+    let tmp = std::env::temp_dir();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let html = tmp.join(format!("m22-data-{ts}.html"));
+    let mut f = std::fs::File::create(&html).expect("create html");
+    f.write_all(
+        b"<html><body><p>keep</p><img src=\"data:image/svg+xml,%3Csvg%3E%3C/svg%3E\"><p>me</p></body></html>",
+    )
+    .expect("write html");
+    drop(f);
+
+    let mut cmd = bin();
+    cmd.args(["render-file", html.to_str().unwrap(), "--width", "60"]);
+    let output = cmd.output().expect("run");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !predicate::str::contains("[IMG").eval(&stdout) && !stdout.contains("data:image"),
+        "data-URI should be skipped. stdout={stdout:?}"
+    );
+    assert!(
+        predicate::str::contains("keep").eval(&stdout) && stdout.contains("me"),
+        "surrounding text should survive. stdout={stdout:?}"
+    );
+
+    let _ = std::fs::remove_file(&html);
+}
+
+#[test]
+fn sized_remote_img_shows_compact_placeholder() {
+    // M72：带 width/height 的远程 img → 紧凑占位 [IMG w×h]，无 URL。
+    let tmp = std::env::temp_dir();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let html = tmp.join(format!("m22-sized-{ts}.html"));
+    let mut f = std::fs::File::create(&html).expect("create html");
+    f.write_all(
+        b"<html><body><img src=\"https://cdn.example.com/hero.png\" width=\"320\" height=\"240\"></body></html>",
+    )
+    .expect("write html");
+    drop(f);
+
+    let mut cmd = bin();
+    cmd.args(["render-file", html.to_str().unwrap(), "--width", "60"]);
+    let output = cmd.output().expect("run");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        predicate::str::contains("[IMG 320x240]").eval(&stdout),
+        "sized remote img should show compact placeholder. stdout={stdout:?}"
+    );
+    assert!(
+        !predicate::str::contains("cdn.example.com").eval(&stdout),
+        "URL must not leak. stdout={stdout:?}"
     );
 
     let _ = std::fs::remove_file(&html);

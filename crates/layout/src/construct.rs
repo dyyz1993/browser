@@ -62,12 +62,18 @@ fn box_type_for_element(tag: &str) -> BoxType {
     }
 }
 
+/// M72.1: width (in characters) of the `<hr>` rule line.
+const HR_LINE_WIDTH: usize = 80;
+/// M72.1: font-size ratio (vs 16px base) at which text is rendered
+/// UPPERCASE — the ASCII proxy for "visibly larger glyphs".
+const UPPERCASE_RATIO_THRESHOLD: f32 = 1.5;
+
 /// Build a [`LayoutTree`] from a DOM tree and its computed styles.
 ///
-/// `_styles` is currently consulted only for the eventual cascade
-/// decision (display:block / display:inline). M2.3 only computes
-/// declarations; explicit `display` override is left to a later
-/// milestone — tag-based heuristics decide for now.
+/// Styles include the UA defaults injected by
+/// `browser_css_engine::compute_styles`; `construct` maps a few of them to
+/// visible ASCII treatments (font-size ≥ 1.5em → UPPERCASE) while page CSS
+/// overrides stay effective through the same cascade.
 #[must_use]
 pub fn construct_layout_tree(
     tree: &Tree,
@@ -77,15 +83,26 @@ pub fn construct_layout_tree(
     // anonymous block that contains whatever Document's children produce.
     let mut root = LayoutBox::new(BoxType::Anonymous);
     root.element_id = Some(tree.root());
+    // M78-debug: react 空输出诊断（用完即删）——body 直接子节点的 construct 视角。
     for &child in tree.children_of(tree.root()) {
-        build_box(tree, child, styles, &mut root.children);
+        build_box(tree, child, "", None, styles, &mut root.children);
     }
     LayoutTree { root }
+}
+
+/// Lowercased tag name of an Element node, `None` for other node kinds.
+fn element_tag(tree: &Tree, id: NodeId) -> Option<String> {
+    match tree.data(id) {
+        NodeData::Element { tag, .. } => Some(tag.to_ascii_lowercase()),
+        _ => None,
+    }
 }
 
 fn build_box(
     tree: &Tree,
     id: NodeId,
+    parent_tag: &str,
+    list_index: Option<usize>,
     styles: &HashMap<NodeId, Vec<Declaration>>,
     out: &mut Vec<LayoutBox>,
 ) {
@@ -94,7 +111,8 @@ fn build_box(
             if is_non_rendered_tag(tag) {
                 return;
             }
-            let mut bt = box_type_for_element(tag);
+            let tag_lower = tag.to_ascii_lowercase();
+            let mut bt = box_type_for_element(&tag_lower);
             // M32: CSS `display` 声明覆盖 tag-based 默认值。
             // 支持 display:flex / display:block / display:inline。
             if let Some(decls) = styles.get(&id) {
@@ -131,29 +149,58 @@ fn build_box(
             // （它们不是 HTML element，是图形描述），由 CLI 后处理替换为 ASCII art。
             // 注意：保持 svg 为 Inline（与 <img> 一致），因为 paint 只输出
             // Inline box 的 text。Block box 的 text 会被忽略。
-            if tag.eq_ignore_ascii_case("svg") {
+            if tag_lower == "svg" {
                 bx.text = Some(encode_svg_placeholder(tree, id, attrs));
                 bx.box_type = BoxType::Inline;
                 bx.children = Vec::new();
             } else {
-                bx.children = build_children(tree, id, bt, styles);
+                bx.children = build_children(tree, id, bt, &tag_lower, styles);
             }
             // M7.1.3: fill margin/padding from CSS + UA defaults.
-            apply_box_model(tag, id, styles, &mut bx);
-            // M9.1.1: inject placeholder for <img>.
+            apply_box_model(&tag_lower, id, styles, &mut bx);
+            // M72.1: UA-stylesheet visual mapping. font-size comes from the
+            // computed declarations (the UA sheet provides the h1–h6 ladder;
+            // author CSS overrides it), so a page resetting
+            // `h1 { font-size: 1em }` also cancels the uppercase.
+            let ratio = font_size_ratio(styles.get(&id));
+            if ratio >= UPPERCASE_RATIO_THRESHOLD {
+                uppercase_text_leaves(&mut bx);
+            } else if matches!(tag_lower.as_str(), "strong" | "b") {
+                // ASCII bold: markdown-style **…** markers.
+                wrap_first_last_text(&mut bx, "**", "**");
+            } else if matches!(tag_lower.as_str(), "em" | "i" | "cite" | "var" | "dfn") {
+                // ASCII italic: markdown-style *…* markers.
+                wrap_first_last_text(&mut bx, "*", "*");
+            }
+            // M72.1: <hr> — a horizontal rule line (no children).
+            if tag_lower == "hr" {
+                bx.box_type = BoxType::Inline;
+                bx.children = Vec::new();
+                bx.text = Some("─".repeat(HR_LINE_WIDTH));
+            }
+            // M72.1: <pre> — raw text with whitespace/newlines preserved.
+            if tag_lower == "pre" {
+                bx.box_type = BoxType::Inline;
+                bx.children = Vec::new();
+                bx.text = Some(collect_pre_text(tree, id));
+                bx.preserve_whitespace = true;
+            }
+            // M9.1.1/M72: inject placeholder for <img>.
+            // 噪声治理（M72）：绝不能把 src URL / data-URI 当文本输出——
+            // 真实 SPA 截图里几百行 `[IMG /_next/image?url=...]` / 超长
+            // data:image/svg+xml 淹没正文。分两类处理：
+            // - http(s):// data: // 协议相对 src → 紧凑占位 `[IMG w×h]`
+            //   （有 width/height 属性时）或完全跳过（无尺寸信息）
+            // - 本地路径 src → 保留 `[IMG: src]` 标记，供 CLI 的
+            //   post_process_images 替换为 M22 真实图像 ASCII art（能力不变）
             if tag.eq_ignore_ascii_case("img") {
-                let src = attrs
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case("src"))
-                    .map(|(_, v)| v.as_str())
-                    .unwrap_or("[no-src]");
-                bx.text = Some(format!("[IMG: {src}]"));
+                bx.text = img_placeholder_text(attrs);
             }
             // M27.1: <a href> append target URL so crawlers can see link
             // destinations in rendered text. e.g. "News (https://...)".
             // Browsers color/underline links; ASCII mode lacks color, so
             // we surface the href inline (huge value for the G1 crawler goal).
-            if tag.eq_ignore_ascii_case("a") {
+            if tag_lower == "a" {
                 bx = bx.with_link(); // M30: mark for colored rendering
                 if let Some(href) = attrs
                     .iter()
@@ -165,8 +212,13 @@ fn build_box(
                 }
             }
             // M6.0c: <li> bullet prefix (CSS ::marker placeholder).
-            if tag.eq_ignore_ascii_case("li") {
-                inject_li_bullet(&mut bx);
+            // M72.1: `<ol>` items are numbered "1. / 2. / …" per parent list.
+            if tag_lower == "li" {
+                let bullet = match (parent_tag, list_index) {
+                    ("ol", Some(n)) => format!("{n}. "),
+                    _ => "• ".to_string(),
+                };
+                inject_li_bullet(&mut bx, &bullet);
             }
             out.push(bx);
         }
@@ -460,16 +512,33 @@ fn is_non_rendered_tag(tag: &str) -> bool {
 
 /// Build the children of an Element, inserting Anonymous block wrappers
 /// whenever a Block parent has Inline children mixed with Block children.
+///
+/// `parent_tag` (lowercased) drives M72.1 `<ol>` numbering: each direct
+/// `<li>` child of an `<ol>` gets its 1-based position.
 fn build_children(
     tree: &Tree,
     parent_id: NodeId,
     parent_box: BoxType,
+    parent_tag: &str,
     styles: &HashMap<NodeId, Vec<Declaration>>,
 ) -> Vec<LayoutBox> {
     let dom_children = tree.children_of(parent_id);
     if dom_children.is_empty() {
         return Vec::new();
     }
+
+    // M72.1: number <li> children of <ol> (nested lists restart at 1 —
+    // each build_children call owns its own counter).
+    let is_ol = parent_tag.eq_ignore_ascii_case("ol");
+    let mut li_counter = 0usize;
+    let mut list_index_for = |tree: &Tree, child_id: NodeId| -> Option<usize> {
+        if is_ol && element_tag(tree, child_id).is_some_and(|t| t.eq_ignore_ascii_case("li")) {
+            li_counter += 1;
+            Some(li_counter)
+        } else {
+            None
+        }
+    };
 
     if parent_box == BoxType::Block {
         // Group consecutive inline children into anonymous blocks.
@@ -479,11 +548,25 @@ fn build_children(
             let is_inline = is_inline_node(tree, child_id);
             if is_inline {
                 let mut tmp = Vec::new();
-                build_box(tree, child_id, styles, &mut tmp);
+                build_box(
+                    tree,
+                    child_id,
+                    parent_tag,
+                    list_index_for(tree, child_id),
+                    styles,
+                    &mut tmp,
+                );
                 inline_buf.extend(tmp);
             } else {
                 flush_inline_buf(&mut inline_buf, &mut result);
-                build_box(tree, child_id, styles, &mut result);
+                build_box(
+                    tree,
+                    child_id,
+                    parent_tag,
+                    list_index_for(tree, child_id),
+                    styles,
+                    &mut result,
+                );
             }
         }
         flush_inline_buf(&mut inline_buf, &mut result);
@@ -493,21 +576,42 @@ fn build_children(
         // Flex items 不管原始 tag 是 block 还是 inline，都直接成为 flex item。
         let mut result: Vec<LayoutBox> = Vec::new();
         for &child_id in dom_children {
-            build_box(tree, child_id, styles, &mut result);
+            build_box(
+                tree,
+                child_id,
+                parent_tag,
+                list_index_for(tree, child_id),
+                styles,
+                &mut result,
+            );
         }
         result
     } else if parent_box == BoxType::Grid {
         // M33: Grid 容器同样直接收集 children（auto-placement）。
         let mut result: Vec<LayoutBox> = Vec::new();
         for &child_id in dom_children {
-            build_box(tree, child_id, styles, &mut result);
+            build_box(
+                tree,
+                child_id,
+                parent_tag,
+                list_index_for(tree, child_id),
+                styles,
+                &mut result,
+            );
         }
         result
     } else {
         // Inline parent → just collect children inline (no anonymous wrappers).
         let mut result = Vec::new();
         for &child_id in dom_children {
-            build_box(tree, child_id, styles, &mut result);
+            build_box(
+                tree,
+                child_id,
+                parent_tag,
+                list_index_for(tree, child_id),
+                styles,
+                &mut result,
+            );
         }
         result
     }
@@ -531,10 +635,11 @@ fn flush_inline_buf(buf: &mut Vec<LayoutBox>, out: &mut Vec<LayoutBox>) {
     out.push(anon);
 }
 
-/// Prepend a "• " bullet to the first text-bearing descendant of an
-/// `<li>` layout box. The bullet sits at the same (x, y) as the text
-/// would have started, then the text follows after 2 chars. We
-/// implement this by mutating the first inline text leaf's `text`.
+/// Prepend a list-marker `prefix` ("• " for `<ul>`, "N. " for `<ol>` —
+/// M72.1) to the first text-bearing descendant of an `<li>` layout box.
+/// The bullet sits at the same (x, y) as the text would have started, then
+/// the text follows after the marker. We implement this by mutating the
+/// first inline text leaf's `text`.
 /// M27.1: Append ` (href)` to the first text leaf of an `<a>` box.
 /// If the `<a>` has no text child (e.g. `<a href="u"></a>`), we create
 /// a text leaf carrying just the href so the link is still discoverable
@@ -558,12 +663,12 @@ fn inject_a_href(bx: &mut LayoutBox, href: &str) {
     }
 }
 
-fn inject_li_bullet(bx: &mut LayoutBox) {
+fn inject_li_bullet(bx: &mut LayoutBox, prefix: &str) {
     if let Some(leaf) = find_first_text_leaf_mut(bx) {
         if let Some(text) = &mut leaf.text {
-            if !text.starts_with("• ") {
-                let mut new_text = String::with_capacity(text.len() + 2);
-                new_text.push_str("• ");
+            if !text.starts_with(prefix) {
+                let mut new_text = String::with_capacity(text.len() + prefix.len());
+                new_text.push_str(prefix);
                 new_text.push_str(text);
                 *text = new_text;
             }
@@ -582,6 +687,101 @@ fn find_first_text_leaf_mut(bx: &mut LayoutBox) -> Option<&mut LayoutBox> {
         }
     }
     None
+}
+
+/// M72.1: mirror of [`find_first_text_leaf_mut`] scanning right-to-left.
+fn find_last_text_leaf_mut(bx: &mut LayoutBox) -> Option<&mut LayoutBox> {
+    if bx.box_type == BoxType::Inline && bx.text.as_ref().is_some_and(|t| !t.is_empty()) {
+        return Some(bx);
+    }
+    for child in bx.children.iter_mut().rev() {
+        if let Some(found) = find_last_text_leaf_mut(child) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// M72.1: font-size as a ratio vs the 16px base, from computed
+/// declarations (the last `font-size` wins — matches the cascade).
+///
+/// `2em` → 2.0, `150%` → 1.5, `32px` → 2.0, `1rem` → 1.0.
+/// No declaration (or unparseable) → 1.0.
+fn font_size_ratio(decls: Option<&Vec<Declaration>>) -> f32 {
+    let Some(decls) = decls else {
+        return 1.0;
+    };
+    for d in decls.iter().rev() {
+        if d.property.eq_ignore_ascii_case("font-size") {
+            return match parse_length(&d.value) {
+                Some(Length::Em(v)) => v,
+                Some(Length::Percent(v)) => v / 100.0,
+                Some(Length::Px(v)) => v / 16.0,
+                Some(Length::Zero) => 0.0,
+                _ => 1.0,
+            };
+        }
+    }
+    1.0
+}
+
+/// M72.1: UPPERCASE every text leaf under `bx` (recursive). Applied when
+/// computed font-size is ≥ 1.5em — capital letters are the ASCII proxy
+/// for larger glyphs (taller cap height in the rasterized screenshot).
+fn uppercase_text_leaves(bx: &mut LayoutBox) {
+    if let Some(text) = &mut bx.text {
+        *text = text.to_uppercase();
+    }
+    for child in bx.children.iter_mut() {
+        uppercase_text_leaves(child);
+    }
+}
+
+/// M72.1: markdown-style emphasis markers — prepend `prefix` to the first
+/// text leaf and append `suffix` to the last. When the emphasis wraps a
+/// single leaf the result is `**text**` / `*text*`; across child elements
+/// (`<strong><a>x</a></strong>`) the markers land on the outermost leaves.
+/// No-op when there is no text leaf at all.
+fn wrap_first_last_text(bx: &mut LayoutBox, prefix: &str, suffix: &str) {
+    if let Some(leaf) = find_first_text_leaf_mut(bx) {
+        if let Some(text) = &mut leaf.text {
+            if !text.starts_with(prefix) {
+                text.insert_str(0, prefix);
+            }
+        }
+    }
+    if let Some(leaf) = find_last_text_leaf_mut(bx) {
+        if let Some(text) = &mut leaf.text {
+            if !text.ends_with(suffix) {
+                text.push_str(suffix);
+            }
+        }
+    }
+}
+
+/// M72.1: collect the raw text of a `<pre>` subtree (text nodes only,
+/// skipping non-rendered tags), applying two browser behaviors: a single
+/// newline immediately after `<pre>` is dropped, and tabs expand to
+/// 4 spaces.
+fn collect_pre_text(tree: &Tree, id: NodeId) -> String {
+    fn walk(tree: &Tree, id: NodeId, out: &mut String) {
+        match tree.data(id) {
+            NodeData::Text(s) => out.push_str(s),
+            NodeData::Element { tag, .. } => {
+                if is_non_rendered_tag(tag) {
+                    return;
+                }
+                for &child in tree.children_of(id) {
+                    walk(tree, child, out);
+                }
+            }
+            NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::Document => {}
+        }
+    }
+    let mut raw = String::new();
+    walk(tree, id, &mut raw);
+    let raw = raw.strip_prefix('\n').unwrap_or(&raw);
+    raw.replace('\t', "    ")
 }
 
 /// M70.3: 把 `<svg>` 及其子元素编码成 `[SVG: ...]` 占位符字符串。
@@ -609,6 +809,61 @@ fn encode_svg_placeholder(tree: &Tree, svg_id: NodeId, svg_attrs: &[(String, Str
     let _ = tree;
     let _ = svg_id;
     format!("[SVG {vb_w}x{vb_h}]")
+}
+
+/// M72: `<img>` 的文本占位符决策（噪声治理）。
+///
+/// 返回值语义：
+/// - `Some("[IMG: src]")` —— **本地文件候选**（file:// 或裸相对路径如
+///   `logo.png`）。保留 src 标记，CLI 渲染后处理（post_process_images）
+///   把可解析的本地图像替换为 M22 ASCII art；不可解析的由后处理丢弃
+///   （不再回显路径）。
+/// - `Some("[IMG w×h]")` —— **URL 形 src**（http(s):// 协议相对 `//`、
+///   站内绝对路径 `/...`）且元素带正数 width/height 属性，输出紧凑占位
+///   （无 src，无 URL）。
+/// - `None` —— 无 src、data-URI（爬虫视觉无信息量，一律跳过）、或 URL
+///   形 src 且无尺寸信息。跳过 = 不向文本流注入任何噪声。
+///
+/// 注意：站内绝对路径 `/a/b.png` 归入 URL 形（SPA 的 `/_next/...`、
+/// `/_app/...` 资产全是这种形态，且 CDP 截图路径不走 CLI 后处理，必须
+/// 在 construct 源头掐断）。代价是「文件系统绝对路径的 img 不再进 M22
+/// ASCII 管线」——该场景可用 file:// 表达（仍支持），且无测试依赖。
+fn img_placeholder_text(attrs: &[(String, String)]) -> Option<String> {
+    let src = attrs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("src"))
+        .map(|(_, v)| v.trim())
+        .unwrap_or("");
+    if src.is_empty() {
+        return None;
+    }
+    let lower = src.to_ascii_lowercase();
+    // data-URI：超长且对爬虫零信息量，无论有无尺寸一律跳过。
+    if lower.starts_with("data:") {
+        return None;
+    }
+    // URL 形：http(s)://、协议相对 //、站内绝对路径 /...。
+    // file:// 与裸相对路径同属 M22 可解析候选（resolve_local_image_src 支持）。
+    let url_like = lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || src.starts_with("//")
+        || src.starts_with('/');
+    if !url_like {
+        // 本地文件候选：保留标记给 CLI 的 M22 ASCII 替换管线。
+        return Some(format!("[IMG: {src}]"));
+    }
+    // URL 形 src：紧凑占位（width/height 属性都为正数时），否则跳过。
+    let dim = |key: &str| {
+        attrs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .and_then(|(_, v)| v.trim().parse::<u32>().ok())
+            .filter(|&n| n > 0)
+    };
+    match (dim("width"), dim("height")) {
+        (Some(w), Some(h)) => Some(format!("[IMG {w}x{h}]")),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -868,5 +1123,347 @@ mod tests {
         // Text directly under body gets wrapped in anonymous block.
         assert_eq!(body_box.children.len(), 1);
         assert_eq!(body_box.children[0].box_type, BoxType::Anonymous);
+    }
+}
+
+/// M72: img 占位符噪声治理回归测试。
+#[cfg(test)]
+mod img_placeholder_tests {
+    use super::img_placeholder_text;
+
+    fn attrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn https_src_without_dims_is_skipped() {
+        // react.dev 噪声源：`[IMG: /_next/image?url=...]` 之类 URL 不再进文本流。
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "https://cdn.example.com/logo.png")])),
+            None
+        );
+    }
+
+    #[test]
+    fn https_src_with_dims_is_compact() {
+        assert_eq!(
+            img_placeholder_text(&attrs(&[
+                ("src", "https://cdn.example.com/hero.png"),
+                ("width", "320"),
+                ("height", "240"),
+            ])),
+            Some("[IMG 320x240]".to_string())
+        );
+    }
+
+    #[test]
+    fn origin_absolute_src_is_url_like() {
+        // svelte.dev 噪声源：/_app/immutable/assets/...svg。
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "/_app/immutable/assets/logo.svg")])),
+            None
+        );
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "/_next/image?url=x&w=640")])),
+            None
+        );
+    }
+
+    #[test]
+    fn origin_absolute_src_with_dims_is_compact() {
+        assert_eq!(
+            img_placeholder_text(&attrs(&[
+                ("src", "/img/banner.png"),
+                ("width", "800"),
+                ("height", "600")
+            ])),
+            Some("[IMG 800x600]".to_string())
+        );
+    }
+
+    #[test]
+    fn protocol_relative_src_is_url_like() {
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "//cdn.example.com/x.png")])),
+            None
+        );
+    }
+
+    #[test]
+    fn data_uri_is_always_skipped() {
+        // 有无尺寸都跳过：data-URI 对爬虫视觉零信息量且超长。
+        let base = attrs(&[("src", "data:image/svg+xml,%3Csvg%20xmlns")]);
+        assert_eq!(img_placeholder_text(&base), None);
+        let with_dims = attrs(&[
+            ("src", "data:image/png;base64,iVBORw0KGgo="),
+            ("width", "100"),
+            ("height", "100"),
+        ]);
+        assert_eq!(img_placeholder_text(&with_dims), None);
+    }
+
+    #[test]
+    fn missing_or_empty_src_is_skipped() {
+        assert_eq!(img_placeholder_text(&attrs(&[])), None);
+        assert_eq!(img_placeholder_text(&attrs(&[("src", "  ")])), None);
+    }
+
+    #[test]
+    fn local_relative_src_keeps_marker_for_m22() {
+        // M22 真实图像能力：裸相对路径保留 [IMG: src] 标记，
+        // 供 CLI post_process_images 替换为 ASCII art。
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "logo.png")])),
+            Some("[IMG: logo.png]".to_string())
+        );
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "img/photos/cat.jpg")])),
+            Some("[IMG: img/photos/cat.jpg]".to_string())
+        );
+        assert_eq!(
+            img_placeholder_text(&attrs(&[("src", "file:///tmp/x.png")])),
+            Some("[IMG: file:///tmp/x.png]".to_string())
+        );
+    }
+
+    #[test]
+    fn zero_or_invalid_dims_do_not_compact() {
+        assert_eq!(
+            img_placeholder_text(&attrs(&[
+                ("src", "https://x.com/a.png"),
+                ("width", "0"),
+                ("height", "abc"),
+            ])),
+            None
+        );
+    }
+}
+
+/// M72.1: UA-stylesheet visual mapping tests (uppercase headings,
+/// ol numbering, hr rule line, pre preservation, emphasis markers).
+#[cfg(test)]
+mod ua_visual_tests {
+    use super::*;
+    use browser_dom::NodeData;
+
+    fn elem(tag: &str, text: &str) -> NodeData {
+        let _ = text;
+        NodeData::Element {
+            tag: tag.into(),
+            attrs: vec![],
+        }
+    }
+
+    fn text(s: &str) -> NodeData {
+        NodeData::Text(s.into())
+    }
+
+    /// Collect all text under a layout box.
+    fn all_text(bx: &LayoutBox, out: &mut String) {
+        if let Some(t) = &bx.text {
+            out.push_str(t);
+        }
+        for c in &bx.children {
+            all_text(c, out);
+        }
+    }
+
+    fn first_child_text(layout: &LayoutTree) -> String {
+        let mut s = String::new();
+        all_text(&layout.root, &mut s);
+        s
+    }
+
+    /// Document > html > body > h1("Title")
+    fn heading_tree(tag: &str, content: &str) -> Tree {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let html = t.insert(Some(root), elem("html", ""));
+        let body = t.insert(Some(html), elem("body", ""));
+        let h = t.insert(Some(body), elem(tag, ""));
+        let _ = t.insert(Some(h), text(content));
+        t
+    }
+
+    #[test]
+    fn h1_with_ua_styles_is_uppercased() {
+        let tree = heading_tree("h1", "Example Domain");
+        // h1 is the 4th inserted node: root=0, html=1, body=2, h1=3.
+        let mut styles = HashMap::new();
+        styles.insert(
+            3,
+            vec![Declaration {
+                property: "font-size".into(),
+                value: "2em".into(),
+                important: false,
+            }],
+        );
+        let layout = construct_layout_tree(&tree, &styles);
+        assert!(
+            first_child_text(&layout).contains("EXAMPLE DOMAIN"),
+            "h1 text should be uppercased, got {:?}",
+            first_child_text(&layout)
+        );
+    }
+
+    #[test]
+    fn h1_with_page_reset_font_size_stays_mixed_case() {
+        // Author CSS `h1 { font-size: 1em }` must cancel the UA 2em:
+        // the last font-size declaration wins.
+        let tree = heading_tree("h1", "Example Domain");
+        let mut styles = HashMap::new();
+        styles.insert(
+            3,
+            vec![
+                Declaration {
+                    property: "font-size".into(),
+                    value: "2em".into(),
+                    important: false,
+                },
+                Declaration {
+                    property: "font-size".into(),
+                    value: "1em".into(),
+                    important: false,
+                },
+            ],
+        );
+        let layout = construct_layout_tree(&tree, &styles);
+        let s = first_child_text(&layout);
+        assert!(s.contains("Example Domain"), "got {s:?}");
+        assert!(
+            !s.contains("EXAMPLE"),
+            "page font-size:1em must cancel uppercase"
+        );
+    }
+
+    #[test]
+    fn font_size_ratio_parses_units() {
+        let d = |v: &str| {
+            vec![Declaration {
+                property: "font-size".into(),
+                value: v.into(),
+                important: false,
+            }]
+        };
+        assert_eq!(font_size_ratio(None), 1.0);
+        assert_eq!(font_size_ratio(Some(&d("2em"))), 2.0);
+        assert_eq!(font_size_ratio(Some(&d("150%"))), 1.5);
+        assert_eq!(font_size_ratio(Some(&d("32px"))), 2.0);
+        assert_eq!(font_size_ratio(Some(&d("1rem"))), 1.0);
+        // Last declaration wins.
+        let both = vec![
+            Declaration {
+                property: "font-size".into(),
+                value: "2em".into(),
+                important: false,
+            },
+            Declaration {
+                property: "font-size".into(),
+                value: "1em".into(),
+                important: false,
+            },
+        ];
+        assert_eq!(font_size_ratio(Some(&both)), 1.0);
+    }
+
+    #[test]
+    fn ol_items_are_numbered() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let ol = t.insert(Some(root), elem("ol", ""));
+        for item in ["alpha", "beta"] {
+            let li = t.insert(Some(ol), elem("li", ""));
+            let _ = t.insert(Some(li), text(item));
+        }
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        let s = first_child_text(&layout);
+        assert!(s.contains("1. alpha"), "got {s:?}");
+        assert!(s.contains("2. beta"), "got {s:?}");
+    }
+
+    #[test]
+    fn ul_items_keep_bullet() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let ul = t.insert(Some(root), elem("ul", ""));
+        let li = t.insert(Some(ul), elem("li", ""));
+        let _ = t.insert(Some(li), text("item"));
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        assert!(first_child_text(&layout).contains("• item"));
+    }
+
+    #[test]
+    fn hr_becomes_rule_line() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let _ = t.insert(Some(root), elem("hr", ""));
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        let s = first_child_text(&layout);
+        assert!(s.contains('─'), "hr should render a rule line");
+        assert_eq!(s.chars().filter(|&c| c == '─').count(), HR_LINE_WIDTH);
+    }
+
+    #[test]
+    fn pre_preserves_newlines_and_tabs() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let pre = t.insert(Some(root), elem("pre", ""));
+        let _ = t.insert(Some(pre), text("a\tb\nc  d"));
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        fn find_pre(bx: &LayoutBox, out: &mut Option<String>) {
+            if bx.preserve_whitespace {
+                if let Some(t) = &bx.text {
+                    *out = Some(t.clone());
+                }
+            }
+            for c in &bx.children {
+                find_pre(c, out);
+            }
+        }
+        let mut found: Option<String> = None;
+        find_pre(&layout.root, &mut found);
+        let box_text = found.expect("pre box with preserve_whitespace");
+        assert_eq!(box_text, "a    b\nc  d", "tabs expand, leading rules apply");
+    }
+
+    #[test]
+    fn strong_and_em_get_markdown_markers() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let body = t.insert(Some(root), elem("body", ""));
+        let strong = t.insert(Some(body), elem("strong", ""));
+        let _ = t.insert(Some(strong), text("bold"));
+        let em = t.insert(Some(body), elem("em", ""));
+        let _ = t.insert(Some(em), text("italic"));
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        let s = first_child_text(&layout);
+        assert!(s.contains("**bold**"), "got {s:?}");
+        assert!(s.contains("*italic*"), "got {s:?}");
+    }
+
+    #[test]
+    fn empty_strong_is_noop() {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let _ = t.insert(Some(root), elem("strong", ""));
+        let layout = construct_layout_tree(&t, &HashMap::new());
+        // No panic, no markers.
+        assert_eq!(first_child_text(&layout), "");
+    }
+
+    #[test]
+    fn wrap_first_last_spans_nested_leaves() {
+        // <strong><a>link</a></strong>: first leaf gets prefix, same leaf
+        // gets suffix (single-leaf case through a wrapper).
+        let mut bx = LayoutBox::new(BoxType::Inline);
+        let mut inner = LayoutBox::new(BoxType::Inline).with_text("link".into());
+        inner.link = true;
+        bx.children.push(inner);
+        wrap_first_last_text(&mut bx, "**", "**");
+        let leaf = find_first_text_leaf_mut(&mut bx).expect("leaf");
+        assert_eq!(leaf.text.as_deref(), Some("**link**"));
     }
 }

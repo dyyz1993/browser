@@ -40,6 +40,7 @@ fn spa_async_data_renders_after_async_load() {
 /// 验收：默认 home 视图内容出现。
 /// 注：我们的渲染不处理 CSS display:none，所以 About 也会出现——
 /// 验收点只确认 home 内容存在（JS 路由逻辑执行了）。
+/// M72.1：fixture 的 <h2> 命中 UA 样式表 font-size:1.5em → 渲染为大写。
 #[test]
 fn spa_route_switch_renders_default_route() {
     bin()
@@ -51,7 +52,7 @@ fn spa_route_switch_renders_default_route() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Home Page Content"));
+        .stdout(predicate::str::contains("HOME PAGE CONTENT"));
 }
 
 /// 模式 3: lazy-load —— 动态 DOM 构建（createElement + appendChild 循环）。

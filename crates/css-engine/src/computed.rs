@@ -22,18 +22,24 @@ use crate::selector::Selector;
 /// computed map. Inline styles are appended last (last-write-wins), giving
 /// them the highest priority — matching browser behavior where inline styles
 /// beat stylesheet rules (without `!important`).
+///
+/// M72.1: the built-in UA stylesheet ([`crate::ua::ua_stylesheet`]) is
+/// prepended before the page's rules, so author CSS overrides browser
+/// defaults while unstyled elements still get them (h1 sizing, p margins,
+/// list indents...). Full order, lowest → highest priority:
+/// UA sheet → page sheet → inline `style="..."`.
 #[must_use]
 pub fn compute_styles(tree: &Tree, sheet: &Stylesheet) -> HashMap<NodeId, Vec<Declaration>> {
-    // Pre-parse every rule's selector list once.
-    let parsed: Vec<(Selector, &[Declaration])> = sheet
-        .rules
-        .iter()
-        .filter_map(|r| {
-            Selector::parse(&r.selectors)
-                .ok()
-                .map(|s| (s, r.declarations.as_slice()))
-        })
-        .collect();
+    // Pre-parse every rule's selector list once. UA rules first (lowest
+    // priority), page rules after.
+    let ua = crate::ua::ua_stylesheet();
+    let mut parsed: Vec<(Selector, &[Declaration])> =
+        Vec::with_capacity(ua.rules.len() + sheet.rules.len());
+    for r in ua.rules.iter().chain(sheet.rules.iter()) {
+        if let Ok(s) = Selector::parse(&r.selectors) {
+            parsed.push((s, r.declarations.as_slice()));
+        }
+    }
 
     let mut out: HashMap<NodeId, Vec<Declaration>> = HashMap::new();
     tree.traverse(tree.root(), |id, node| {
@@ -117,8 +123,11 @@ mod tests {
         let tree = fixture();
         let sheet = parse_css("h1 { color: red; }");
         let styles = compute_styles(&tree, &sheet);
-        // No element is h1, so no styles at all.
-        assert!(styles.is_empty());
+        // No element is h1, so the page rule matches nothing. M72.1: the
+        // <p> still receives UA-default declarations (e.g. margin), but
+        // never the page rule's color.
+        assert_eq!(get(&styles, 3, "color"), None);
+        assert!(get(&styles, 3, "margin").is_some(), "UA p margin expected");
     }
 
     #[test]
@@ -215,11 +224,12 @@ mod tests {
 
     #[test]
     fn inline_style_missing_is_noop() {
-        // Element without style attribute → no inline decls.
+        // Element without style attribute → no inline decls. M72.1: UA
+        // defaults still show up (p margin), but the UA sheet declares no
+        // `color` for p, so a missing inline style means no color either.
         let tree = fixture(); // fixture's <p> has class but no style
         let sheet = parse_css("");
         let styles = compute_styles(&tree, &sheet);
-        // No styles at all (empty sheet + no inline style).
-        assert!(styles.is_empty() || !styles.contains_key(&3));
+        assert_eq!(get(&styles, 3, "color"), None);
     }
 }

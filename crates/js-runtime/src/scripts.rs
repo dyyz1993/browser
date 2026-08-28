@@ -1624,7 +1624,6 @@ fn run_scripts_quickjs(
     engine.run_jobs();
     engine.gc();
     eprintln!("[serve] event_loop: {}ms", el_start.elapsed().as_millis());
-
     (shared, executed)
 }
 
@@ -2315,6 +2314,44 @@ window.postMessage = function(msg, _origin, _transfer) {
     }
 };
 if (typeof window.onmessage === 'undefined') { window.onmessage = null; }
+// M78.137: MessageChannel/MessagePort——React scheduler 的 work loop 用
+// `new MessageChannel()` 做宏任务调度，缺定义时模块级抛错 → 水合清空 SSR
+// 内容后客户端渲染永不执行 → render-url 空输出。peer 端口队列 + setTimeout
+// 投递（onmessage 未设时消息排队——start() 或首次赋值时消费）。
+function __MessagePort() {
+    this.onmessage = null;
+    this.__peer = null;
+    this.__queue = [];
+    this.__started = false;
+}
+__MessagePort.prototype.postMessage = function(msg) {
+    var other = this.__peer;
+    if (!other) return;
+    var self = this;
+    other.__queue.push({ msg: msg, ports: [self] });
+    setTimeout(function() {
+        if (!other.__queue.length) return;
+        if (!other.__started && other.onmessage === null) return;
+        other.__started = true;
+        while (other.__queue.length) {
+            var item = other.__queue.shift();
+            if (typeof other.onmessage === 'function') {
+                try {
+                    other.onmessage({ data: item.msg, origin: '', source: null, ports: item.ports });
+                } catch (e) {}
+            }
+        }
+    }, 0);
+};
+__MessagePort.prototype.start = function() { this.__started = true; };
+__MessagePort.prototype.close = function() { this.__started = false; this.onmessage = null; this.__queue = []; };
+globalThis.MessagePort = __MessagePort;
+globalThis.MessageChannel = function MessageChannel() {
+    var p1 = new __MessagePort(), p2 = new __MessagePort();
+    p1.__peer = p2; p2.__peer = p1;
+    this.port1 = p1; this.port2 = p2;
+};
+try { Object.defineProperty(globalThis.MessageChannel.prototype, Symbol.toStringTag, { value: 'MessageChannel' }); } catch (e) {}
 window.addEventListener = window.addEventListener || function(type, cb) {
     if (typeof cb === 'function' && type) {
         if (type === 'message') window.onmessage = cb;

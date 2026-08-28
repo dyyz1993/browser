@@ -244,6 +244,11 @@ pub struct LayoutBox {
     pub grid_placement: Option<GridItemPlacement>,
     /// M39: 视觉样式（border + background-color）。
     pub style: BoxStyle,
+    /// M72.1: `<pre>` — keep whitespace/newlines verbatim. When true the
+    /// inline layout pass emits one `words` entry per source line instead
+    /// of word-wrapping, so the renderer reproduces the original line
+    /// structure (ASCII "monospace preservation").
+    pub preserve_whitespace: bool,
     pub children: Vec<LayoutBox>,
 }
 
@@ -264,6 +269,7 @@ impl LayoutBox {
             grid: GridProps::default(),
             grid_placement: None,
             style: BoxStyle::default(),
+            preserve_whitespace: false,
             children: Vec::new(),
         }
     }
@@ -292,6 +298,13 @@ impl LayoutBox {
     #[must_use]
     pub fn with_link(mut self) -> Self {
         self.link = true;
+        self
+    }
+
+    /// M72.1: mark this box as whitespace-preserving (`<pre>`).
+    #[must_use]
+    pub fn with_preserve_whitespace(mut self) -> Self {
+        self.preserve_whitespace = true;
         self
     }
 }
