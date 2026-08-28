@@ -629,6 +629,364 @@ impl QuickJsEngine {
 "#,
                 );
 
+                // M78.131e: Iterator sequencing 语义修正 + ES2026 新 API 补齐（test262
+                // js 类别 98 个失败里可纯 JS 修的 13 个）。
+                // (1) chunks/windows/includes/join 覆盖 M78.131d 版本的规范偏差：
+                //     - receiver 必须显式 IsObject 检查（strict 函数 this 不装箱——
+                //       sloppy 测试里 join.call("") 旧版会迭代 String 包装对象不抛错）
+                //     - chunkSize/windowSize：非 Number/NaN/非整数 → TypeError（不可
+                //       强转，no-coercion）；整数 <1 或 >MAX_SAFE_INTEGER → RangeError
+                //     - includes 是 eager 方法：skippedElements 校验（undefined→0、
+                //       NaN/非整数→TypeError、负数/超大→RangeError）失败要 close 底层
+                //       迭代器且不得读 next；Infinity = 跳过全部（自然耗尽返 false、
+                //       不调 return）；命中要 close 底层
+                //     - windows 非法 undersized → TypeError（只有 'only-full'/
+                //       'allow-partial' 两个字面量合法）
+                //     - 校验失败路径统一 close 底层（argument-validation-failure-
+                //       closes-underlying）；next 读取失败不 close（get-next-method-throws）
+                //     - GetIteratorDirect：不要求 Symbol.iterator，只读 next 属性；
+                //       windows 的 IsCallable(next) 延迟到第一次 next() 才抛
+                let _ = ctx.eval::<(), _>(
+                    r#"(function() {
+    if (typeof Iterator !== 'function' || !Iterator.prototype) return;
+    var IP = Iterator.prototype;
+    var MAX_SAFE = 9007199254740991;
+    function __reqObj(t) {
+        if (t === null || t === undefined || (typeof t !== 'object' && typeof t !== 'function')) {
+            throw new TypeError('Method called on non-object receiver');
+        }
+    }
+    function __size(v) {
+        if (typeof v !== 'number' || v !== v || v === Infinity || v === -Infinity ||
+            Math.floor(v) !== v) {
+            throw new TypeError('size must be an integer Number');
+        }
+        if (v < 1 || v > MAX_SAFE) throw new RangeError('size out of range');
+        return v;
+    }
+    function __closeIt(o) {
+        var r = o.return;
+        if (typeof r === 'function') {
+            var ret = r.call(o);
+            if (ret !== null && typeof ret !== 'object') {
+                throw new TypeError('return must return an object');
+            }
+        }
+    }
+    function __chk(r) {
+        if (r === null || typeof r !== 'object') {
+            throw new TypeError('next must return an object');
+        }
+        return r;
+    }
+    function __def(name, len, fn) {
+        try {
+            Object.defineProperty(fn, 'length', { value: len });
+            Object.defineProperty(IP, name, {
+                value: fn, writable: true, enumerable: false, configurable: true
+            });
+        } catch (e) {}
+    }
+    __def('chunks', 1, function(size) {
+        __reqObj(this);
+        var n;
+        try { n = __size(size); } catch (e) { __closeIt(this); throw e; }
+        var it = this;
+        var nextMethod = it.next;
+        var fin = false;
+        return {
+            next: function() {
+                if (fin) return { value: undefined, done: true };
+                if (typeof nextMethod !== 'function') {
+                    throw new TypeError('next is not a function');
+                }
+                var buf = [];
+                while (buf.length < n) {
+                    var r = __chk(nextMethod.call(it));
+                    if (r.done) { fin = true; break; }
+                    buf.push(r.value);
+                }
+                if (!buf.length) return { value: undefined, done: true };
+                return { value: buf, done: false };
+            },
+            return: function() {
+                fin = true;
+                __closeIt(it);
+                return { value: undefined, done: true };
+            },
+            [Symbol.iterator]: function() { return this; }
+        };
+    });
+    __def('windows', 2, function(size, undersized) {
+        __reqObj(this);
+        var n;
+        try { n = __size(size); } catch (e) { __closeIt(this); throw e; }
+        var und;
+        if (undersized === undefined) {
+            und = 'only-full';
+        } else if (undersized === 'only-full' || undersized === 'allow-partial') {
+            und = undersized;
+        } else {
+            __closeIt(this);
+            throw new TypeError('undersized must be only-full or allow-partial');
+        }
+        var it = this;
+        var nextMethod = it.next;
+        var buf = [];
+        var fin = false;
+        return {
+            next: function() {
+                if (fin) return { value: undefined, done: true };
+                if (typeof nextMethod !== 'function') {
+                    throw new TypeError('next is not a function');
+                }
+                while (buf.length < n) {
+                    var r = __chk(nextMethod.call(it));
+                    if (r.done) {
+                        if (buf.length > 0 && buf.length < n && und === 'allow-partial') {
+                            var out = buf;
+                            buf = [];
+                            return { value: out, done: false };
+                        }
+                        fin = true;
+                        return { value: undefined, done: true };
+                    }
+                    buf.push(r.value);
+                }
+                var w = buf;
+                buf = buf.slice(1);
+                return { value: w, done: false };
+            },
+            return: function() {
+                fin = true;
+                __closeIt(it);
+                return { value: undefined, done: true };
+            },
+            [Symbol.iterator]: function() { return this; }
+        };
+    });
+    __def('includes', 1, function(searchElement, skippedElements) {
+        __reqObj(this);
+        var skip = 0;
+        if (skippedElements !== undefined) {
+            try {
+                if (typeof skippedElements !== 'number' || skippedElements !== skippedElements ||
+                    (skippedElements !== Infinity && Math.floor(skippedElements) !== skippedElements)) {
+                    throw new TypeError('skippedElements must be an integer Number');
+                }
+                if (skippedElements !== Infinity && (skippedElements < 0 || skippedElements > MAX_SAFE)) {
+                    throw new RangeError('skippedElements out of range');
+                }
+            } catch (e) { __closeIt(this); throw e; }
+            skip = skippedElements;
+        }
+        var it = this;
+        var nextMethod = it.next;
+        if (typeof nextMethod !== 'function') {
+            throw new TypeError('next is not a function');
+        }
+        var i = 0;
+        while (i < skip) {
+            var r0 = __chk(nextMethod.call(it));
+            if (r0.done) return false;
+            i++;
+        }
+        while (true) {
+            var r = __chk(nextMethod.call(it));
+            if (r.done) return false;
+            var v = r.value;
+            if (v === searchElement || (v !== v && searchElement !== searchElement)) {
+                __closeIt(it);
+                return true;
+            }
+        }
+    });
+    __def('join', 1, function(sep) {
+        __reqObj(this);
+        var it = this;
+        var s;
+        try { s = (sep === undefined) ? ',' : String(sep); } catch (e) { __closeIt(it); throw e; }
+        var nextMethod = it.next;
+        if (typeof nextMethod !== 'function') {
+            throw new TypeError('next is not a function');
+        }
+        var parts = [];
+        while (true) {
+            var r = __chk(nextMethod.call(it));
+            if (r.done) break;
+            var v = r.value;
+            if (v === null || v === undefined) { parts.push(''); continue; }
+            try { parts.push(String(v)); } catch (e) { __closeIt(it); throw e; }
+        }
+        return parts.join(s);
+    });
+})();
+"#,
+                );
+
+                // M78.131f: ES2026 await-dictionary 提案的 Promise.allKeyed /
+                // allSettledKeyed（QuickJS 无此 API）。语义要点：
+                // - 对象字典输入：Reflect.ownKeys ∩ own enumerable（非枚举跳过）
+                // - 结果是 null-prototype 对象，key 顺序与输入一致
+                // - this 作为构造器 C：NewPromiseCapability(new C(executor))——C 的
+                //   构造器抛错则同步上抛；每个值走 C.resolve（callable 时）
+                // - remainingElementsCount 从 keys+1 起步、循环结束后再减 1——
+                //   thenable 同步调 resolve 不会提前 resolve（防 tamper 测试）
+                // - allKeyed 首个拒绝即拒绝；allSettledKeyed 记 {status,value/reason}
+                // - 方法用对象方法简写：有动态 this、无 [[Construct]]（isConstructor
+                //   必须为 false，new 调用抛 TypeError）
+                let _ = ctx.eval::<(), _>(
+                    r#"(function() {
+    if (typeof Promise !== 'function' || !Promise.prototype) return;
+    var __mkKeyed = function(settled) {
+        var impl = {
+            keyed(input) {
+                var C = (this === undefined || this === null) ? Promise : this;
+                if (typeof C !== 'function') throw new TypeError('C must be a constructor');
+                var resCap, rejCap;
+                var capability = new C(function(res, rej) { resCap = res; rejCap = rej; });
+                var rejected = false;
+                var fail = function(e) {
+                    if (!rejected) { rejected = true; rejCap(e); }
+                };
+                try {
+                    if (input === null || input === undefined) {
+                        throw new TypeError('input must be an object');
+                    }
+                    var obj = Object(input);
+                    var keys = [];
+                    var all = Reflect.ownKeys(obj);
+                    for (var k = 0; k < all.length; k++) {
+                        var d = Object.getOwnPropertyDescriptor(obj, all[k]);
+                        if (d && d.enumerable) keys.push(all[k]);
+                    }
+                    var result = Object.create(null);
+                    var remaining = keys.length + 1;
+                    var pr = (typeof C.resolve === 'function') ? C.resolve : function(v) {
+                        return new C(function(r2) { r2(v); });
+                    };
+                    for (var i = 0; i < keys.length; i++) {
+                        if (rejected) break;
+                        var key = keys[i];
+                        var value;
+                        try { value = obj[key]; } catch (e) { fail(e); break; }
+                        var next;
+                        try { next = pr.call(C, value); } catch (e) { fail(e); break; }
+                        if (next === null || (typeof next !== 'object' && typeof next !== 'function')) {
+                            fail(new TypeError('resolve returned a non-object'));
+                            break;
+                        }
+                        (function(key2) {
+                            var done2 = false;
+                            var settle = function(entry) {
+                                try {
+                                    Object.defineProperty(result, key2, {
+                                        value: entry, writable: true,
+                                        enumerable: true, configurable: true
+                                    });
+                                } catch (e3) {}
+                                remaining--;
+                                if (remaining === 0) resCap(result);
+                            };
+                            var onF = function(v) {
+                                if (done2) return;
+                                done2 = true;
+                                if (settled) {
+                                    settle({ status: 'fulfilled', value: v });
+                                } else {
+                                    settle(v);
+                                }
+                            };
+                            var onR = function(e) {
+                                if (done2) return;
+                                done2 = true;
+                                if (settled) {
+                                    settle({ status: 'rejected', reason: e });
+                                } else {
+                                    fail(e);
+                                }
+                            };
+                            var then;
+                            try { then = next.then; } catch (e) { onR(e); return; }
+                            if (typeof then !== 'function') { onF(next); return; }
+                            try { then.call(next, onF, onR); } catch (e) { onR(e); }
+                        })(key);
+                    }
+                    if (!rejected) {
+                        remaining--;
+                        if (remaining === 0) resCap(result);
+                    }
+                } catch (e) { fail(e); }
+                return capability;
+            }
+        };
+        return impl.keyed;
+    };
+    if (typeof Promise.allKeyed !== 'function') {
+        var ak = __mkKeyed(false);
+        Object.defineProperty(ak, 'length', { value: 1 });
+        Object.defineProperty(ak, 'name', { value: 'allKeyed' });
+        Object.defineProperty(Promise, 'allKeyed', {
+            value: ak, writable: true, enumerable: false, configurable: true
+        });
+    }
+    if (typeof Promise.allSettledKeyed !== 'function') {
+        var ask = __mkKeyed(true);
+        Object.defineProperty(ask, 'length', { value: 1 });
+        Object.defineProperty(ask, 'name', { value: 'allSettledKeyed' });
+        Object.defineProperty(Promise, 'allSettledKeyed', {
+            value: ask, writable: true, enumerable: false, configurable: true
+        });
+    }
+})();
+"#,
+                );
+
+                // M78.131g: ES2026 Error.isError + Error.prototype 不可写 + 错误构造器
+                // 静态原型链修复。
+                // - isError：新版 QuickJS 原生有（挂在原生 Error 上），但 M78.131b 用
+                //   Wrapped 替换了 globalThis.Error 后 own 性丢失（test262 prop-desc
+                //   断言 hasOwnProperty）→ 把原生函数（无则 JS 近似）提升为 own 属性。
+                // - Error.prototype 不可写：非 configurable 数据属性允许 writable
+                //   true→false 收紧（ES2026 实例 prototype 语义）。
+                // - 原型链：M78.131b 的 setPrototypeOf(Wrapped, Native) 让子类错误
+                //   构造器 __proto__ 断在原生 RangeError 上——重接到全局 Error。
+                let _ = ctx.eval::<(), _>(
+                    r#"(function() {
+    if (typeof Error !== 'function') return;
+    if (!Object.prototype.hasOwnProperty.call(Error, 'isError')) {
+        var nativeIsError = (typeof Error.isError === 'function') ? Error.isError : null;
+        var isErr = nativeIsError || function(arg) {
+            if (arg === null || arg === undefined ||
+                (typeof arg !== 'object' && typeof arg !== 'function')) {
+                return false;
+            }
+            try {
+                return Object.prototype.toString.call(arg) === '[object Error]';
+            } catch (e) { return false; }
+        };
+        try { Object.defineProperty(isErr, 'length', { value: 1 }); } catch (e) {}
+        try { Object.defineProperty(isErr, 'name', { value: 'isError' }); } catch (e) {}
+        try {
+            Object.defineProperty(Error, 'isError', {
+                value: isErr, writable: true, enumerable: false, configurable: true
+            });
+        } catch (e) {}
+    }
+    var __names = ['Error', 'EvalError', 'RangeError', 'ReferenceError',
+                   'SyntaxError', 'TypeError', 'URIError'];
+    for (var i = 0; i < __names.length; i++) {
+        var C = globalThis[__names[i]];
+        if (typeof C !== 'function') continue;
+        try { Object.defineProperty(C, 'prototype', { writable: false }); } catch (e) {}
+        if (__names[i] !== 'Error' && typeof globalThis.Error === 'function') {
+            try { Object.setPrototypeOf(C, globalThis.Error); } catch (e) {}
+        }
+    }
+})();
+"#,
+                );
+
                 Ok::<(), rquickjs::Error>(())
             })
             .ok();
