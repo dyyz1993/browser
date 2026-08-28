@@ -211,19 +211,36 @@ def t262_interpret(html_out):
 
 # ---------------------------------------------------------------- WPT
 COLLECTOR = (
+    # M78.43: setup + 采集器合并进**单个** <script>，且脚本执行完后**自删除**
+    # （getElementById + removeChild）。动机：注入的 script 是 head 的元素子
+    # 节点，会被 :nth-child 等结构敏感选择器数进去——dir-selector-
+    # querySelector.html 的 `:nth-child(4):dir(ltr)` 被注入 script 抢匹配
+    # （文档序在被测 div4 之前；Chrome 跑注入后页面同样失败，纯 harness 假象）。
+    # head 注入位置必须保留（setup({output:false}) 要赶在页面测试同步执行前
+    # 生效，M78.42b；移到 </body> 前会让 setup 撞上 testharness 的
+    # phase>=HAVE_RESULTS 早退变成 no-op），所以靠自删除把 head 结构还原。
+    # ⚠️ 引擎 quirk（探针实测）：顶层 try 语句 + IIFE 组合会让脚本对自身的
+    # getElementById 返回 null；把 try 收进 IIFE 内部则正常。因此整个脚本
+    # 只有一个顶层 IIFE，setup/rep/自删除全在函数体内。
+    "<script id=\"__wpt_collector__\">(function(){"
     # M78.42b: setup({output:false})——testharness 的 AssertRecord 记账链对
-    # JS 包装器元素过敏（构造抛→push 失败→set_assert_status(null) 报
-    # "cannot set property 'status' of undefined" 次生错误，掩盖断言真值）。
+    # JS 包装器元素过敏（format_value 构造抛→push 失败→set_assert_status(null)
+    # 报 "cannot set property 'status' of undefined" 次生错误，掩盖断言真值）。
     # asserts 记账是诊断功能，评分只需 tests 数组——关掉恢复断言真实性。
-    "<script>try{setup({output:false});}catch(e){}</script>"
-    "<script>(function(){function rep(ts,st){try{"
+    "try{setup({output:false});}catch(e){}"
+    "function rep(ts,st){try{"
     "var out=ts.map(function(t){return{name:String(t.name).slice(0,160),"
     "status:t.status,message:String(t.message||\"\").slice(0,200)}});"
     "var r=document.createElement(\"pre\");r.id=\"__wpt_results__\";"
     "r.textContent=\"WPTRESULTS:\"+JSON.stringify({tests:out,harness:st})+\":ENDWPT\";"
     "document.body.appendChild(r);}catch(e){}}"
     "if(typeof add_completion_callback===\"function\"){add_completion_callback(rep);}"
-    "else{rep([],4);}})();</script>"
+    "else{rep([],4);}"
+    # 自删除：还原注入前的 DOM 结构（rep 回调在 completion 时才建 <pre>，
+    # 页面测试期间无注入残留节点）
+    "var s=document.getElementById(\"__wpt_collector__\");"
+    "if(s&&s.parentNode){s.parentNode.removeChild(s);}"
+    "})();</script>"
 )
 
 

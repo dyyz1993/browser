@@ -439,6 +439,53 @@ impl QuickJsEngine {
                 // JS shim 的 __makeElement 需要返回一个带 __nodeId 的对象。
                 // QuickJS 版本让 JS shim 自己处理（返回 undefined，shim 有 fallback）。
 
+                // M78.131: Error.prototype.stack 访问器（error-stack proposal 语义）。
+                // QuickJS 只在实例上放 own data stack，原型无描述符——test262 的
+                // 32 个 stack getter/setter 测试在 getOwnPropertyDescriptor(...).get
+                // 上直接 TypeError。getter：非对象 this 抛 TypeError；非 Error 实例
+                // 返 undefined；实例有 own stack 返其值。setter：对象 this 上建
+                // configurable+writable 的 own data 属性。不动构造器（低风险）。
+                let _ = ctx.eval::<(), _>(
+                    r#"(function() {
+    if (typeof Error === 'undefined' || !Error.prototype) return;
+    if (Object.getOwnPropertyDescriptor(Error.prototype, 'stack')) return;
+    function __stackGet() {
+        if (this === null || this === undefined || typeof this !== 'object') {
+            throw new TypeError('Error.prototype.stack getter called on non-object');
+        }
+        if (!(this instanceof Error)) return undefined;
+        var own;
+        try { own = Object.getOwnPropertyDescriptor(this, 'stack'); } catch (e) { own = null; }
+        if (own && 'value' in own) return own.value;
+        return undefined;
+    }
+    function __stackSet(v) {
+        // set Error.prototype.stack 规范：E 非对象抛 TypeError；v 非 String 抛
+        // TypeError；SetterThatIgnoresPrototypeProperties 建 own 数据属性
+        //（{writable, enumerable: true, configurable: true}——WPT verifyProperty
+        // 断言 enumerable）。
+        if (this === null || this === undefined || typeof this !== 'object') {
+            throw new TypeError('Error.prototype.stack setter called on non-object');
+        }
+        if (typeof v !== 'string') {
+            throw new TypeError('Error.prototype.stack value must be a String');
+        }
+        try {
+            Object.defineProperty(this, 'stack', {
+                value: v, writable: true, enumerable: true, configurable: true
+            });
+        } catch (e) {}
+    }
+    try {
+        Object.defineProperty(Error.prototype, 'stack', {
+            get: __stackGet, set: __stackSet,
+            enumerable: true, configurable: true
+        });
+    } catch (e) {}
+})();
+"#,
+                );
+
                 Ok::<(), rquickjs::Error>(())
             })
             .ok();
