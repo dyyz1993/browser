@@ -449,39 +449,182 @@ impl QuickJsEngine {
                     r#"(function() {
     if (typeof Error === 'undefined' || !Error.prototype) return;
     if (Object.getOwnPropertyDescriptor(Error.prototype, 'stack')) return;
-    function __stackGet() {
-        if (this === null || this === undefined || typeof this !== 'object') {
-            throw new TypeError('Error.prototype.stack getter called on non-object');
-        }
-        if (!(this instanceof Error)) return undefined;
-        var own;
-        try { own = Object.getOwnPropertyDescriptor(this, 'stack'); } catch (e) { own = null; }
-        if (own && 'value' in own) return own.value;
-        return undefined;
+    // M78.131b: 构造器包装——globalThis 替换（内建构造器的 .prototype 不可写，
+    // 局部 function 声明会让访问器装到局部函数的新原型上、页面无感）。
+    // Reflect.construct(new.target) 保持 subclass 原型；每实例缓存 __stackInit
+    //（= [[ErrorData]] 标记：Object.create(Error.prototype) 的假 Error 没有）。
+    // M78.131c: 包装全部 7 个原生错误构造器（EvalError 等实例也要有标记——
+    // test262 nativeErrors 循环）；getter/setter 用对象方法简写（无 [[Construct]]，
+    // isConstructor 断言）。
+    var __names = ['Error', 'EvalError', 'RangeError', 'ReferenceError',
+                   'SyntaxError', 'TypeError', 'URIError'];
+    for (var i = 0; i < __names.length; i++) {
+        (function(nm) {
+            var Native = globalThis[nm];
+            if (typeof Native !== 'function') return;
+            var Wrapped = function(m, options) {
+                var nt = (typeof new.target !== 'undefined') ? new.target : Native;
+                var e = (options === undefined)
+                    ? Reflect.construct(Native, [m], nt)
+                    : Reflect.construct(Native, [m, options], nt);
+                try {
+                    Object.defineProperty(e, '__stackInit', { value: e.stack,
+                        writable: true, enumerable: false, configurable: false });
+                } catch (x) {}
+                return e;
+            };
+            try { Wrapped.prototype = Native.prototype; } catch (x) {}
+            try { Object.defineProperty(Native.prototype, 'constructor', {
+                value: Wrapped, writable: true, enumerable: false, configurable: true }); } catch (x) {}
+            try { Object.setPrototypeOf(Wrapped, Native); } catch (x) {}
+            try { Object.defineProperty(Wrapped, 'length', { value: 1 }); } catch (x) {}
+            try { Object.defineProperty(Wrapped, 'name', { value: nm }); } catch (x) {}
+            globalThis[nm] = Wrapped;
+        })(__names[i]);
     }
-    function __stackSet(v) {
-        // set Error.prototype.stack 规范：E 非对象抛 TypeError；v 非 String 抛
-        // TypeError；SetterThatIgnoresPrototypeProperties 建 own 数据属性
-        //（{writable, enumerable: true, configurable: true}——WPT verifyProperty
-        // 断言 enumerable）。
-        if (this === null || this === undefined || typeof this !== 'object') {
-            throw new TypeError('Error.prototype.stack setter called on non-object');
+    var __isObj = function(t) {
+        return t !== null && t !== undefined && (typeof t === 'object' || typeof t === 'function');
+    };
+    // 对象方法简写：提取后无 [[Construct]]（new 抛 TypeError——isConstructor=false）。
+    var __acc = {
+        get() {
+            if (!__isObj(this)) {
+                throw new TypeError('Error.prototype.stack getter called on non-object');
+            }
+            // [[ErrorData]] 近似：__stackInit 标记（包装构造器产的实例才有）。
+            if (this.__stackInit === undefined) return undefined;
+            var own;
+            try { own = Object.getOwnPropertyDescriptor(this, 'stack'); } catch (e) { own = null; }
+            if (own && 'value' in own) return own.value;
+            return this.__stackInit;
+        },
+        set(v) {
+            // set Error.prototype.stack 规范：E 非对象抛 TypeError；v 非 String 抛
+            // TypeError；SetterThatIgnoresPrototypeProperties 建 own 数据属性
+            //（{writable, enumerable: true, configurable: true}——verifyProperty 断言）。
+            if (!__isObj(this)) {
+                throw new TypeError('Error.prototype.stack setter called on non-object');
+            }
+            if (typeof v !== 'string') {
+                throw new TypeError('Error.prototype.stack value must be a String');
+            }
+            try {
+                Object.defineProperty(this, 'stack', {
+                    value: v, writable: true, enumerable: true, configurable: true
+                });
+            } catch (e) {}
         }
-        if (typeof v !== 'string') {
-            throw new TypeError('Error.prototype.stack value must be a String');
-        }
-        try {
-            Object.defineProperty(this, 'stack', {
-                value: v, writable: true, enumerable: true, configurable: true
-            });
-        } catch (e) {}
-    }
+    };
     try {
         Object.defineProperty(Error.prototype, 'stack', {
-            get: __stackGet, set: __stackSet,
+            get: __acc.get, set: __acc.set,
             enumerable: true, configurable: true
         });
     } catch (e) {}
+})();
+"#,
+                );
+
+                // M78.131d: Iterator sequencing（ES2026 chunking）——QuickJS 有
+                // map/take/zip 等但缺 chunks/windows/includes/join。纯 JS polyfill
+                //（test262 20 个 Iterator 失败全在这四个方法）。
+                let _ = ctx.eval::<(), _>(
+                    r#"(function() {
+    if (typeof Iterator !== 'function' || !Iterator.prototype) return;
+    var IP = Iterator.prototype;
+    function __toInt(v) {
+        var n = Number(v);
+        if (n !== n) n = 0;
+        return Math.trunc(n);
+    }
+    function __getIter(t) {
+        var m = t[Symbol.iterator];
+        if (typeof m !== 'function') {
+            throw new TypeError('not an iterator');
+        }
+        var it = m.call(t);
+        if (it === null || it === undefined || typeof it !== 'object') {
+            throw new TypeError('iterator is not an object');
+        }
+        return it;
+    }
+    function __def(name, len, fn) {
+        if (typeof IP[name] === 'function') return;
+        try {
+            Object.defineProperty(fn, 'length', { value: len });
+            Object.defineProperty(IP, name, {
+                value: fn, writable: true, enumerable: false, configurable: true
+            });
+        } catch (e) {}
+    }
+    __def('chunks', 1, function(size) {
+        var n = __toInt(size);
+        if (n <= 0) throw new RangeError('chunks size must be positive');
+        var it = __getIter(this);
+        var fin = false;
+        return {
+            next: function() {
+                if (fin) return { value: undefined, done: true };
+                var buf = [];
+                while (buf.length < n) {
+                    var r = it.next();
+                    if (r.done) { fin = true; break; }
+                    buf.push(r.value);
+                }
+                if (!buf.length) return { value: undefined, done: true };
+                return { value: buf, done: false };
+            },
+            [Symbol.iterator]: function() { return this; }
+        };
+    });
+    __def('windows', 2, function(size, undersized) {
+        var n = __toInt(size);
+        if (n <= 0) throw new RangeError('windows size must be positive');
+        var und = (undersized === undefined) ? 'only-full' : String(undersized);
+        var it = __getIter(this);
+        var buf = [];
+        var fin = false;
+        return {
+            next: function() {
+                if (fin) return { value: undefined, done: true };
+                while (buf.length < n) {
+                    var r = it.next();
+                    if (r.done) {
+                        if (buf.length > 0 && buf.length < n && und === 'allow-partial') {
+                            var out = buf; buf = [];
+                            return { value: out, done: false };
+                        }
+                        fin = true;
+                        return { value: undefined, done: true };
+                    }
+                    buf.push(r.value);
+                }
+                var w = buf;
+                buf = buf.slice(1);
+                return { value: w, done: false };
+            },
+            [Symbol.iterator]: function() { return this; }
+        };
+    });
+    __def('includes', 1, function(v) {
+        var it = __getIter(this);
+        while (true) {
+            var r = it.next();
+            if (r.done) return false;
+            if (r.value === v || (r.value !== r.value && v !== v)) return true;
+        }
+    });
+    __def('join', 1, function(sep) {
+        var s = (sep === undefined) ? ',' : String(sep);
+        var it = __getIter(this);
+        var parts = [];
+        while (true) {
+            var r = it.next();
+            if (r.done) break;
+            parts.push((r.value === null || r.value === undefined) ? '' : String(r.value));
+        }
+        return parts.join(s);
+    });
 })();
 "#,
                 );
