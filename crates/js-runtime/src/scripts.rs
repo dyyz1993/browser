@@ -2635,7 +2635,13 @@ if (typeof FormData !== 'function') {
 // document.createElementNS：存 namespaceURI + 创建元素（tagName 大写）
 document.createElementNS = function(ns, tag) {
     var el = document.createElement(tag);
-    if (el && typeof ns === 'string') { el.namespaceURI = ns; }
+    if (el && typeof ns === 'string') {
+        el.namespaceURI = ns;
+        // M78.125: 非 HTML 命名空间的元素 tagName 不大写（SVG 语义）。
+        if (ns !== 'http://www.w3.org/1999/xhtml') {
+            el.__origTagName = tag;
+        }
+    }
     return el;
 };
 
@@ -3296,7 +3302,10 @@ Element.prototype.cloneNode = function(deep) {
     return copy;
 };
 Object.defineProperty(Element.prototype, 'tagName', {
-    get: function() { return String(__getTag(this.__nodeId)).toUpperCase(); },
+    get: function() {
+        if (this.__origTagName) return this.__origTagName;
+        return String(__getTag(this.__nodeId)).toUpperCase();
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'textContent', {
@@ -4334,7 +4343,13 @@ document.createElement = function(tag) {
 };
 document.createElementNS = function(ns, tag) {
     var __el = document.createElement(tag);
-    if (ns && typeof ns === 'string') { try { el.__namespace = ns; } catch(e) {} }
+    if (ns && typeof ns === 'string') {
+        try { __el.namespaceURI = ns; } catch(e) {}
+        // M78.125: 非 HTML 命名空间的元素保留原始 tagName（不大写）。
+        if (ns !== 'http://www.w3.org/1999/xhtml') {
+            try { __el.__origTagName = String(tag); } catch(e) {}
+        }
+    }
     return __el;
 };
 document.createTextNode = function(text) {
