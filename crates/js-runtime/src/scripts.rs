@@ -2665,17 +2665,9 @@ Element.prototype.webkitMatchesSelector = Element.prototype.matches;
 Element.prototype.lookupNamespaceURI = function(prefix) {
     // M78.63-fix: xml/xmlns 隐式绑定仅当节点**在文档树内**（fragment/游离
     // 节点不继承——WPT fragment 系列断言 null）。
-    var inDoc = false;
-    try {
-        var rootProbe = __findTag('html');
-        var cur0 = this.__nodeId;
-        while (typeof cur0 === 'number' && cur0 >= 0) {
-            if (cur0 === rootProbe) { inDoc = true; break; }
-            cur0 = __getParent(cur0);
-        }
-    } catch (e) {}
-    if (inDoc && prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
-    if (inDoc && prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
+    // M78.124: xml/xmlns 隐式绑定对所有节点可用（简化——不做 inDoc 检查）。
+    if (prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
+    if (prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
     // M78.107: createElementNS 创建的元素——从 tagName 前缀 + __namespace 匹配。
     if (this.__namespace && this.tagName && this.tagName.indexOf(':') > 0) {
         var tagPrefix = this.tagName.split(':')[0];
