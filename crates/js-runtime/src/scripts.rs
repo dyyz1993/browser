@@ -3105,6 +3105,19 @@ window.sessionStorage = __makeStorageArea(__sessionStore, 'session');
 // URL 构造器（简化版——避免 QuickJS 不支持的复杂正则）
 window.URL = function(input, base) {
     input = String(input);
+    // M80.8: 孤立代理（ lone surrogate，如 \uD83D）→ U+FFFD 替换符
+    //（WHATWG URL 规范：无效代理按替换符 percent-encode——WPT url-encoding
+    // 期望 %EF%BF%BD；QuickJS String() 把孤立代理显示为 "U+d83d" 文本）。
+    input = input.replace(/[\uD800-\uDFFF]/g, function(ch) {
+        var c = ch.charCodeAt(0);
+        if (c >= 0xD800 && c <= 0xDBFF) {
+            // 高代理：看后一个是否低代理（合法对则保留）。
+            var i = arguments[3];
+            var next = input.charCodeAt(i + 1);
+            if (next >= 0xDC00 && next <= 0xDFFF) return ch;
+        }
+        return '\uFFFD';
+    });
     // M78.16: 纯 query / 纯 hash 的相对引用（WPT url-encoding）。
     function __encPart(str) {
         var out = '';
