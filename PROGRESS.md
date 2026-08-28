@@ -1642,9 +1642,44 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   数字（AN 是 bidi 弱类型）。
 - **教训（storage 虚惊）**：`--repeat` 显示的 `45/210` 是 WPT 部分，+73
   cdp-proxy 并入后落盘 118/283——读分必须看 save 行/agg，别看轮次行。
-- 终态 **0.783**（js 0.927 / html 0.754 / css 0.985 / webapi 0.797 /
-  storage 0.417）。**M78 全程 0.3334 → 0.783（+135%）**。REALITY PASS，
-  762 cargo tests 全绿，二进制 9.6MB，冷启动 364ms。
+
+**M78.131-132 —— 批 24 双代理并发 + 自由文件流水线（0.783→0.830）**：
+
+- **131a：Error.prototype.stack 访问器**（engine_quickjs.rs）——QuickJS 原型无
+  stack 描述符，test262 32 个测试在 `getOwnPropertyDescriptor(...).get` 上
+  TypeError。getter（非对象 this 抛 / 无 ErrorData 返 undefined / own 值）+
+  setter（v 非字符串抛 / enumerable own 属性）。
+- **131b-c：7 个原生错误构造器包装**——`globalThis.X` 替换（内建构造器
+  `.prototype` **不可写**，局部 function 声明无效）+ `Reflect.construct(
+  new.target)` 保子类原型 + `__stackInit` 标记当 [[ErrorData]]（假 Error
+  `Object.create(Error.prototype)` 无标记）+ getter/setter 对象方法简写
+  （无 [[Construct]]，isConstructor=false）。
+- **131d：Iterator sequencing polyfill**（ES2026 chunking）——QuickJS 有
+  map/take/zip 缺 chunks/windows/includes/join，纯 JS 补齐（滑窗
+  only-full/allow-partial、SameValueZero、join nullish 转空串）。
+  js 1563→**1588**。
+- **Agent B：COLLECTOR 自删除**——合并 setup+采集器为单 script 且页面测试期
+  自删除（head 注入的第 4 个子节点抢匹配 `:nth-child(4)` 的 harness 假象）。
+  **css_selector 68/68 满分**。
+- **Agent A：html_dom 长尾 12 簇**——346→**482/541（+136）**。最大簇
+  Document-createAttribute（+36，此前 setAttributeNS 缺失整文件 abort）；
+  lookupNamespaceURI 按 DOM Standard 重写 + createDocument；DOMStringMap
+  构造器移出 createHTMLDocument 函数体（误嵌导致顶层 removeAttribute 缺失）；
+  TreeWalker 整套重写（filter/REJECT 不进子树/previousSibling/currentNode
+  setter 校验）；HTMLCollection live Proxy 补齐（品牌检查/索引 set 拒绝/
+  ownKeys）；Range.toString 树序收集；innerText 读 style 代理动态状态
+  （display:none 排除）。
+- **132：storage 导航语义**——popstate 事件带 `.state`（firePopstate 参数
+  收了没用，history 系列 8 断言全灭的根因）；location.port getter；
+  hash setter safe 表加 %（双编码修复）；location own valueOf/
+  Symbol.toPrimitive（unforgeable）；assign/replace 空 host 抛 SyntaxError。
+  storage 118→**131/283**。
+- 终态 **0.830**（js 0.942 / html 0.891 / css **1.000** / webapi 0.797 /
+  storage 0.463）。**M78 全程 0.3334 → 0.830（+149%）**。REALITY PASS，
+  762 cargo tests 全绿。
+- 方法论沉淀：双代理并发按**文件所有权**分派（绝不两代理同文件）；
+  主线程做自由文件（engine_quickjs.rs 的 JS 补丁区）+ 预研探针清单；
+  改完必须重编 release（run_compat 用 release 二进制）。
 
 ## 文档维护规则
 

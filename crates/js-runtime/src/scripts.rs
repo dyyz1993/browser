@@ -1821,33 +1821,69 @@ function __parseLoc(href) {
         protocol: proto,
         host: host,
         hostname: hostNoPort,
+        port: host.split(':')[1] || '',
         pathname: pathname,
         search: searchPart,
         origin: proto + (host ? '//' + host : ''),
         reload: function() {},
-        replace: function(u) { __setLocHref(u); },
-        assign: function(u) { __setLocHref(u); },
+        replace: function(u) { __locNavigate(u, 'replace'); },
+        assign: function(u) { __locNavigate(u, 'assign'); },
         toString: function() { return __locHref; }
     };
+    // M78.132: unforgeable 接口语义——valueOf / Symbol.toPrimitive 是 location
+    // 的 own 不可配置属性（WPT Location valueOf/toPrimitive 断言 own 描述符；
+    // 顶层脚本 getOwnPropertyDescriptor(location,'valueOf') 此前返回 undefined）。
+    try {
+        Object.defineProperty(loc, 'valueOf', {
+            value: Object.prototype.valueOf,
+            writable: false, enumerable: false, configurable: false
+        });
+        Object.defineProperty(loc, Symbol.toPrimitive, {
+            value: undefined,
+            writable: false, enumerable: false, configurable: false
+        });
+    } catch (e) {}
     // M78: href/hash setter——赋值触发导航语义（相对解析 + hashchange）。
     Object.defineProperty(loc, 'href', {
         get: function() { return __locHref; },
         set: function(u) { __setLocHref(u); },
         enumerable: true, configurable: true
     });
+    // M78.132: location.assign/replace 的 URL 严格校验——解析失败抛 SyntaxError
+    // DOMException 且 location.href 不变（WPT "URL that fails to parse"：
+    // "http://:" 这类空 host 的 http(s) URL 必须抛）。__parseLoc 宽松接受
+    // host=':'，这里在导航前校验。
+    window.__locNavigate = function(u, mode) {
+        var s = String(u);
+        var m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(s);
+        var proto = m ? m[1].toLowerCase() : '';
+        if (proto === 'http' || proto === 'https') {
+            var rest = s.slice(m[0].length);
+            if (rest.indexOf('//') === 0) rest = rest.slice(2);
+            var h = rest.split(/[/?#]/)[0];
+            // 空 host 或裸 ':'（无 hostname）→ URL 解析失败。
+            var hostOnly = h.split(':')[0];
+            if (!hostOnly) {
+                throw new DOMException("Failed to parse URL from '" + s + "'", 'SyntaxError');
+            }
+        }
+        __setLocHref(s);
+    };
     Object.defineProperty(loc, 'hash', {
         get: function() { return hashPart; },
         set: function(h) {
             var v = String(h);
             if (v.charAt(0) !== '#') v = '#' + v;
             // M78.119: hash 值 URL 编码（空格等不兼容字符——WPT 断言）。
+            // M78.132: % 加入 safe 表——已编码值不得二次编码（'a%20b' 旧版
+            // 变 'a%2520b'；fragment percent-encode 集不含 %）。
             var encoded = '';
             for (var hi = 1; hi < v.length; hi++) {
                 var ch = v.charAt(hi);
                 var code = v.charCodeAt(hi);
                 var safe = (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
                     || (code >= 48 && code <= 57)
-                    || '-_.!~*\'()/?:@&=+$,#'.indexOf(ch) >= 0;
+                    || '-_.!~*\'()/?:@&=+$,#%'.indexOf(ch) >= 0;
                 encoded += safe ? ch : encodeURIComponent(ch);
             }
             __setLocHref(__locHref.split('#')[0] + '#' + encoded);
@@ -1889,8 +1925,15 @@ window.history = (function() {
     var cur = 0;
     var state = null;
     function firePopstate(st) {
+        // M78.132: popstate 事件必须带 .state（PopStateEvent 语义——WPT
+        // history_back/forward/go 系列 8 个断言 e.state === N 全军覆没的根因：
+        // 参数 st 收了没用）。
         setTimeout(function() {
-            try { window.dispatchEvent(new Event('popstate')); } catch (e) {}
+            try {
+                var ev = new Event('popstate');
+                ev.state = st;
+                window.dispatchEvent(ev);
+            } catch (e) {}
         }, 0);
     }
     function goEntry(idx) {
@@ -2694,24 +2737,39 @@ window.Node = window.Node || function Node() {};
     window.Node.prototype.nodeType = 0;
 })();
 Element.prototype.webkitMatchesSelector = Element.prototype.matches;
-// M78.46: lookupNamespaceURI / isDefaultNamespace——沿祖先链查 xmlns 属性
-//（xmlns=默认命名空间，xmlns:prefix=前缀绑定；无绑定返回 null）。
+// M78.46: lookupNamespaceURI / isDefaultNamespace——按 DOM Standard
+// locate-a-namespace 算法（M90 对齐 WPT Node-lookupNamespaceURI 全集）：
+// - Element：xml/xmlns 隐式绑定 → 自身 namespace+前缀匹配 → xmlns/xmlns:prefix
+//   属性沿父元素链向上查
+// - Document：委托 documentElement；DocumentType/DocumentFragment：恒 null
+// - Attr：委托 ownerElement；其他节点：委托父元素
 Element.prototype.lookupNamespaceURI = function(prefix) {
-    // M78.63-fix: xml/xmlns 隐式绑定仅当节点**在文档树内**（fragment/游离
-    // 节点不继承——WPT fragment 系列断言 null）。
-    // M78.124: xml/xmlns 隐式绑定对所有节点可用（简化——不做 inDoc 检查）。
+    if (prefix === '' || prefix === undefined) prefix = null;
+    // fragment/doctype 伪节点：无命名空间（xml/xmlns 隐式绑定仅元素可用）
+    if (this.__isFragment || this.__isDoctype) return null;
+    if (typeof this.__nodeId !== 'number') return null;
+    // 元素分支：隐式绑定 + 自身 namespace 前缀匹配（createElementNS 语义）
+    var ownNs = this.namespaceURI;
     if (prefix === 'xml') return 'http://www.w3.org/XML/1998/namespace';
     if (prefix === 'xmlns') return 'http://www.w3.org/2000/xmlns/';
-    // M78.107: createElementNS 创建的元素——从 tagName 前缀 + __namespace 匹配。
-    if (this.__namespace && this.tagName && this.tagName.indexOf(':') > 0) {
-        var tagPrefix = this.tagName.split(':')[0];
-        if (tagPrefix === prefix) return this.__namespace;
+    if (ownNs) {
+        var tn = String(this.tagName || '');
+        var ownPrefix = (tn.indexOf(':') > 0) ? tn.slice(0, tn.indexOf(':')) : null;
+        if (ownPrefix === prefix) return ownNs;
     }
+    // xmlns 属性链查询（自身 + 祖先元素；祖先元素的自有 namespace 前缀
+    // 匹配优先于 xmlns 属性——comment/text 委托父元素走完整元素算法）
     var cur = this;
     while (cur && typeof cur.__nodeId === 'number') {
+        var ansNs = cur.namespaceURI;
+        if (ansNs && cur.nodeType === 1 && !cur.__isFragment) {
+            var atn = String(cur.tagName || '');
+            var apx = (atn.indexOf(':') > 0) ? atn.slice(0, atn.indexOf(':')) : null;
+            if (apx === prefix) return ansNs;
+        }
         var attrs = (typeof __attrsOf === 'function') ? __attrsOf(cur.__nodeId) : '';
         var lines = (attrs || '').split(String.fromCharCode(10));
-        if (prefix === null || prefix === undefined || prefix === '') {
+        if (prefix === null) {
             for (var i = 0; i < lines.length; i++) {
                 var eq = lines[i].indexOf('=');
                 if (eq > 0 && lines[i].slice(0, eq) === 'xmlns') return lines[i].slice(eq + 1);
@@ -2729,11 +2787,9 @@ Element.prototype.lookupNamespaceURI = function(prefix) {
     return null;
 };
 Element.prototype.isDefaultNamespace = function(ns) {
-    // M78.63-fix: 统一语义 lookup(null)===ns 即 true——fragment 的
-    // lookup(null) 返回 null，故 isDefault(null) 为 true（修正 M78.54 的
-    // 错误近似恒 false）。
+    // DOM Standard：namespace 空串归一为 null；lookup(null) === ns 即 true。
+    if (ns === '' || ns === undefined) ns = null;
     var found = this.lookupNamespaceURI(null);
-    if (ns === null || ns === undefined) return found === null || found === undefined;
     return found === ns;
 };
 Element.prototype.lookupPrefix = function(ns) {
@@ -2802,6 +2858,26 @@ if (typeof window.DOMStringMap === 'undefined') {
     window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
     Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
 }
+// M91: translate 反射——枚举属性 yes/no；无属性沿父链继承，默认 true
+//（WPT translate-non-html-translation-mode：非 HTML 元素同样继承）。
+Object.defineProperty(Element.prototype, 'translate', {
+    get: function() {
+        var cur = this;
+        var guard = 0;
+        while (cur && guard++ < 64) {
+            var v = (typeof cur.__nodeId === 'number') ? __getAttr(cur.__nodeId, 'translate') : null;
+            if (v !== null && v !== undefined) {
+                var s = String(v).toLowerCase();
+                if (s === 'yes' || s === '' ) return true;
+                if (s === 'no') return false;
+            }
+            cur = cur.parentNode;
+        }
+        return true;
+    },
+    set: function(v) { __setAttr(this.__nodeId, 'translate', v ? 'yes' : 'no'); },
+    enumerable: true, configurable: true
+});
 // M78.32: 反射属性批量（lang/dir/className/title/hidden/tabIndex/draggable）。
 (function() {
     var refl = ['lang', 'dir', 'title', 'draggable'];
@@ -3081,6 +3157,19 @@ if (typeof Document === 'undefined') {
     Document.prototype.getElementById = function() { return null; };
     Document.prototype.querySelector = function() { return null; };
     Document.prototype.querySelectorAll = function() { return []; };
+    // M90: namespace 查询——documentElement 为 null 时 locate 返回 null
+    //（WPT Node-lookupNamespaceURI 的 new Document() 断言）。
+    Document.prototype.lookupNamespaceURI = function(prefix) {
+        if (prefix === '' || prefix === undefined) prefix = null;
+        var de = this.documentElement;
+        if (!de || typeof de.lookupNamespaceURI !== 'function') return null;
+        return de.lookupNamespaceURI(prefix);
+    };
+    Document.prototype.isDefaultNamespace = function(ns) {
+        if (ns === '' || ns === undefined) ns = null;
+        return this.lookupNamespaceURI(null) === ns;
+    };
+    Document.prototype.lookupPrefix = function() { return null; };
 }
 // M78.10: document.implementation —— dom/common.js L78 用
 // implementation.createHTMLDocument（Node-removeChild 系列也依赖）。
@@ -3096,13 +3185,61 @@ Object.defineProperty(document.doctype, 'nodeType', {
     enumerable: true, configurable: true
 });
 document.doctype.lookupNamespaceURI = function() { return null; };
-document.doctype.isDefaultNamespace = function() { return false; };
+// M90: doctype isDefaultNamespace——locate(null)=null，ns 归一后 null 即 true
+//（WPT 断言 isDefaultNamespace(null/'') === true）。
+document.doctype.isDefaultNamespace = function(ns) {
+    if (ns === '' || ns === undefined) ns = null;
+    return ns === null;
+};
 document.doctype.lookupPrefix = function() { return null; };
 document.doctype.name = 'html';
 document.doctype.publicId = '';
 document.doctype.systemId = '';
 document.implementation = {
     createHTMLDocument: function(title) { return document.createHTMLDocument(title); },
+    // M90: createDocument——XML 文档语义：documentElement.tagName 保留原始
+    // 大小写（__origTagName）；importNode 进 HTML 文档后 tagName 大写
+    //（cloneNode 不拷 __origTagName → tagName getter 自动 toUpperCase）。
+    createDocument: function(ns, qname, doctype) {
+        // M91: qname 为 null/'' → 无 documentElement（WPT
+        // Document-createAttribute 的 createDocument(null, null, null)）。
+        var root = null;
+        if (qname !== null && qname !== undefined && qname !== '') {
+            var name = String(qname);
+            root = document.createElement(name);
+            try { root.__origTagName = name; } catch (e) {}
+            if (typeof ns === 'string' && ns) { try { root.namespaceURI = ns; } catch (e2) {} }
+        }
+        var xdoc = {
+            nodeType: 9,
+            nodeName: '#document',
+            documentElement: root,
+            contentType: 'application/xml',
+            createElement: function(t) { return document.createElement(t); },
+            createElementNS: function(nsn, t) { return document.createElementNS(nsn, t); },
+            createTextNode: function(s) { return document.createTextNode(s); },
+            createComment: function(s) { return document.createComment(s); },
+            createAttribute: function(name2) { return __createAttributeNode(name2, false, xdoc); },
+            createDocumentFragment: function() { return document.createDocumentFragment(); },
+            importNode: function(n, deep) { return document.importNode(n, deep); },
+            addEventListener: function() {},
+            removeEventListener: function() {},
+            appendChild: function(c) { return c; },
+            querySelector: function() { return null; },
+            querySelectorAll: function() { return []; },
+            lookupNamespaceURI: function(prefix) {
+                if (prefix === '' || prefix === undefined) prefix = null;
+                return (prefix === null && typeof ns === 'string' && ns) ? ns : null;
+            },
+            isDefaultNamespace: function(nsn) {
+                if (nsn === '' || nsn === undefined) nsn = null;
+                return this.lookupNamespaceURI(null) === nsn;
+            },
+            lookupPrefix: function() { return null; }
+        };
+        try { root.ownerDocument = xdoc; } catch (e3) {}
+        return xdoc;
+    },
     hasFeature: function() { return true; }
 };
 
@@ -3431,7 +3568,7 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
 // M78.10: innerText —— getter 带布局感知近似（块级边界插 \n + display:none
 // 子树排除 + <br>→\n，纯 JS 遍历）；setter 按规范语义：文本 HTML 转义 +
 // 换行拆分插 <br> + 替换全部子节点。text-transform 类真排版需求超目标。
-function __innerTextWalk(nodeId, out) {
+function __innerTextWalk(nodeId, out, tf) {
     var cs = __children(nodeId);
     if (!cs) return;
     var ids = cs.split(',');
@@ -3447,18 +3584,31 @@ function __innerTextWalk(nodeId, out) {
             // （collect_text 只聚合子树不读自身）；__setText 写过的节点则相反
             // （td 空 gt 真）。双 fallback 覆盖两形态。
             var tv = (typeof __textData === 'function') ? __textData(id) : '';
-            out.push(tv || __getText(id));
+            var txt = tv || __getText(id);
+            // M91: text-transform:uppercase（祖先链任一命中即大写——WPT
+            // dynamic-getter 断言 innerText 应用 transform）。
+            if (tf) txt = String(txt).toUpperCase();
+            out.push(txt);
         } else if (tag === 'BR') {
             out.push('\n');
         } else if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') {
             // 不可见子树
         } else {
-            // display:none 子树排除（inline style 近似）
+            // display:none 子树排除：inline style 属性 + style 代理动态状态
+            //（el.style.display='none' 只写 styleObj 不写属性——M91 修正）。
             var st = __getAttr(id, 'style') || '';
-            if (/display\s*:\s*none/i.test(st)) continue;
+            var dynEl = (typeof __makeElement === 'function') ? __makeElement(id) : null;
+            var sp = (dynEl && dynEl.__styleProxy) ? dynEl.__styleProxy : null;
+            var disp = (sp && sp.__display) ? String(sp.__display) : '';
+            if (/display\s*:\s*none/i.test(st) || /^\s*none\s*;?$/i.test(disp)) continue;
+            // M91: text-transform：内联属性或动态 style 代理（watchProps 走
+            // '__'+prop 键，任意键走原名——style['text-transform'] 存在
+            // 'text-transform'；text-transform 继承，祖先链任一 uppercase 生效）。
+            var ttDyn = sp ? String(sp['__text-transform'] || sp['text-transform'] || sp['__textTransform'] || '') : '';
+            var ntf = tf || /uppercase/i.test(ttDyn) || /text-transform\s*:\s*uppercase/i.test(st);
             var isBlock = __blockTags[tag] === 1;
             if (isBlock) out.push('\n');
-            __innerTextWalk(id, out);
+            __innerTextWalk(id, out, ntf);
             if (isBlock) out.push('\n');
         }
     }
@@ -3468,8 +3618,20 @@ Object.defineProperty(Element.prototype, 'innerText', {
         // M78.50: SVG/MathML 元素不支持 innerText（返回空，WPT 断言）。
         var tn = (this.tagName || '').toLowerCase();
         if (tn === 'svg' || tn === 'math') return '';
+        // M91: text-transform 继承——先沿祖先链查（父元素 uppercase 作用于
+        // 本子树；WPT dynamic-getter「parent element」断言）。
+        var initTf = false;
+        var anc = this;
+        var ag = 0;
+        while (anc && ag++ < 64) {
+            var aw = (anc.__styleProxy) ? anc.__styleProxy : null;
+            var att = aw ? String(aw['__text-transform'] || aw['text-transform'] || aw['__textTransform'] || '') : '';
+            var ast = (typeof anc.__nodeId === 'number') ? (__getAttr(anc.__nodeId, 'style') || '') : '';
+            if (/uppercase/i.test(att) || /text-transform\s*:\s*uppercase/i.test(ast)) { initTf = true; break; }
+            anc = anc.parentNode;
+        }
         var out = [];
-        __innerTextWalk(this.__nodeId, out);
+        __innerTextWalk(this.__nodeId, out, initTf);
         var joined = out.join('');
         // 规范：仅去首尾换行；空格/制表符保留（"Leading whitespace preserved"）。
         return joined.replace(/^\n/, '').replace(/\n$/, '');
@@ -3530,6 +3692,19 @@ Object.defineProperty(Element.prototype, 'href', {
 });
 Object.defineProperty(Element.prototype, 'children', {
     get: function() {
+        // M91: children 返回活 HTMLCollection（live proxy——item coercion、
+        // named property、ownKeys 语义；WPT Element-children 断言）。
+        // 仅元素子节点（过滤 __text__/__comment__ 伪节点）。
+        var self = this;
+        if (typeof window.__makeLiveCollection === 'function') {
+            return window.__makeLiveCollection(function() {
+                var cs = __children(self.__nodeId);
+                if (!cs) return [];
+                return cs.split(',').filter(function(s) { return s; })
+                    .map(function(s) { return __makeElement(parseInt(s, 10)); })
+                    .filter(function(el) { return el && el.nodeType === 1; });
+            });
+        }
         var cs = __children(this.__nodeId);
         if (!cs) return [];
         return cs.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
@@ -3592,50 +3767,40 @@ DOMTokenList.prototype.replace = function(a, b) {
     return false;
 };
 DOMTokenList.prototype.toString = function() { return __getAttr(this.__nodeId, 'class') || ''; };
-DOMTokenList.prototype[Symbol.iterator] = function() {
-    var tokens = this.__tokens();
-    var idx = 0;
-    var iter = { next: function() { return (idx < tokens.length) ? { value: tokens[idx++], done: false } : { value: undefined, done: true }; } };
-    iter[Symbol.iterator] = function() { return iter; };
-    return iter;
-};
-DOMTokenList.prototype.forEach = function(fn, thisArg) {
-    var tokens = this.__tokens();
-    for (var i = 0; i < tokens.length; i++) fn.call(thisArg || undefined, tokens[i], String(i), this);
-};
-// M78.44: entries/keys/values 返回真 iterator（带 Symbol.iterator 自引用，
-// 可被 for-of/展开/Array.from 消费——旧普通对象报 not iterable）。
-DOMTokenList.prototype.__makeIter = function(fn) {
-    var iter = { next: fn };
-    iter[Symbol.iterator] = function() { return iter; };
-    return iter;
-};
-DOMTokenList.prototype.entries = function() {
-    var tokens = this.__tokens(); var idx = 0;
-    return this.__makeIter(function() {
-        return (idx < tokens.length) ? { value: [String(idx), tokens[idx++]], done: false } : { value: undefined, done: true };
-    });
-};
-DOMTokenList.prototype.keys = function() {
-    var tokens = this.__tokens(); var idx = 0;
-    return this.__makeIter(function() {
-        return (idx < tokens.length) ? { value: String(idx++), done: false } : { value: undefined, done: true };
-    });
-};
-DOMTokenList.prototype.values = function() {
-    return this[Symbol.iterator]();
-};
 Object.defineProperty(DOMTokenList.prototype, 'length', { get: function() { return this.__tokens().length; }, enumerable: true, configurable: true });
 Object.defineProperty(DOMTokenList.prototype, 'value', {
     get: function() { return __getAttr(this.__nodeId, 'class') || ''; },
     set: function(v) { __setAttr(this.__nodeId, 'class', String(v)); },
     enumerable: true, configurable: true
 });
+// M91: DOMTokenList 继承 Array.prototype（WPT DOMTokenList-iteration 断言
+// keys/values/entries/forEach/Symbol.iterator 与 Array.prototype **同一函数**）。
+// 旧 own 实现（String 索引迭代）删除，索引访问交给 classList 返回的 Proxy。
+Object.setPrototypeOf(DOMTokenList.prototype, Array.prototype);
 window.DOMTokenList = DOMTokenList;
 Object.defineProperty(Element.prototype, 'classList', {
     get: function() {
         // 惰性缓存：同一元素的 classList 必须身份相等（===）。
-        if (!this.__classList) this.__classList = new DOMTokenList(this.__nodeId);
+        // M91: Proxy 包装——数字索引 + length 直读 token（Array 迭代器
+        // 经继承的 Array.prototype 方法操作）。
+        if (!this.__classList) {
+            var inst = new DOMTokenList(this.__nodeId);
+            this.__classList = new Proxy(inst, {
+                get: function(t, k) {
+                    if (typeof k === 'string' && /^\d+$/.test(k)) {
+                        var i = +k;
+                        var toks = t.__tokens();
+                        return (i >= 0 && i < toks.length) ? toks[i] : undefined;
+                    }
+                    if (k === 'length') return t.__tokens().length;
+                    return Reflect.get(t, k);
+                },
+                has: function(t, k) {
+                    if (typeof k === 'string' && /^\d+$/.test(k)) return +k < t.__tokens().length;
+                    return Reflect.has(t, k);
+                }
+            });
+        }
         return this.__classList;
     },
     enumerable: true, configurable: true
@@ -3658,12 +3823,34 @@ Object.defineProperty(Element.prototype, 'lastChild', {
     },
     enumerable: true, configurable: true
 });
+// M91: nextSibling/previousSibling 真实现（旧恒 null——WPT TreeWalker 用
+// subTree.previousSibling 定位，SPA 也常用）。
 Object.defineProperty(Element.prototype, 'nextSibling', {
-    get: function() { return null; },
+    get: function() {
+        var pid = __getParent(this.__nodeId);
+        if (typeof pid !== 'number' || pid < 0) return null;
+        var ids = (__children(pid) || '').split(',').filter(function(s) { return s; });
+        for (var i = 0; i < ids.length; i++) {
+            if (parseInt(ids[i], 10) === this.__nodeId) {
+                return (i + 1 < ids.length) ? __makeElement(parseInt(ids[i + 1], 10)) : null;
+            }
+        }
+        return null;
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'previousSibling', {
-    get: function() { return null; },
+    get: function() {
+        var pid = __getParent(this.__nodeId);
+        if (typeof pid !== 'number' || pid < 0) return null;
+        var ids = (__children(pid) || '').split(',').filter(function(s) { return s; });
+        for (var i = 0; i < ids.length; i++) {
+            if (parseInt(ids[i], 10) === this.__nodeId) {
+                return (i > 0) ? __makeElement(parseInt(ids[i - 1], 10)) : null;
+            }
+        }
+        return null;
+    },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'parentNode', {
@@ -3771,15 +3958,91 @@ Object.defineProperty(Element.prototype, 'style', {
     },
     enumerable: true, configurable: true
 });
+// M91: 游离子树查询兜底——createElement 创建的 detached 子树不在文档，
+// __qs/__qsAll 查不到（WPT traversal-skip-most 在 detached 根上
+// querySelectorAll('#B3')）。JS 侧 DFS 子树 + 简单复合选择器匹配。
+function __subtreeSelectIds(rootId, sel) {
+    var out = [];
+    var parts = String(sel).split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+    function compoundMatch(id, q) {
+        var tagM = q.match(/^[a-zA-Z][a-zA-Z0-9-]*/);
+        var idsM = q.match(/#[a-zA-Z0-9_-]+/g) || [];
+        var clsM = q.match(/\.[a-zA-Z0-9_-]+/g) || [];
+        if (tagM) {
+            var tg = String(__getTag(id)).toLowerCase();
+            if (tg !== '__text__' && tg !== '__comment__' && tg !== tagM[0].toLowerCase()) return false;
+        }
+        for (var i = 0; i < idsM.length; i++) {
+            if (__getAttr(id, 'id') !== idsM[i].slice(1)) return false;
+        }
+        if (clsM.length) {
+            var cls = (__getAttr(id, 'class') || '').split(/\s+/);
+            for (var j = 0; j < clsM.length; j++) {
+                if (cls.indexOf(clsM[j].slice(1)) < 0) return false;
+            }
+        }
+        return true;
+    }
+    function matched(id) {
+        for (var i = 0; i < parts.length; i++) {
+            if (compoundMatch(id, parts[i])) return true;
+        }
+        return false;
+    }
+    (function dfs(id) {
+        var tg = String(__getTag(id));
+        if (tg !== '__text__' && tg !== '__comment__' && matched(id)) out.push(id);
+        var cs = (__children(id) || '').split(',').filter(function(s) { return s; });
+        for (var i = 0; i < cs.length; i++) dfs(parseInt(cs[i], 10));
+    })(rootId);
+    return out;
+}
+function __isDetached(id) {
+    var p = __getParent(id);
+    return !(typeof p === 'number' && p >= 0);
+}
+// M91: 子树归属判定（querySelector scoping root 语义——结果必须是 this
+// 的后代，不含 this 自身）。
+function __inSubtreeOf(rootId, id) {
+    var cur = id;
+    var guard = 0;
+    while (cur >= 0 && guard++ < 512) {
+        cur = __getParent(cur);
+        if (typeof cur !== 'number' || cur < 0) return false;
+        if (cur === rootId) return true;
+    }
+    return false;
+}
 Element.prototype.querySelector = function(sel) {
-    // 简化：全局 qs（爬虫够用）
-    var id = __qs(String(sel));
-    return (id >= 0) ? __makeElement(id) : null;
+    // M91: detached 子树 / DocumentFragment 走 JS 子树搜索（fragment 的
+    // querySelector 语义 = 仅搜自身子树；文档内元素仍走 __qs 全局查询）。
+    if (typeof this.__nodeId === 'number' && (this.__isFragment || __isDetached(this.__nodeId))) {
+        var r = __subtreeSelectIds(this.__nodeId, String(sel));
+        return r.length ? __makeElement(r[0]) : null;
+    }
+    // M91: scoping root——用 __qsAll 取树序全量命中，返回**子树内**首个
+    //（全局首个可能在子树外——WPT svg-template-querySelector 嵌套用例）。
+    var ids = __qsAll(String(sel));
+    if (!ids) return null;
+    var arr = ids.split(',').filter(function(s) { return s; });
+    for (var i = 0; i < arr.length; i++) {
+        var id0 = parseInt(arr[i], 10);
+        if (__inSubtreeOf(this.__nodeId, id0)) return __makeElement(id0);
+    }
+    return null;
 };
 Element.prototype.querySelectorAll = function(sel) {
+    if (typeof this.__nodeId === 'number' && (this.__isFragment || __isDetached(this.__nodeId))) {
+        return __subtreeSelectIds(this.__nodeId, String(sel)).map(function(x) { return __makeElement(x); });
+    }
     var ids = __qsAll(String(sel));
     if (!ids) return [];
-    return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
+    // M91: scoping root 过滤。
+    var root = this.__nodeId;
+    return ids.split(',').filter(function(s) { return s; })
+        .map(function(s) { return parseInt(s, 10); })
+        .filter(function(id) { return __inSubtreeOf(root, id); })
+        .map(function(id) { return __makeElement(id); });
 };
 Element.prototype.contains = function(node) {
     // M78.31: 子树包含判定（自含或后代）。沿 parent 链上溯。
@@ -3854,7 +4117,13 @@ Object.defineProperty(Element.prototype, 'childNodes', {
 Object.defineProperty(Element.prototype, 'content', {
     get: function() {
         if (this.tagName === 'TEMPLATE') {
-            return document.createDocumentFragment();
+            // M91: content 以模板自身子树呈现——新建独立包装（不污染 elCache
+            // 缓存的模板包装/fragment 包装；__isFragment 使 nodeType=11）。
+            // querySelector 走子树搜索分支，能查到解析出的 <svg> 等内容节点。
+            var f = new Element(this.__nodeId);
+            f.__isFragment = true;
+            f.__isTemplateContent = true;
+            return f;
         }
         return undefined;
     },
@@ -3906,7 +4175,14 @@ Element.prototype.dispatchEvent = function(ev) {
                 var isc = !!caps[k];
                 if (filter === 1 ? !isc : isc) continue;
             }
-            try { snap[k].call(target, ev); } catch (e) {}
+            try { snap[k].call(target, ev); } catch (e) {
+                // M91: listener 抛错 → window.onerror（字符串 message），
+                // 后续 listener 照常执行（WPT Event-dispatch-throwing）。
+                try {
+                    var msg0 = (e && e.message !== undefined) ? String(e.message) : String(e);
+                    if (typeof window.onerror === 'function') window.onerror(msg0, '', 0, 0, e);
+                } catch (e2) {}
+            }
             if (ev.__immediate) break;
         }
     }
@@ -4036,6 +4312,16 @@ Element.prototype.insertAdjacentText = function(pos, text) {
     }
     if (!text) return;
     var self = this;
+    // M91: beforebegin/afterend 无父元素或父为 document 节点（documentElement，
+    // arena root id 0 的 tag 为空串）→ HierarchyRequestError（WPT
+    // Element-insertAdjacentText 断言）。必须在 try 外抛——下方 catch 会吞异常。
+    if ((pos === 'beforebegin' || pos === 'afterend')) {
+        var pidChk = __getParent(self.__nodeId);
+        var pidIsDoc = (typeof pidChk === 'number' && pidChk >= 0 && String(__getTag(pidChk) || '') === '');
+        if (!(typeof pidChk === 'number' && pidChk >= 0) || pidIsDoc) {
+            throw new DOMException("the node has no parent", 'HierarchyRequestError');
+        }
+    }
     function makeTextNode() { return document.createTextNode(text); }
     function nextSiblingId(pid) {
         var ids = (__children(pid) || '').split(',');
@@ -4087,25 +4373,48 @@ Element.prototype.scrollIntoView = function() {};
 Object.defineProperty(Element.prototype, 'dataset', {
     get: function() {
         var self = this;
-        var cache = {};
+        // M91: dataset 仅 HTML/SVG/MathML 元素有——createElementNS 随机
+        // 命名空间返回 undefined（WPT dataset.html 断言）。
+        var ownNs = this.namespaceURI;
+        if (ownNs && ownNs !== 'http://www.w3.org/1999/xhtml' &&
+            ownNs !== 'http://www.w3.org/2000/svg' &&
+            ownNs !== 'http://www.w3.org/1998/Math/MathML') {
+            return undefined;
+        }
+        // M91: 原型挂 DOMStringMap.prototype（instanceof 断言）。
+        var proto = (typeof DOMStringMap !== 'undefined' && DOMStringMap.prototype)
+            ? DOMStringMap.prototype : Object.prototype;
+        var cache = Object.create(proto);
         // 驼峰 ↔ kebab：fooBar ↔ data-foo-bar
         function toKebab(k) { return 'data-' + String(k).replace(/([A-Z])/g, function(_, c) { return '-' + c.toLowerCase(); }); }
         function toCamel(k) { return k.slice(5).replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); }); }
+        // M91: supported property name——含「-小写字母」的名字（如 '-foo'）
+        // 不是 supported name：get→undefined、has→false、delete no-op
+        //（set 已抛 SyntaxError）。WPT dataset-get/delete 断言。
+        function isSupported(k) {
+            var s = String(k);
+            for (var i = 0; i < s.length - 1; i++) {
+                if (s.charAt(i) === '-') {
+                    var nx = s.charAt(i + 1);
+                    if (nx >= 'a' && nx <= 'z') return false;
+                }
+            }
+            return true;
+        }
         try {
             return new Proxy(cache, {
                 get: function(t, k) {
-                    if (k in t) return t[k];
-                    if (typeof k !== 'string') return undefined;
+                    if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t, k)) return t[k];
+                    if (typeof k !== 'string' || !isSupported(k)) return undefined;
                     var v = __getAttr(self.__nodeId, toKebab(k));
                     return (v === null || v === undefined) ? undefined : v;
                 },
                 deleteProperty: function(t, k) {
-                    if (typeof k === 'string') {
+                    if (typeof k === 'string' && isSupported(k)) {
                         try { __removeAttr(self.__nodeId, toKebab(k)); } catch (e) {}
-                        delete t[k];
-                        return true;
                     }
-                    return false;
+                    delete t[k];
+                    return true;
                 },
                 // M78.42: ownKeys——枚举 data-* 属性（驼峰，属性树顺序）。
                 ownKeys: function(t) {
@@ -4123,7 +4432,8 @@ Object.defineProperty(Element.prototype, 'dataset', {
                     return keys;
                 },
                 getOwnPropertyDescriptor: function(t, k) {
-                    if (typeof k === 'string' && k in t) return Object.getOwnPropertyDescriptor(t, k);
+                    if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t, k)) return Object.getOwnPropertyDescriptor(t, k);
+                    if (typeof k !== 'string' || !isSupported(k)) return undefined;
                     var v = __getAttr(self.__nodeId, toKebab(k));
                     if (v !== null && v !== undefined) {
                         return { value: v, writable: true, enumerable: true, configurable: true };
@@ -4132,13 +4442,40 @@ Object.defineProperty(Element.prototype, 'dataset', {
                 },
                 has: function(t, k) {
                     if (typeof k !== 'string') return false;
-                    if (k in t) return true;
+                    if (Object.prototype.hasOwnProperty.call(t, k)) return true;
+                    if (!isSupported(k)) return false;
                     var v = __getAttr(self.__nodeId, toKebab(k));
                     return v !== null && v !== undefined;
                 },
                 set: function(t, k, v) {
                     if (typeof k === 'string') {
-                        __setAttr(self.__nodeId, toKebab(k), String(v));
+                        // M91: DOMStringMap setter 校验（HTML Standard 顺序）：
+                        // 1) name 含 "-小写字母" → SyntaxError（'-foo' 抛、'-' 与
+                        //    '-Foo' 不抛）；2) 驼峰转 kebab；3) data- 前缀；
+                        // 4) 非法 attribute local name → InvalidCharacterError
+                        //（'foo ' 空格抛）。
+                        var dname = String(k);
+                        for (var si = 0; si < dname.length - 1; si++) {
+                            if (dname.charAt(si) === '-') {
+                                var nx = dname.charAt(si + 1);
+                                if (nx >= 'a' && nx <= 'z') {
+                                    throw new DOMException('the name contains a hyphen followed by a lowercase letter', 'SyntaxError');
+                                }
+                            }
+                        }
+                        var attrName = toKebab(dname);
+                        var bad = attrName.length === 0;
+                        if (!bad) {
+                            if (attrName.charCodeAt(0) === 0) bad = true;
+                            for (var vi = 0; vi < attrName.length; vi++) {
+                                var cc = attrName.charAt(vi);
+                                if (cc === ' ' || cc === '\t' || cc === '\n' || cc === '\r' || cc === '\f' || cc === '/' || cc === '=' || cc === '>') { bad = true; break; }
+                            }
+                        }
+                        if (bad) {
+                            throw new DOMException('the name is not a valid attribute local name', 'InvalidCharacterError');
+                        }
+                        __setAttr(self.__nodeId, attrName, String(v));
                         t[k] = String(v);
                     }
                     return true;
@@ -4166,15 +4503,62 @@ Object.defineProperty(Element.prototype, 'outerText', {
         var lg = (typeof this.localName === 'string') ? this.localName : String(__getTag(this.__nodeId)).toLowerCase();
         var nsS = String(this.namespaceURI || '');
         if (lg === 'svg' || lg === 'math' || nsS.indexOf('svg') >= 0 || nsS.indexOf('MathML') >= 0) return;
-        var holder = document.createElement('span');
-        holder.innerText = v;
-        var kids = (__children(holder.__nodeId) || '').split(',').filter(function(x) { return x; });
-        var ref = this.__nodeId;
-        for (var i2 = 0; i2 < kids.length; i2++) {
-            __insertBefore(pid, parseInt(kids[i2], 10), ref);
+        // M91: 按规范重写——换行→<br>，替换自身；只与**相邻**前后 Text 合并
+        //（不做全规范化），空串也创建空 Text 节点（WPT outertext-setter）。
+        var text = (v === undefined) ? 'undefined' : String(v == null ? '' : v);
+        var parts = text.split(/\r\n|\r|\n/);
+        var newIds = [];
+        for (var pi = 0; pi < parts.length; pi++) {
+            if (pi > 0) {
+                var br = document.createElement('br');
+                if (br && typeof br.__nodeId === 'number') newIds.push(br.__nodeId);
+            }
+            // M91: 空串整体（parts=['']）也创建空 Text 节点（规范语义）；
+            // 多段时跳过空段（由 <br> 承担分隔）。
+            if (parts[pi] !== '' || parts.length === 1) {
+                var tx = document.createTextNode(parts[pi]);
+                if (tx && typeof tx.__nodeId === 'number') newIds.push(tx.__nodeId);
+            }
         }
-        __removeChild(pid, this.__nodeId);
-        __normalizeParent(pid);    },
+        var ref = this.__nodeId;
+        for (var i2 = 0; i2 < newIds.length; i2++) {
+            __insertBefore(pid, newIds[i2], ref);
+        }
+        __removeChild(pid, ref);
+        function isTextId(id) { var t = String(__getTag(id)); return t === '__text__' || (!t && id !== 0); }
+        function textOf(id) { return String((__textData(id) || __getText(id) || '')); }
+        function sibOfId(id, delta) {
+            var ids = (__children(pid) || '').split(',').filter(function(s) { return s; });
+            for (var i = 0; i < ids.length; i++) {
+                if (parseInt(ids[i], 10) === id) {
+                    var j = i + delta;
+                    return (j >= 0 && j < ids.length) ? parseInt(ids[j], 10) : -1;
+                }
+            }
+            return -1;
+        }
+        var firstText = -1, lastText = -1;
+        for (var k2 = 0; k2 < newIds.length; k2++) {
+            if (isTextId(newIds[k2])) {
+                if (firstText < 0) firstText = newIds[k2];
+                lastText = newIds[k2];
+            }
+        }
+        if (firstText >= 0) {
+            var prevId = sibOfId(firstText, -1);
+            if (prevId >= 0 && isTextId(prevId)) {
+                __setText(firstText, textOf(prevId) + textOf(firstText));
+                __removeChild(pid, prevId);
+            }
+        }
+        if (lastText >= 0) {
+            var nextId = sibOfId(lastText, 1);
+            if (nextId >= 0 && isTextId(nextId)) {
+                __setText(lastText, textOf(lastText) + textOf(nextId));
+                __removeChild(pid, nextId);
+            }
+        }
+    },
     enumerable: true, configurable: true
 });
 // M78.128: localName getter——元素小写（HTML ns）、SVG/MathML 原始大小写
@@ -4461,6 +4845,11 @@ document.createElementNS = function(ns, tag) {
         if (ns !== 'http://www.w3.org/1999/xhtml') {
             try { __el.__origTagName = String(tag); } catch(e) {}
         }
+    } else if (ns === '') {
+        // M91: createElementNS('', tag)——空串命名空间也是显式非 HTML ns，
+        // 记录空串（named property 的 name 属性、dataset 等据此排除）。
+        try { __el.namespaceURI = ''; } catch(e) {}
+        try { __el.__origTagName = String(tag); } catch(e) {}
     }
     return __el;
 };
@@ -4502,22 +4891,79 @@ Object.defineProperty(document, 'documentURI', {
 });
 // M78.61: Attr 节点（createAttribute 此前完全缺失——baseURI 页因 not a
 // function 中断）。getAttributeNode 一并补。
+// M90: setAttributeNS/getAttributeNS/removeAttributeNS——本 DOM 无多命名空间
+// 属性表，按 qualified name 降级到普通 attribute API（WPT
+// Node-lookupNamespaceURI 依赖 setAttributeNS(XMLNS_NS, 'xmlns', v) 设置
+// xmlns 绑定）。
+Element.prototype.setAttributeNS = function(ns, qname, value) {
+    return this.setAttribute(String(qname), value);
+};
+Element.prototype.getAttributeNS = function(ns, localName) { return this.getAttribute(String(localName)); };
+Element.prototype.removeAttributeNS = function(ns, localName) { this.removeAttribute(String(localName)); };
+// M91: Attr 节点工厂——value/nodeValue/textContent/localName/prefix/name/
+// nodeName/specified/ownerElement 全套（WPT Document-createAttribute
+// attr_is 断言）；HTML 文档小写化，非法名（空串/空白//=/>）抛
+// InvalidCharacterError。
+function __createAttributeNode(rawName, isHTMLDoc, ownerDoc) {
+    var n0 = String(rawName);
+    var bad = n0 === '' || n0.charCodeAt(0) === 0;
+    if (!bad) {
+        for (var ci = 0; ci < n0.length; ci++) {
+            var cc = n0.charAt(ci);
+            if (cc === ' ' || cc === '\t' || cc === '\n' || cc === '\r' || cc === '\f' || cc === '/' || cc === '=' || cc === '>') { bad = true; break; }
+        }
+    }
+    if (bad) throw new DOMException('invalid attribute name', 'InvalidCharacterError');
+    var lname = isHTMLDoc ? n0.toLowerCase() : n0;
+    return { nodeType: 2, name: lname, nodeName: lname, localName: lname, prefix: null,
+             namespaceURI: null, value: '', nodeValue: '', textContent: '',
+             specified: true, ownerElement: null, ownerDocument: ownerDoc,
+             lookupNamespaceURI: function(prefix) {
+                 if (prefix === '' || prefix === undefined) prefix = null;
+                 var el = this.ownerElement;
+                 if (!el || typeof el.lookupNamespaceURI !== 'function') return null;
+                 return el.lookupNamespaceURI(prefix);
+             },
+             isDefaultNamespace: function(nsn) {
+                 if (nsn === '' || nsn === undefined) nsn = null;
+                 return this.lookupNamespaceURI(null) === nsn;
+             },
+             lookupPrefix: function() { return null; },
+             get baseURI() { return (ownerDoc && ownerDoc.URL) || ''; } };
+}
 document.createAttribute = function(name) {
-    return { name: String(name), value: '', specified: false, nodeType: 2,
-             ownerDocument: document,
-             get baseURI() { return document.URL || ''; } };
+    return __createAttributeNode(name, true, document);
 };
 Element.prototype.getAttributeNode = function(name) {
     var v = this.getAttribute(name);
     if (v === null || v === undefined) return null;
     return { name: String(name), value: v, specified: true, nodeType: 2,
-             ownerDocument: document,
+             ownerDocument: document, ownerElement: this,
              get baseURI() { return document.URL || ''; } };
 };
 Element.prototype.setAttributeNode = function(attr) {
     if (attr && attr.name) this.setAttribute(attr.name, attr.value || '');
+    if (attr) { try { attr.ownerElement = this; } catch (e) {} }
     return attr || null;
 };
+// M90: 主 document 的 namespace 查询——null 前缀返回 XHTML 命名空间
+//（html 元素自身 namespace 的近似），其余前缀沿 documentElement 属性链查。
+document.lookupNamespaceURI = function(prefix) {
+    if (prefix === '' || prefix === undefined) prefix = null;
+    if (prefix === null) return 'http://www.w3.org/1999/xhtml';
+    var de = document.documentElement;
+    if (!de || typeof de.lookupNamespaceURI !== 'function') return null;
+    return de.lookupNamespaceURI(prefix);
+};
+document.isDefaultNamespace = function(ns) {
+    if (ns === '' || ns === undefined) ns = null;
+    return this.lookupNamespaceURI(null) === ns;
+};
+document.lookupPrefix = function() { return null; };
+// M90: document.appendChild——规范上把节点挂到 document 节点下；本实现无
+// 独立 document 节点，no-op 返回 child（WPT 断言挂到 document 的 comment
+// 无命名空间继承即可）。
+document.appendChild = function(child) { return child; };
 // M78.120: Element.querySelector/querySelectorAll 的 :scope 处理——
 // 替换为 this 自身的 id 选择器（如果无 id 则用临时 UUID）。
 (function() {
@@ -4539,13 +4985,32 @@ Element.prototype.setAttributeNode = function(attr) {
 document.querySelector = function(sel) {
     __qsThrowIfInvalid(sel);
     var nodeId = __qs(String(sel));
+    // M91: document 级查询过滤非文档内节点（removeChild 残留等）。
+    if (nodeId >= 0 && !__inDocOf(nodeId)) return null;
     return (nodeId >= 0) ? __makeElement(nodeId) : null;
 };
+// M91: 在文档内的判定——游离子树（createElement）与已 removeChild 的节点
+// 仍留在 arena（Element 数据不清理），全局 __qsAll 会误命中；document 级
+// 查询按「祖先链顶到 arena 根（id 0）」过滤。
+function __inDocOf(id) {
+    var cur = id;
+    var guard = 0;
+    while (cur >= 0 && guard++ < 512) {
+        var p = __getParent(cur);
+        if (typeof p !== 'number' || p < 0) return false;
+        if (p === 0) return true;
+        cur = p;
+    }
+    return false;
+}
 document.querySelectorAll = function(sel) {
     __qsThrowIfInvalid(sel);
     var ids = __qsAll(String(sel));
     if (!ids) return [];
-    return ids.split(',').filter(function(s) { return s; }).map(function(s) { return __makeElement(parseInt(s, 10)); });
+    return ids.split(',').filter(function(s) { return s; })
+        .map(function(s) { return parseInt(s, 10); })
+        .filter(function(id) { return __inDocOf(id); })
+        .map(function(id) { return __makeElement(id); });
 };
 document.getElementsByTagName = function(tag) {
     return document.querySelectorAll(tag);
@@ -4558,6 +5023,7 @@ document.getElementsByClassName = function(cls) {
 // TypeError；named 未命中时创建 own 属性（后续 get 优先 own）。
 window.__makeLiveCollection = function(queryFn) {
     var target = { __own: {} };
+    var proxyRef = null;  // M91: receiver 品牌检查用（延迟捕获 proxy 本体）
     function lookup(k) {
         var arr = queryFn();
         if (typeof k === 'string' && /^\d+$/.test(k)) {
@@ -4568,22 +5034,56 @@ window.__makeLiveCollection = function(queryFn) {
             var el = arr[j];
             var id = (typeof el.getAttribute === 'function') ? el.getAttribute('id') : null;
             var nm = (typeof el.getAttribute === 'function') ? el.getAttribute('name') : null;
-            if (id === k || nm === k) return { el: el };
+            if (id === k) return { el: el };
+            // name 属性只对 HTML 命名空间元素生效（WPT Element-children：
+            // createElementNS('', 'img')[name] 不参与 named property）。
+            if (nm === k) {
+                var ns = el.namespaceURI;
+                if (ns === undefined || ns === 'http://www.w3.org/1999/xhtml') return { el: el };
+            }
         }
         return null;
     }
-    return new Proxy(target, {
-        get: function(t, k) {
+    proxyRef = new Proxy(target, {
+        get: function(t, k, receiver) {
+            // M91: WebIDL 品牌检查——接口属性（length/item/namedItem）经
+            // 原型链（Object.create(collection)）访问时 this 非法 → TypeError。
+            if ((k === 'length' || k === 'item' || k === 'namedItem') && receiver !== proxyRef) {
+                throw new TypeError('Illegal invocation');
+            }
             if (k === 'length') return queryFn().length;
-            if (k === 'item') return function(i) { var a = queryFn(); return (i >= 0 && i < a.length) ? a[i] : null; };
+            if (k === 'item') return function(i) {
+                var a = queryFn();
+                // M91: WebIDL unsigned long 转换——item('foo') → NaN → 0
+                //（WPT Element-children item('foo') 返回第 0 个元素）。
+                var n = Number(i);
+                if (isNaN(n)) n = 0;
+                return (n >= 0 && n < a.length) ? a[n] : null;
+            };
             if (k === 'namedItem') return function(n) { var r = lookup(n); return r ? r.el : null; };
             if (k === Symbol.toStringTag) return 'HTMLCollection';
             if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t.__own, k)) return t.__own[k];
             var r = lookup(k);
-            return r ? r.el : undefined;
+            if (r) return r.el;
+            // M91: 未命中回落原型链（此前显式返回 undefined 吞掉了
+            // hasOwnProperty/toString 等 Object.prototype 方法）。
+            return Reflect.get(t, k);
         },
-        set: function(t, k, v) {
-            if (typeof k === 'string' && lookup(k)) return false;
+        set: function(t, k, v, receiver) {
+            // M91: 索引键恒拒（legacy platform object 无索引 setter——
+            // sloppy 静默 / strict TypeError，WPT HTMLCollection-own-props）。
+            if (typeof k === 'string' && /^\d+$/.test(k)) return false;
+            if (typeof k === 'string' && lookup(k)) {
+                // named 已存在：collection 自身赋值拒绝；派生 receiver 走
+                // OrdinarySet 语义（在 receiver 上建 own 属性）。
+                if (receiver !== proxyRef) {
+                    try {
+                        Object.defineProperty(receiver, k, { value: v, writable: true, enumerable: true, configurable: true });
+                    } catch (e) {}
+                    return true;
+                }
+                return false;
+            }
             t.__own[k] = v;
             return true;
         },
@@ -4591,7 +5091,8 @@ window.__makeLiveCollection = function(queryFn) {
             if (Object.prototype.hasOwnProperty.call(t.__own, k)) return true;
             return !!lookup(k);
         },
-        // M78.43: ownKeys——索引键(0..len-1) + named 键 + length。
+        // M91: ownKeys——索引键 + named 键（不含 length：length 是接口属性，
+        // 非 own——WPT getOwnPropertyNames 断言）。name 属性仅 HTML ns。
         ownKeys: function(t) {
             var arr = queryFn();
             var keys = [];
@@ -4601,22 +5102,31 @@ window.__makeLiveCollection = function(queryFn) {
                 var el = arr[j];
                 var id = (typeof el.getAttribute === 'function') ? el.getAttribute('id') : null;
                 var nm = (typeof el.getAttribute === 'function') ? el.getAttribute('name') : null;
+                if (nm) {
+                    var elNs = el.namespaceURI;
+                    if (!(elNs === undefined || elNs === 'http://www.w3.org/1999/xhtml')) nm = null;
+                }
                 if (id && !seen[id]) { keys.push(id); seen[id] = 1; }
                 if (nm && !seen[nm]) { keys.push(nm); seen[nm] = 1; }
             }
-            keys.push('length');
             return keys;
         },
-        getOwnPropertyDescriptor: function(t, k) {
-            if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t.__own, k)) {
-                return Object.getOwnPropertyDescriptor(t.__own, k);
+            getOwnPropertyDescriptor: function(t, k) {
+                if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(t.__own, k)) {
+                    return Object.getOwnPropertyDescriptor(t.__own, k);
+                }
+                var r = lookup(k);
+                // M91: 索引键可枚举 / named 键不可枚举（for-in + hasOwnProperty
+                // 只出索引键，`in` 与 hasOwnProperty 对 named 均真）。
+                if (r) {
+                    var isIdx = (typeof k === 'string') && /^\d+$/.test(k);
+                    return { value: r.el, writable: false, enumerable: !!isIdx, configurable: true };
+                }
+                if (k === 'length') return { value: queryFn().length, writable: false, enumerable: true, configurable: true };
+                return undefined;
             }
-            var r = lookup(k);
-            if (r) return { value: r.el, writable: false, enumerable: true, configurable: true };
-            if (k === 'length') return { value: queryFn().length, writable: false, enumerable: true, configurable: true };
-            return undefined;
-        }
     });
+    return proxyRef;
 };
 document.getElementsByTagName = function(tag) {
     return window.__makeLiveCollection(function() { return document.querySelectorAll(tag); });
@@ -4798,57 +5308,213 @@ window.opener = null;
 document.scripts = document.querySelectorAll('script');
 // document.createTreeWalker：DFS 顺序的基本实现（NodeIterator 同理最小桩）。
 // M78.127: 赋值定义（configurable——WPT interface-objects delete 断言）。
-globalThis.TreeWalker = function TreeWalker(root, whatToShow) {
-    this.root = root; this.currentNode = root;
-    this.whatToShow = whatToShow === undefined ? 0xFFFFFFFF : whatToShow;
-    this.__seq = [];
-    (function collect(node, out) {
-        if (!node || typeof node.__nodeId !== 'number') return;
-        out.push(node);
-        var s = __children(node.__nodeId);
-        if (!s) return;
-        var ids = s.split(',');
-        for (var i = 0; i < ids.length; i++) {
-            if (ids[i]) collect(__makeElement(parseInt(ids[i], 10)), out);
-        }
-    })(root, this.__seq);
-    this.__idx = 0;
+// M91: TreeWalker——按 DOM Standard 遍历算法重写（旧实现预计算序列 +
+// 裸索引，不认 filter/root 边界/previousSibling）。
+globalThis.TreeWalker = function TreeWalker(root, whatToShow, filter) {
+    this.root = root;
+    this.__cur = root;
+    this.whatToShow = (whatToShow === undefined) ? 0xFFFFFFFF : whatToShow;
+    this.filter = (filter === undefined) ? null : filter;
 }
-TreeWalker.prototype.parentNode = function() {
-    var pid = __getParent(this.currentNode.__nodeId);
-    if (typeof pid !== 'number' || pid < 0) return null;
-    this.currentNode = __makeElement(pid);
-    return this.currentNode;
-};
-TreeWalker.prototype.firstChild = function() {
-    var cs = __children(this.currentNode.__nodeId);
-    if (!cs) return null;
-    var first = parseInt(cs.split(',')[0], 10);
-    if (isNaN(first)) return null;
-    this.currentNode = __makeElement(first);
-    return this.currentNode;
-};
-TreeWalker.prototype.lastChild = function() {
-    var cs = __children(this.currentNode.__nodeId);
-    if (!cs) return null;
-    var ids = cs.split(',').filter(function(s) { return s; });
-    var last = parseInt(ids[ids.length - 1], 10);
-    if (isNaN(last)) return null;
-    this.currentNode = __makeElement(last);
-    return this.currentNode;
-};
-TreeWalker.prototype.nextNode = function() {
-    if (this.__idx + 1 >= this.__seq.length) return null;
-    this.__idx++;
-    this.currentNode = this.__seq[this.__idx];
-    return this.currentNode;
-};
-TreeWalker.prototype.previousNode = function() {
-    if (this.__idx <= 0) return null;
-    this.__idx--;
-    this.currentNode = this.__seq[this.__idx];
-    return this.currentNode;
-};
+Object.defineProperty(TreeWalker.prototype, 'currentNode', {
+    get: function() { return this.__cur; },
+    set: function(v) {
+        // WPT：currentNode = null / {} / window 必须 TypeError。
+        var ok = v && (typeof v.__nodeId === 'number' ||
+                 (typeof Node === 'function' && v instanceof Node));
+        if (!ok) throw new TypeError('currentNode must be a Node');
+        this.__cur = v;
+    },
+    enumerable: true, configurable: true
+});
+(function() {
+    function kidsOf(n) {
+        if (!n || typeof n.__nodeId !== 'number') return [];
+        var s = __children(n.__nodeId);
+        if (!s) return [];
+        return s.split(',').filter(function(x) { return x !== ''; })
+                .map(function(x) { return __makeElement(parseInt(x, 10)); })
+                .filter(function(x) { return x && typeof x.__nodeId === 'number'; });
+    }
+    function sibOf(n, delta) {
+        var pid = (n && typeof n.__nodeId === 'number') ? __getParent(n.__nodeId) : -1;
+        if (typeof pid !== 'number' || pid < 0) return null;
+        var ks = kidsOf(__makeElement(pid));
+        for (var i = 0; i < ks.length; i++) {
+            if (ks[i].__nodeId === n.__nodeId) {
+                var j = i + delta;
+                return (j >= 0 && j < ks.length) ? ks[j] : null;
+            }
+        }
+        return null;
+    }
+    function match(self, n) {
+        var nt = (n && n.nodeType) || 1;
+        if (nt === 11 || nt === 9 || nt === 10) { /* fragment/document/doctype 位 */ }
+        var bit = 1 << (nt - 1);
+        if (!(self.whatToShow & bit)) return NodeFilter.FILTER_SKIP;
+        var f = self.filter;
+        if (!f) return NodeFilter.FILTER_ACCEPT;
+        var r;
+        if (typeof f === 'function') r = f.call(f, n);
+        else if (f && typeof f.acceptNode === 'function') r = f.acceptNode.call(f, n);
+        else throw new TypeError('filter must be a function or acceptNode object');
+        return (r === undefined || r === null) ? NodeFilter.FILTER_ACCEPT : +r;
+    }
+    function contains(self, n) {
+        // root 是否 n 的祖先（含自身）
+        var c = n;
+        var guard = 0;
+        while (c && guard++ < 256) {
+            if (c === self.root) return true;
+            c = (typeof c.__nodeId === 'number') ? __makeElement(__getParent(c.__nodeId)) : null;
+            if (c && typeof c.__nodeId !== 'number') c = null;
+        }
+        return false;
+    }
+    TreeWalker.prototype.parentNode = function() {
+        var cur = this.__cur;
+        // 根节点/游离于 root 子树外 → null（不更新 currentNode）
+        if (cur === this.root || !contains(this, cur)) return null;
+        var pid = __getParent(cur.__nodeId);
+        if (typeof pid !== 'number' || pid < 0) return null;
+        var p = __makeElement(pid);
+        this.__cur = p;
+        return p;
+    };
+    TreeWalker.prototype.firstChild = function() {
+        var ks = kidsOf(this.__cur);
+        for (var i = 0; i < ks.length; i++) {
+            var n = ks[i];
+            var m = match(this, n);
+            if (m === NodeFilter.FILTER_ACCEPT) { this.__cur = n; return n; }
+            if (m === NodeFilter.FILTER_SKIP) {
+                var save = this.__cur;
+                this.__cur = n;
+                var d = this.firstChild();
+                this.__cur = d || save;
+                if (d) return d;
+            }
+            // REJECT → 跳过子树（继续下一兄弟）
+        }
+        return null;
+    };
+    TreeWalker.prototype.lastChild = function() {
+        var ks = kidsOf(this.__cur);
+        for (var i = ks.length - 1; i >= 0; i--) {
+            var n = ks[i];
+            var m = match(this, n);
+            if (m === NodeFilter.FILTER_ACCEPT) { this.__cur = n; return n; }
+            if (m === NodeFilter.FILTER_SKIP) {
+                var save = this.__cur;
+                this.__cur = n;
+                var d = this.lastChild();
+                this.__cur = d || save;
+                if (d) return d;
+            }
+        }
+        return null;
+    };
+    TreeWalker.prototype.nextSibling = function() {
+        var n = sibOf(this.__cur, 1);
+        var guard = 0;
+        while (n && guard++ < 4096) {
+            var m = match(this, n);
+            if (m === NodeFilter.FILTER_ACCEPT) { this.__cur = n; return n; }
+            if (m === NodeFilter.FILTER_SKIP) {
+                var save = this.__cur;
+                this.__cur = n;
+                var d = this.firstChild();
+                this.__cur = d || save;
+                if (d) return d;
+            }
+            n = sibOf(n, 1);
+        }
+        return null;
+    };
+    TreeWalker.prototype.previousSibling = function() {
+        var n = sibOf(this.__cur, -1);
+        var guard = 0;
+        while (n && guard++ < 4096) {
+            var m = match(this, n);
+            if (m === NodeFilter.FILTER_ACCEPT) { this.__cur = n; return n; }
+            if (m === NodeFilter.FILTER_SKIP) {
+                var save = this.__cur;
+                this.__cur = n;
+                var d = this.lastChild();
+                this.__cur = d || save;
+                if (d) return d;
+            }
+            n = sibOf(n, -1);
+        }
+        return null;
+    };
+    TreeWalker.prototype.nextNode = function() {
+        var guard = 0;
+        var descend = true;
+        var n = this.__cur;
+        while (guard++ < 8192) {
+            var next = null;
+            if (descend) {
+                var ks = kidsOf(n);
+                if (ks.length) next = ks[0];
+            }
+            if (!next) {
+                // 上溯找右兄弟；穿过 root 仍无 → null
+                var cur = n;
+                while (cur) {
+                    if (cur === this.root) return null;
+                    var sib = sibOf(cur, 1);
+                    if (sib) { next = sib; break; }
+                    cur = (typeof cur.__nodeId === 'number') ? __makeElement(__getParent(cur.__nodeId)) : null;
+                    if (cur && typeof cur.__nodeId !== 'number') cur = null;
+                }
+                if (!next) return null;
+            }
+            n = next;
+            var m = match(this, n);
+            if (m === NodeFilter.FILTER_ACCEPT) { this.__cur = n; return n; }
+            descend = (m !== NodeFilter.FILTER_REJECT);  // REJECT 不进子树
+        }
+        return null;
+    };
+    TreeWalker.prototype.previousNode = function() {
+        var guard = 0;
+        var n = this.__cur;
+        while (guard++ < 8192) {
+            var prev = null;
+            // 先试左兄弟的最后一棵子树（REJECT 场景 currentNode 子树不回溯——
+            // previousNode 语义：前一个树序节点）
+            var sib = sibOf(n, -1);
+            if (sib) {
+                // 下潜到 sib 最后叶子
+                var d = sib;
+                var dg = 0;
+                while (dg++ < 1024) {
+                    var ks = kidsOf(d);
+                    if (!ks.length) break;
+                    d = ks[ks.length - 1];
+                }
+                prev = d;
+            } else {
+                var cur = n;
+                while (cur) {
+                    if (cur === this.root) return null;
+                    var par = (typeof cur.__nodeId === 'number') ? __makeElement(__getParent(cur.__nodeId)) : null;
+                    if (!par || typeof par.__nodeId !== 'number') return null;
+                    prev = par;
+                    break;
+                }
+            }
+            if (!prev) return null;
+            n = prev;
+            var m = match(this, n);
+            if (m === NodeFilter.FILTER_ACCEPT) { this.__cur = n; return n; }
+            // REJECT/SKIP：继续前溯（上一轮 sibOf(n,-1) 已定位）
+        }
+        return null;
+    };
+})();
 // M78.115: NodeFilter 常量（WPT TreeWalker 断言依赖）。
 window.NodeFilter = {
     SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4,
@@ -4857,7 +5523,7 @@ window.NodeFilter = {
     SHOW_DOCUMENT_TYPE: 512, SHOW_DOCUMENT_FRAGMENT: 1024, SHOW_NOTATION: 2048,
     FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3
 };
-document.createTreeWalker = function(root, whatToShow) { return new TreeWalker(root, whatToShow); };
+document.createTreeWalker = function(root, whatToShow, filter) { return new TreeWalker(root, whatToShow, filter); };
 // M78: document.createEvent —— WPT Event-constants/老式 API 依赖。
 document.createEvent = function(type) {
     var t = String(type || 'Event');
@@ -4903,7 +5569,18 @@ Range.prototype.cloneRange = function() {
     return r;
 };
 Range.prototype.selectNodeContents = function(node) {
-    this.startContainer = node; this.endContainer = node; this.startOffset = 0; this.endOffset = 0;
+    // M91: endOffset = 节点长度（元素=子节点数，文本=data 长度）——此前写 0
+    // 导致 collapsed 恒 true（WPT Range-stringifier 首断言）。
+    this.startContainer = node; this.endContainer = node; this.startOffset = 0;
+    var len = 0;
+    try {
+        var nid = node.__nodeId;
+        var tg = String(__getTag(nid));
+        if (tg === '__text__' || !tg) len = String((__textData(nid) || __getText(nid) || '')).length;
+        else len = (__children(nid) || '').split(',').filter(function(x) { return x !== ''; }).length;
+    } catch (e) { len = 0; }
+    this.endOffset = len;
+    this.collapsed = this._recalc();
 };
 Range.prototype.deleteContents = function() { this.collapse(true); };
 Range.prototype.cloneContents = function() { return document.createDocumentFragment(); };
@@ -4911,9 +5588,82 @@ Range.prototype.extractContents = function() { return document.createDocumentFra
 Range.prototype.insertNode = function() {};
 Range.prototype.getBoundingClientRect = function() { return { x:0, y:0, top:0, left:0, right:0, bottom:0, width:0, height:0 }; };
 Range.prototype.detach = function() {};
-// M78.116: Range.toString()——返回范围内的文本（近似：起止容器间的所有文本）。
+// M78.116 + M91: Range.toString()——按 DOM Standard「get a string of a live
+// range」语义：同容器文本取子串；跨节点时按树序拼叶子文本，元素边界插 LF。
 Range.prototype.toString = function() {
-    try { return __getText(this.startContainer.__nodeId || 0) || ''; } catch(e) { return ''; }
+    try {
+        var sc = this.startContainer, ec = this.endContainer;
+        var so = this.startOffset | 0, eo = this.endOffset | 0;
+        var scId = (sc && typeof sc.__nodeId === 'number') ? sc.__nodeId : -1;
+        var ecId = (ec && typeof ec.__nodeId === 'number') ? ec.__nodeId : -1;
+        if (scId < 0 || ecId < 0) return '';
+        var dataOf = function(id) { return String((__textData(id) || __getText(id) || '')); };
+        var isTextId = function(id) { var t = String(__getTag(id)); return t === '__text__' || t === '__comment__' || !t; };
+        var kids = function(id) { return (__children(id) || '').split(',').filter(function(x) { return x !== ''; }).map(function(x) { return parseInt(x, 10); }); };
+        var parentOf = function(id) { var p = __getParent(id); return (typeof p === 'number' && p >= 0) ? p : -1; };
+        // 同文本容器：直接子串
+        if (scId === ecId && isTextId(scId)) return dataOf(scId).slice(so, eo);
+        // 公共祖先（用 id 链求）
+        var chain = {};
+        var a = scId;
+        while (a >= 0) { chain[a] = true; a = parentOf(a); }
+        var common = ecId;
+        while (common >= 0 && !chain[common]) common = parentOf(common);
+        if (common < 0) common = 0;
+        // 树序收集文本叶子
+        var leaves = [];
+        (function dfs(id) {
+            if (isTextId(id)) { leaves.push(id); return; }
+            var ck = kids(id);
+            for (var i = 0; i < ck.length; i++) dfs(ck[i]);
+        })(common);
+        // 前序编号（树序比较用）
+        var rank = {};
+        (function num(id) {
+            rank[id] = Object.keys(rank).length;
+            var ck = kids(id);
+            for (var i = 0; i < ck.length; i++) num(ck[i]);
+        })(common);
+        // 叶子相对起点 (nid, off)：'partial'（叶子即 nid）/ 'full'（含）/ 'before'（排除）
+        var posStart = function(leafId, nid, off) {
+            if (leafId === nid) return (off > 0) ? 'partial' : 'full';
+            var c = leafId, p = parentOf(c), foundAnc = false;
+            while (p >= 0) {
+                if (p === nid) { foundAnc = true; break; }
+                c = p; p = parentOf(c);
+            }
+            if (foundAnc) return (kids(nid).indexOf(c) >= off) ? 'full' : 'before';
+            return (rank[leafId] > rank[nid]) ? 'full' : 'before';
+        };
+        // 叶子相对终点 (nid, off)：'partial'/'full'（含）/ 'after'（排除）
+        var posEnd = function(leafId, nid, off) {
+            if (leafId === nid) return 'partial';
+            var c = leafId, p = parentOf(c), foundAnc = false;
+            while (p >= 0) {
+                if (p === nid) { foundAnc = true; break; }
+                c = p; p = parentOf(c);
+            }
+            if (foundAnc) return (kids(nid).indexOf(c) < off) ? 'full' : 'after';
+            return (rank[leafId] < rank[nid]) ? 'full' : 'after';
+        };
+        var s = '';
+        var emitted = 0, lastLeaf = -1, ended = false;
+        for (var li = 0; li < leaves.length && !ended; li++) {
+            var t = leaves[li];
+            var ps = posStart(t, scId, so);
+            if (ps === 'before') continue;
+            var pe = posEnd(t, ecId, eo);
+            if (pe === 'after') break;
+            var data = dataOf(t);
+            if (ps === 'partial') data = data.slice(so);
+            if (pe === 'partial') { data = data.slice(0, eo); ended = true; }
+            // M91-fix: 纯文本拼接——预期里的 LF 来自源码空白文本节点，
+            // 不做合成换行（WPT Range-stringifier 断言）。
+            s += data;
+            emitted++; lastLeaf = t;
+        }
+        return s;
+    } catch (e) { return ''; }
 };
 window.Range = Range;
 document.createRange = function() { return new Range(); };
@@ -4944,14 +5694,7 @@ document.createHTMLDocument = function(title) {
     d.createEvent = function(t) { return new Event(t === 'UIEvents' ? 'UIEvent' : (t || '')); };
     d.body = d.createElement('body');
     d.documentElement = d.createElement('html');
-    // M78.73: 表单反射属性移到全局区域（M78.87 修正）。
-// M78.72: DOMStringMap 全局构造器 + dataset remove 方法。
-window.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
-Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
-Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
-    __removeAttr(this.__nodeId, String(name));
-};
-// M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
+    // M78.71: title 空白规范化(连续空白折叠为单空格——HTML title 语义)。
     d.title = String(title === undefined ? '' : title === null ? 'null' : title).replace(/\s+/g, ' ').trim();
     d.addEventListener = function() {};
     d.removeEventListener = function() {};
@@ -4960,6 +5703,15 @@ Element.prototype.removeAttribute = Element.prototype.removeAttribute || functio
     d.querySelector = function() { return null; };
     d.querySelectorAll = function() { return []; };
     return d;
+};
+// M78.72 + M91-fix: DOMStringMap 全局构造器 + removeAttribute 兜底。
+// （此前误嵌在 createHTMLDocument 函数体内——只有调用 createHTMLDocument
+// 才定义，页面顶层 `div.dataset instanceof DOMStringMap` 报 not defined、
+// `div.removeAttribute` not a function。移到 shim 顶层。）
+globalThis.DOMStringMap = function DOMStringMap() { throw new TypeError('Illegal constructor'); };
+Object.defineProperty(window.DOMStringMap.prototype, Symbol.toStringTag, { value: 'DOMStringMap' });
+Element.prototype.removeAttribute = Element.prototype.removeAttribute || function(name) {
+    __removeAttr(this.__nodeId, String(name));
 };
 // element.attributes：基本 NamedNodeMap（length/item/getNamedItem）。
 function NamedNodeMap(nodeId) { this.__nodeId = nodeId; }
