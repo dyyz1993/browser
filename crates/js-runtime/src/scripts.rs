@@ -4391,6 +4391,24 @@ Element.prototype.setAttributeNode = function(attr) {
     if (attr && attr.name) this.setAttribute(attr.name, attr.value || '');
     return attr || null;
 };
+// M78.120: Element.querySelector/querySelectorAll 的 :scope 处理——
+// 替换为 this 自身的 id 选择器（如果无 id 则用临时 UUID）。
+(function() {
+    function resolveScope(sel) {
+        if (typeof sel !== 'string' || sel.indexOf(':scope') < 0) return sel;
+        if (!this || typeof this.__nodeId !== 'number') return sel;
+        var scopeId = this.getAttribute('id');
+        if (!scopeId) {
+            scopeId = '__scope_' + this.__nodeId;
+            this.setAttribute('id', scopeId);
+        }
+        return sel.replace(/:scope/g, '#' + scopeId);
+    }
+    var _origQS = Element.prototype.querySelector;
+    Element.prototype.querySelector = function(sel) { return _origQS.call(this, resolveScope.call(this, sel)); };
+    var _origQSA = Element.prototype.querySelectorAll;
+    Element.prototype.querySelectorAll = function(sel) { return _origQSA.call(this, resolveScope.call(this, sel)); };
+})();
 document.querySelector = function(sel) {
     __qsThrowIfInvalid(sel);
     var nodeId = __qs(String(sel));
