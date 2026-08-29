@@ -477,6 +477,30 @@ impl CdpSession {
                     ),
                 }
             }
+            // ── M80.17: Input domain（dispatchMouseEvent 真实点击）──
+            // mousePressed(left) → hit_test + 同引擎会话合成点击（async，内部
+            // 自行加锁 page——此分支不能预持锁）。其余事件 ack。
+            m if m.starts_with("Input.") => {
+                match crate::input_domain::dispatch(
+                    id,
+                    m,
+                    msg.params.as_ref(),
+                    self.page.clone(),
+                    self.engine_kind,
+                )
+                .await
+                {
+                    Ok(resp) => (resp, vec![]),
+                    Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
+                        CdpMessage::error_response(id, -32601, "Method not found"),
+                        vec![],
+                    ),
+                    Err(e) => (
+                        CdpMessage::error_response(id, -32000, &e.to_string()),
+                        vec![],
+                    ),
+                }
+            }
             // ── M48+M51: Target domain (Puppeteer connect flow + events) ──
             m if m.starts_with("Target.") => {
                 let resp = match crate::target_domain::dispatch(id, m) {

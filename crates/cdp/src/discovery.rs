@@ -158,6 +158,9 @@ pub fn http_404() -> String {
 pub fn handle_discovery(path: &str, ws_host: &str) -> String {
     // Strip query string.
     let path = path.split('?').next().unwrap_or(path);
+    // Playwright `connect_over_cdp` 探测 `/json/version/`（带尾斜杠）——
+    // 统一去掉尾斜杠再匹配，否则握手前就被 404 拒之门外。
+    let path = path.strip_suffix('/').unwrap_or(path);
     match path {
         "/json/version" => json_ok(&version_body(ws_host)),
         "/json" | "/json/list" => json_ok(&list_body(ws_host)),
@@ -229,6 +232,14 @@ mod tests {
     fn handle_discovery_strips_query_string() {
         let v = handle_discovery("/json/version?foo=bar", "127.0.0.1:9222");
         assert!(v.starts_with("HTTP/1.1 200 OK"), "got: {v}");
+    }
+
+    #[test]
+    fn handle_discovery_strips_trailing_slash() {
+        // Playwright connect_over_cdp 探测 `/json/version/`（带尾斜杠）。
+        let v = handle_discovery("/json/version/", "127.0.0.1:9222");
+        assert!(v.starts_with("HTTP/1.1 200 OK"), "got: {v}");
+        assert!(v.contains("\"Browser\""));
     }
 
     #[test]

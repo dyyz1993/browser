@@ -51,6 +51,10 @@ pub struct PageState {
     pub rendered_colored: String,
     /// Render width in chars.
     pub width: usize,
+    /// M80.17: 布局树快照（`render_from_tree` 填充），供
+    /// `Input.dispatchMouseEvent` 做坐标 hit_test（CSS px → NodeId）。
+    /// 未渲染（未 navigate）时为 `None`。
+    pub layout: Option<browser_layout::LayoutTree>,
     /// M70.4: HTTP status of the last navigate (for Network.responseReceived).
     pub last_status: u16,
     /// M70.4: Response headers of the last navigate (for Network.responseReceived).
@@ -80,6 +84,7 @@ impl Default for PageState {
             rendered_text: String::new(),
             rendered_colored: String::new(),
             width: 80,
+            layout: None,
             last_status: 0,
             last_headers: Vec::new(),
             cookies: Vec::new(),
@@ -106,6 +111,7 @@ impl PageState {
 
     /// M68: 从 `self.tree` 跑 css+layout+render，填 rendered_text/rendered_colored。
     /// JS 改完 DOM 后调这个，用新 tree 重新渲染。
+    /// M80.17: 同时保存布局树到 `self.layout`（Input hit_test 用）。
     pub fn render_from_tree(&mut self) {
         let style_text = extract_style_text(&self.tree);
         let sheet = browser_css_engine::parse(&style_text);
@@ -119,6 +125,7 @@ impl PageState {
         );
         self.rendered_text = browser_render::render_ascii(&layout, self.width);
         self.rendered_colored = browser_render::render_ascii_colored(&layout, self.width);
+        self.layout = Some(layout);
     }
 
     /// Render the current page to a PNG screenshot, returning base64 data.

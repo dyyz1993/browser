@@ -2064,6 +2064,27 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   去除 no-op 的入口已预留（hit_test + run_scripts_with_post_exprs）。
 - 864 tests 全绿（+9：integration_click 3 用例 + hit_test 6 单测）。
 
+**M80.17 —— 批 48（定时）CDP 点击接线——Playwright/Puppeteer page.click() 打通**：
+
+- **State 扩展**：PageState 新增 `pub layout: Option<LayoutTree>`（plain-data
+  Send 安全），render_from_tree() 布局后保存——Input 处理时锁内
+  hit_test + clone 后立即 drop（锁不跨 await），点击走 spawn_blocking
+  （SharedTree !Send，catch_unwind panic 回退原树不丢页面）。
+- **点击链路**：server.rs dispatch match 新增 Input 分支（此前 Input.*
+  落 -32601 Method not found——Playwright click 直接报错）；
+  dispatchMouseEvent 仅 mousePressed+left+有坐标触发真点击；hit_test →
+  **nearest_element 爬升**（inline 元素自身盒零尺寸，尺寸挂在文本子盒，
+  DOM target 必须是元素——沿 parent 爬到最近 Element 的关键修正）→
+  run_scripts_with_post_exprs 同会话合成点击 → 点击后再泵一轮。
+- **附带**：discovery.rs `/json/version/` 尾斜杠 404 修复（Playwright
+  connect_over_cdp 探测路径）。
+- **端到端实证**：裸 WebSocket CDP navigate → mousePressed/Released →
+  Runtime.evaluate 读 `#out`：BEFORE → **CLICKED-FROM-CDP**。服务端日志
+  `[cdp] input: click node 9 at (10,8)`。
+- 871 tests 全绿（+7：input_domain 单测 + discovery 回归）。
+- 已知边界：Playwright 双并发连接模型被 M42 单会话串行 accept 限制
+  （既有范围）；Puppeteer 单连接路径已验证一致。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
