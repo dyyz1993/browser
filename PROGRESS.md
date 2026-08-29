@@ -2122,6 +2122,16 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   无此内容。
 - 872 tests 全绿 + REALITY PASS。ASCII 路径零变化。
 
+**M80.20 —— 批 51（定时）监控巡检 + 清理**：
+
+- 哨兵：872 tests 全绿 + REALITY PASS；webapi **66/70**（legacy events
+  修复连锁 +1，剩 4 个全部结构性：fetch-in-popup / sandboxed-iframe /
+  response-body 微任务流 ×2）。
+- 清理：Chrome 缓存 1.1G + Codex 缓存 320M + target/debug + 旧代理
+  日志。磁盘 13→14G。
+- 兼容性循环收官状态：所有非结构性可修项已采尽，剩余按结构性清单
+  维护（不投入）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
