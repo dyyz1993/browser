@@ -5,6 +5,7 @@
 //! 1. createEvent 只认复数 'MouseEvents'，单数 'MouseEvent' 落 `new Event('')`；
 //! 2. upgradeEventFamily 只升级了 window.MouseEvent，内部局部绑定仍是
 //!    原始构造器（无 initMouseEvent）。
+//!
 //! 两者叠加 → 合成点击流程在第二段监听器前断裂 → webapi no-results。
 
 use assert_cmd::Command;

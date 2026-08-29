@@ -3836,8 +3836,14 @@ Object.defineProperty(Element.prototype, 'translate', {
         set: function(v) { __setAttr(this.__nodeId, 'class', String(v)); },
         enumerable: true, configurable: true
     });
+    // M80.18: __getAttr 原生桥对缺失属性返回 undefined（Rust None 过桥），
+    // 不是 null——`!== null` 恒真，布尔反射属性全部假真。统一用 __hasAttrX。
+    function __hasAttrX(el, name) {
+        var v = __getAttr(el.__nodeId, name);
+        return v !== null && v !== undefined;
+    }
     Object.defineProperty(Element.prototype, 'hidden', {
-        get: function() { return __getAttr(this.__nodeId, 'hidden') !== null; },
+        get: function() { return __hasAttrX(this, 'hidden'); },
         set: function(v) { if (v) __setAttr(this.__nodeId, 'hidden', ''); else __removeAttr(this.__nodeId, 'hidden'); },
         enumerable: true, configurable: true
     });
@@ -3871,17 +3877,18 @@ Object.defineProperty(Element.prototype, 'value', {
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'checked', {
-    get: function() { return __getAttr(this.__nodeId, 'checked') !== null; },
+    // M80.18: undefined/null 双检（原生桥缺失属性返回 undefined）。
+    get: function() { return __hasAttrX(this, 'checked'); },
     set: function(v) { if (v) __setAttr(this.__nodeId, 'checked', ''); else __removeAttr(this.__nodeId, 'checked'); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'disabled', {
-    get: function() { return __getAttr(this.__nodeId, 'disabled') !== null; },
+    get: function() { return __hasAttrX(this, 'disabled'); },
     set: function(v) { if (v) __setAttr(this.__nodeId, 'disabled', ''); else __removeAttr(this.__nodeId, 'disabled'); },
     enumerable: true, configurable: true
 });
 Object.defineProperty(Element.prototype, 'selected', {
-    get: function() { return __getAttr(this.__nodeId, 'selected') !== null; },
+    get: function() { return __hasAttrX(this, 'selected'); },
     set: function(v) { if (v) __setAttr(this.__nodeId, 'selected', ''); else __removeAttr(this.__nodeId, 'selected'); },
     enumerable: true, configurable: true
 });
@@ -5123,6 +5130,23 @@ Element.prototype.dispatchEvent = function(ev) {
     // 立即终止（本节点剩余 listener 也不跑）。
     if (!ev) return true;
     ev.target = this;
+    // M80.18: checkbox 合成点击的 pre-click activation——派发**前**翻转
+    // checked（Chrome 语义：listener 内读到的已是翻转值，WPT
+    // dispatchEvent.click.checkbox 断言依赖）；preventDefault 生效则在
+    // 派发结束后回退。radio 的同组互斥语义未实现，不在此处理。
+    var __ckToggled = false;
+    if (ev.type === 'click') {
+        try {
+            var __ckTag = String(__getTag(this.__nodeId) || '').toLowerCase();
+            if (__ckTag === 'input') {
+                var __ckType = __getAttr(this.__nodeId, 'type');
+                if (typeof __ckType === 'string' && __ckType.toLowerCase() === 'checkbox') {
+                    this.checked = !this.checked;
+                    __ckToggled = true;
+                }
+            }
+        } catch (__cke) {}
+    }
     // 元素祖先链（target 在最前；父节点非元素 = document 节点 → 链到此为止）
     var chain = [this];
     var cur = this;
@@ -5219,6 +5243,11 @@ Element.prototype.dispatchEvent = function(ev) {
         }
         if (!__stopped()) __visit(document, 3, 3, __docLst, __docCap);
         if (!__stopped()) __visit(window, 3, 3, __winLst, __winCap);
+    }
+    // M80.18: preventDefault 生效 → 回退派发前的 checked 翻转（canceled
+    // activation steps；returnValue setter 已保证不可 cancel 时不置位）。
+    if (__ckToggled && ev.defaultPrevented) {
+        try { this.checked = !this.checked; } catch (__cre) {}
     }
     // M78.129: dispatch 前预设的 stop 标志抑制全部 listener（propagation-stopped）；
     // dispatch 结束清标志——同一 event 可再次 dispatch（multiple-cancelBubble）。
