@@ -2222,6 +2222,24 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   表现（React 水合也是静默失败）——**两者共同根因可能是同一批缺失 API**
   （如 queueMicrotask 语义、getComputedStyle 精确值、rAF 时序等）。
 
+**M80.29 —— 批 81（定时）水合失败定位结论（vite.dev 专项）**：
+
+- **已排除**：Vue 挂载能力本身（CDN global/ESM build 均 mount 成功）；
+  IO/idle callback/queueMicrotask（已补齐且探针通过）；错误捕获为空
+  （水合失败非 JS 异常——是**静默未执行**：onMounted 链条未启动）。
+- **已定位断层**：入口 inline module 执行后三个 chunks（framework/
+  theme/assets）加载成功，VitePress 的 onMounted→fetch sponsors.json
+  链条未启动（无 sponsors.vite.dev 请求日志、无 "In partnership with"
+  渲染、spsr-link=0）。
+- **根因推测**：VitePress 入口 module 里的水合启动条件依赖某运行时
+  标志（如 import.meta.env.SSR===false 分支、或 document 判断），我们的
+  VITE_ENV_DEFAULT 或某全局让它走进了 no-op 分支。下一步可拉
+  vite.dev/assets/app.ByX4a5ns.js 逐段审（含 mount 调用）。
+- react.dev（React 水合静默失败）很可能是**同类问题**——框架入口执行
+  链条的某分支判断，而非引擎崩溃。
+- 定位成本已高（CDP 会话在 navigate 后断开、线上页无法注入探针），
+  记录边界。本项目 CLI --click 的工作流不受影响。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
