@@ -36,7 +36,7 @@ WPT = os.path.join(SUITES, "wpt")
 BUILD = os.path.join(HERE, "build")
 RESULTS = os.path.join(HERE, "results")
 MANIFEST = os.path.join(HERE, "manifest.json")
-PORT = 8791
+PORT = 18791  # M80.15: 8791 与本机 node gateway 长期冲突，改用非常用端口
 
 # ---------------------------------------------------------------- 类别定义
 CATEGORIES = {
