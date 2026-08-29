@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head><title>Legacy createEvent click</title></head>
+<body>
+  <input type="checkbox" id="target">
+  <button id="button">Go</button>
+  <div id="out">before</div>
+  <script>
+    // M80.18 回归锚点：WPT uievents legacy dispatchEvent.click.checkbox 流程。
+    // createEvent("MouseEvent") 产物必须支持 initMouseEvent；合成 click 在
+    // checkbox 上要执行默认动作（checked 翻转），TARGET 监听器才能走完 done。
+    var TARGET = document.getElementById('target');
+    var BUTTON = document.getElementById('button');
+    var state;
+    BUTTON.addEventListener('click', TestEvent, true);
+    TARGET.addEventListener('click', TestEvent, true);
+    function TestEvent(evt) {
+      if (BUTTON === evt.target) {
+        var e = document.createEvent("MouseEvent");
+        e.initMouseEvent("click", false, true, window, 1,
+                         0, 0, 0, 0, false, false, false, false, 0, null);
+        TARGET.dispatchEvent(e);
+      } else if (TARGET === evt.target) {
+        document.getElementById('out').textContent =
+          'LEGACY-CLICK-OK checked=' + TARGET.checked + ' bubbles=' + evt.bubbles;
+      }
+    }
+    state = TARGET.checked;
+    BUTTON.click();
+  </script>
+</body>
+</html>

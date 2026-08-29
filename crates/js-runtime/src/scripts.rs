@@ -6612,7 +6612,10 @@ document.createTreeWalker = function(root, whatToShow, filter) { return new Tree
 // M78: document.createEvent —— WPT Event-constants/老式 API 依赖。
 document.createEvent = function(type) {
     var t = String(type || 'Event');
-    if (t === 'MouseEvents') return new MouseEvent('click');
+    // M80.18: 单数 'MouseEvent' 是 WPT uievents/legacy-domevents 实际用法
+    // （dispatchEvent.click.checkbox 等），此前只认复数 'MouseEvents'，
+    // 单数落 new Event('') → 产物无 initMouseEvent → no-results。
+    if (t === 'MouseEvent' || t === 'MouseEvents') return new MouseEvent('click');
     if (t === 'UIEvents' || t === 'HTMLEvents') return new Event('load');
     if (t === 'CustomEvent') return new CustomEvent('');
     if (t === 'TextEvent') {
@@ -7067,6 +7070,13 @@ window.PointerEvent = PointerEvent;
             }
         });
     } catch (e) {}
+    // M80.18: 局部绑定同步升级——createEvent/HTMLElement.click 等内部闭包
+    // 解析到的是局部原始构造器（无 initMouseEvent/initKeyboardEvent），与
+    // 页面可见的 window.MouseEvent 不是同一套类。不重绑则 createEvent 产物
+    // 缺 init*，legacy 事件测试在第二段监听器前断裂。
+    MouseEvent = MouseEvent2;
+    KeyboardEvent = KeyboardEvent2;
+    FocusEvent = FocusEvent2;
     var _unused = [_ME, _KE, _FE]; // 保留旧引用防 GC 提示（未被闭包捕获则编译期裁剪）
 })();
 

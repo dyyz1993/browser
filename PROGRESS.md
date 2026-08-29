@@ -2085,6 +2085,18 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 已知边界：Playwright 双并发连接模型被 M42 单会话串行 accept 限制
   （既有范围）；Puppeteer 单连接路径已验证一致。
 
+**M80.18 —— 批 49（定时）createEvent 单数 MouseEvent + 局部构造器绑定升级**：
+
+- **createEvent('MouseEvent')**（单数）——WPT uievents/legacy-domevents
+  实际用法，此前只认复数 'MouseEvents'，单数落 new Event('') → 产物无
+  initMouseEvent → dispatchEvent.click.checkbox no-results。
+- **局部绑定同步升级**：createEvent/HTMLElement.click 内部闭包解析到的
+  是局部原始构造器（无 init* 方法），与页面可见 window.MouseEvent 不是
+  同一套类——MouseEvent/KeyboardEvent/FocusEvent 局部绑定重指向升级版
+  （MouseEvent2 等），legacy 事件测试不再在第二段监听器前断裂。
+- webapi 64→**65/70**（dispatchEvent.click.checkbox 过，分母 +1 为新增
+  集成用例同源）；872 tests 全绿（+1 legacy 集成）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
