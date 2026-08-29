@@ -2194,6 +2194,17 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - **结论**：提取数据的核心要素（文本/链接/结构路径）与 Chrome 高度
   一致；差异集中在主题 class（提取不需要）和懒加载时序。
 
+**M80.27 —— 批 79（定时）IntersectionObserver 激活（爬虫语义）**：
+
+- 旧版 IO 是纯 no-op（observe 后回调永不触发）——懒加载组件（vite
+  sponsors、lazy 图片）永远不渲染。升级：observe 后异步立即回调一次
+  （entries isIntersecting=true），"所有元素视为已进入视口"——爬虫
+  语义（要全部内容，不要懒）。支持 observe/unobserve/disconnect/
+  takeRecords + entries 的 target/isIntersecting/intersectionRatio/
+  boundingClientRect 字段。
+- vite sponsors 链接未变（66%）——其懒加载在 Vue 异步组件层（onMounted
+  可视区域检测），非 IO；记录为已知。872 tests 全绿 + REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

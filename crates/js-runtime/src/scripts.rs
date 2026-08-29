@@ -3087,8 +3087,36 @@ if (typeof window.__QI_KEY__ === 'undefined') { window.__QI_KEY__ = ''; }
 if (typeof window.__QI_URL__ === 'undefined') { window.__QI_URL__ = ''; }
 if (typeof window.__QI_BASE__ === 'undefined') { window.__QI_BASE__ = ''; }
 
-// IntersectionObserver / ResizeObserver（no-op）
-window.IntersectionObserver = function() { this.observe = function(){}; this.unobserve = function(){}; this.disconnect = function(){}; this.takeRecords = function(){return [];}; };
+// M80.27: IntersectionObserver——爬虫语义：所有元素视为"已进入视口"，
+// observe 后异步立即回调一次（isIntersecting=true），懒加载组件（vite
+// sponsors、图片 lazy）立即渲染。旧 no-op 版让懒加载内容永不出现。
+window.IntersectionObserver = function(callback, options) {
+    this._cb = (typeof callback === 'function') ? callback : null;
+    this._targets = [];
+    var self = this;
+    this.observe = function(el) {
+        self._targets.push(el);
+        // 异步触发一次回调（entries 含所有已观察元素，isIntersecting=true）
+        setTimeout(function() {
+            if (!self._cb) return;
+            var entries = self._targets.map(function(t) {
+                return {
+                    target: t, isIntersecting: true, intersectionRatio: 1,
+                    boundingClientRect: (t.getBoundingClientRect ? t.getBoundingClientRect() : {}),
+                    intersectionRect: (t.getBoundingClientRect ? t.getBoundingClientRect() : {}),
+                    rootBounds: null, time: performance.now()
+                };
+            });
+            try { self._cb(entries, self); } catch (e) {}
+        }, 0);
+    };
+    this.unobserve = function(el) {
+        var i = self._targets.indexOf(el);
+        if (i >= 0) self._targets.splice(i, 1);
+    };
+    this.disconnect = function() { self._targets = []; };
+    this.takeRecords = function(){return [];};
+};
 window.ResizeObserver = function() { this.observe = function(){}; this.unobserve = function(){}; this.disconnect = function(){}; };
 
 window.performance = {
