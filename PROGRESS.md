@@ -2108,6 +2108,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 实测 webapi **66/70**（getter 修复连带救回一个既有失败页），全量 verdict
   0.911→**0.9162**；门禁三连全绿（fmt / clippy -D / 872 tests）。
 
+**M80.19 —— 批 50（定时）真站点点击工作流验证通过 + `<a>` 默认导航补齐**：
+
+- **发现**：--click 合成 MouseEvent 只派发事件，`<a href>` 的**默认
+  导航行为**缺失——bark 侧栏点击后 hash 不变、docsify 不拉新页。
+- **修复**：click_post_exprs 两处表达式补默认导航——dispatchEvent 未被
+  preventDefault 且 target 是 `<a href>` 时执行导航（hash → location.hash
+  触发 hashchange；其他 → location.href）。el.click() 路径同（批 50 前段
+  已在 click() 里补）。
+- **真站 A/B 实证**（bark.day.app）：点击侧栏 `#/deploy` → hash 切换 +
+  docsify XHR 拉取部署 markdown + 内容区渲染 `docker run -dt --name
+  bark...` 部署详情——**SPA 点击路由爬取工作流成立**。不点击对照组
+  无此内容。
+- 872 tests 全绿 + REALITY PASS。ASCII 路径零变化。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

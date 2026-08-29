@@ -5117,7 +5117,19 @@ Element.prototype.removeEventListener = function(type, cb) {};
 Element.prototype.click = function() {
     var ev = new MouseEvent('click', { bubbles: true, cancelable: true,
         view: (typeof window !== 'undefined') ? window : null });
-    this.dispatchEvent(ev);
+    var notCanceled = this.dispatchEvent(ev);
+    // M80.19: <a href> 点击默认行为——未 preventDefault 时执行导航
+    //（hash 链接 → __setLocHref 触发 hashchange；其他 → location.href）。
+    // docsify/vue-router 等 hash 路由 SPA 的侧栏点击依赖此语义。
+    if (notCanceled && this.tagName === 'A') {
+        var href = null;
+        try { href = __getAttr(this.__nodeId, 'href'); } catch (e) {}
+        if (href && href.charAt(0) === '#') {
+            try { __setLocHref(href); } catch (e2) {}
+        } else if (href && href.indexOf('javascript:') !== 0) {
+            try { __setLocHref(href); } catch (e2) {}
+        }
+    }
 };
 // M78.129: capture 标志登记（__listenerCaps[type][i] 与 __listeners[type][i] 一一对应）。
 // 供 dispatchEvent 三阶段过滤：capture listener 只在 capture 相位触发，

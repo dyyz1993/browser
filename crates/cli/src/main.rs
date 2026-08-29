@@ -1195,7 +1195,7 @@ fn click_post_exprs(selectors: &[String]) -> Vec<String> {
                      if(t.length>0&&t.indexOf('{esc}')>=0&&t.length<bl){{best=els[i];bl=t.length;}}}}\
                      if(!best||typeof best.__nodeId!=='number'){{return -1;}}\
                      var ev=new MouseEvent('click',{{bubbles:true,cancelable:true,view:window}});\
-                     best.dispatchEvent(ev);return best.__nodeId;}})()"
+                     var nc=best.dispatchEvent(ev);                     if(nc&&best.tagName==='A'){{var h=best.getAttribute('href');                     if(h){{if(h.charAt(0)==='#'){{location.hash=h.slice(1);}}else{{location.href=h;}}}}}}                     return best.__nodeId;}})()"
                 )
             } else {
                 let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
@@ -1206,7 +1206,7 @@ fn click_post_exprs(selectors: &[String]) -> Vec<String> {
                      var cx=0,cy=0;try{{var r=el.getBoundingClientRect();\
                      if(r){{cx=(r.left||0)+(r.width||0)/2;cy=(r.top||0)+(r.height||0)/2;}}}}catch(re){{}}\
                      var ev=new MouseEvent('click',{{bubbles:true,cancelable:true,view:window,\
-                     clientX:cx,clientY:cy}});el.dispatchEvent(ev);return el.__nodeId;}})()"
+                     clientX:cx,clientY:cy}});var nc=el.dispatchEvent(ev);                     if(nc&&el.tagName==='A'){{var h=el.getAttribute('href');                     if(h){{if(h.charAt(0)==='#'){{location.hash=h.slice(1);}}else{{location.href=h;}}}}}}                     return el.__nodeId;}})()"
                 )
             }
         })
