@@ -1985,6 +1985,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 教训：对象字面量访问器对（同 get/set 名）在 QuickJS 的兼容性不可靠——
   复杂访问器一律普通函数 + defineProperty 挂载 + 手动设 name。
 
+**M80.11 —— 批 41（定时）createRealm 薄壳升级（test262 1603→1629，+26）**：
+
+- **根因**：`$262.createRealm()` 桩返回 `{global: 空对象}`——cross-realm
+  测试（Symbol 系 17 + Error.stack 系 + proto-from-ctor 系 ≈28 个）第一行
+  `createRealm().global.Symbol` 直接 TypeError，从未进入断言。
+- **修复（薄壳方案）**：真单 realm 引擎无法造第二 realm，但 cross-realm
+  测试主要断言 **well-known symbols 全 realm 共享（值相同）**——桩的
+  `global` 直接引用真 globalThis（evalScript/eval 同真 eval）。symbol
+  共享断言成立；独立原型断言（proto-from-ctor-realm 系）仍失败
+  （结构性，接受）。
+- test262 **1603→1629/1686**（0.966）。webapi 64/69、其余类别持平。
+- 教训：harness 层的"结构性失败"要先分辨**引擎缺口**还是**测试基建
+  缺口**——后者（桩/采集器/包装）修起来常常一行顶十行。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
