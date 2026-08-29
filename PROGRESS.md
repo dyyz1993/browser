@@ -2013,6 +2013,17 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   回退并记录（本批 QuickJS construct 链路行为无法用探针稳定观测），
   把时间让给其他方向。
 
+**M80.13 —— 批 43（定时）全量 verdict 重算 + 结构性清单定稿**：
+
+- **VERDICT: PASS 0.911**（js 0.966 / html 0.891 / css 1.000 /
+  webapi 0.927 / storage 0.757，spa_task 1.000）。REALITY PASS。
+- DataView/ArrayBuffer 20 个失败确认为 detached-buffer 内部槽语义
+  （引擎级，非 polyfill 可达）——列入结构性清单。
+- 结构性清单定稿（JSON/报告双处维护）：cross-realm 独立原型断言、
+  Error.stack 引擎栈捕获+Proxy trap、detached ArrayBuffer/DataView、
+  RegExp modifiers/v-flag、window.open 多窗口 session、per-iframe
+  location、ReadablableStream 微任务流、legacy 测试基建。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
