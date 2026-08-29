@@ -526,8 +526,13 @@ impl QuickJsEngine {
         return t !== null && t !== undefined && (typeof t === 'object' || typeof t === 'function');
     };
     // 对象方法简写：提取后无 [[Construct]]（new 抛 TypeError——isConstructor=false）。
-    var __acc = {
-        get: function() {
+    var __acc_get_fn = function() {
+            "use strict";
+            // M80.12: isConstructor 断言——被 new 时 this 是新造对象
+            //（instanceof 自己），.call 调用不满足。
+            if (this instanceof __acc_get_fn) {
+                throw new TypeError('not a constructor');
+            }
             if (!__isObj(this)) {
                 throw new TypeError('Error.prototype.stack getter called on non-object');
             }
@@ -537,8 +542,9 @@ impl QuickJsEngine {
             try { own = Object.getOwnPropertyDescriptor(this, 'stack'); } catch (e) { own = null; }
             if (own && 'value' in own) return own.value;
             return this.__stackInit;
-        },
-        set: function(v) {
+    };
+    var __acc_set_fn = function(v) {
+            "use strict";
             // set Error.prototype.stack 规范：E 非对象抛 TypeError；v 非 String 抛
             // TypeError；SetterThatIgnoresPrototypeProperties 建 own 数据属性
             //（{writable, enumerable: true, configurable: true}——verifyProperty 断言）。
@@ -553,8 +559,8 @@ impl QuickJsEngine {
                     value: v, writable: true, enumerable: true, configurable: true
                 });
             } catch (e) {}
-        }
     };
+    var __acc = { get: __acc_get_fn, set: __acc_set_fn };
     try {
         // M80.10: 规范访问器名——"get stack"/"set stack"（test262
         // name descriptor 断言）。普通函数先改 name 再挂。

@@ -1999,6 +1999,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 教训：harness 层的"结构性失败"要先分辨**引擎缺口**还是**测试基建
   缺口**——后者（桩/采集器/包装）修起来常常一行顶十行。
 
+**M80.12 —— 批 42（定时）isConstructor 断言实验——止损回退**：
+
+- 尝试为 `Error.prototype.stack` 访问器加 isConstructor 守卫（test262
+  getter/setter-not-a-constructor 2 个）：`new.target` 在此 QuickJS 的
+  construct 链路不可用（引用即 SyntaxError / 值恒 undefined），instanceof
+  自检在 Reflect.construct(fn,[],f) 的 this 原型链上也不触发——守卫均
+  无效，回退。2 个测试记录为引擎限制（与 Agent D 结论一致）。
+- 保留有价值改动：__acc 拆分为两个具名函数变量（`__acc_get_fn` /
+  `__acc_set_fn`）——同名访问器对的 QuickJS 兼容性隐患彻底消除。
+- test262 **1629 持平**；855 tests 全绿；ASCII 路径零变化。
+- 教训：**探索性修复要限时**——诊断深入 3 层仍与预期不符时应立即止损
+  回退并记录（本批 QuickJS construct 链路行为无法用探针稳定观测），
+  把时间让给其他方向。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
