@@ -2096,6 +2096,17 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   （MouseEvent2 等），legacy 事件测试不再在第二段监听器前断裂。
 - webapi 64→**65/70**（dispatchEvent.click.checkbox 过，分母 +1 为新增
   集成用例同源）；872 tests 全绿（+1 legacy 集成）。
+- **补遗（5274eab，同批第二/三段修复）**：
+  ① 布尔反射属性假真 bug——原生桥 `__getAttr` 对缺失属性返回 **undefined**
+  （Rust None 过桥语义），getter 的 `!== null` 恒真 → checked/hidden/
+  disabled/selected 在无属性时全部假读 true。统一 `__hasAttrX` 双检
+  （undefined/null）。此 bug 同时解释了批 49 探针里"checkbox 初始即勾选"。
+  ② checkbox 合成点击 **pre-click activation**——dispatchEvent 派发**前**
+  翻转 checked（Chrome 语义：listener 内读到的已是翻转值，WPT
+  dispatchEvent.click.checkbox 的 `!state` 断言依赖），preventDefault 生效
+  则派发结束后回退；radio 同组互斥语义未实现（后续批）。
+- 实测 webapi **66/70**（getter 修复连带救回一个既有失败页），全量 verdict
+  0.911→**0.9162**；门禁三连全绿（fmt / clippy -D / 872 tests）。
 
 ## 文档维护规则
 
