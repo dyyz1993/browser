@@ -2024,6 +2024,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   RegExp modifiers/v-flag、window.open 多窗口 session、per-iframe
   location、ReadablableStream 微任务流、legacy 测试基建。
 
+**M80.14 —— 批 44（定时）nuxt 性能复测：47s → 11-18s**：
+
+- 三连实测 17.6/14.4/11.2s；profile：fetch+parse 1.2s、scripts 16.3s
+  （119 个 ESM 模块 eval 本身）、event loop 0.3s。批 47s 实测是 CDN
+  高峰网络波动，非代码回归——批 30 的并行预取在 nuxt 上同样兑现。
+- vs Chrome 8s：现慢 1.4-2.2x（原 11.9x）。剩余空间是 ESM 模块 eval
+  引擎级开销，非管线可优化项。
+- 基准表更新：react.dev 7.9s（8.3x）、nuxt 11-18s（原 94.9s）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
