@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head><title>Click Target</title></head>
+<body>
+  <button id="btn" onclick="document.getElementById('out').textContent='CLICKED-OK'">Press</button>
+  <button id="async-btn">Async</button>
+  <div id="out">before</div>
+  <script>
+    document.getElementById('async-btn').addEventListener('click', function () {
+      setTimeout(function () {
+        document.getElementById('out').textContent = 'ASYNC-CLICK-OK';
+      }, 50);
+    });
+  </script>
+</body>
+</html>

@@ -65,7 +65,7 @@ pub use navigation_shim::install_navigation_globals;
 pub use runtime::JsRuntime;
 pub use scripts::{
     eval_in_tree, eval_in_tree_engine, extract_scripts, run_scripts, run_scripts_with_base,
-    run_scripts_with_base_engine, script_cache_public,
+    run_scripts_with_base_engine, run_scripts_with_post_exprs, script_cache_public,
 };
 // M71.1: execute_scripts* 是 boa 专属（吃 boa Context）。
 #[cfg(feature = "boa")]

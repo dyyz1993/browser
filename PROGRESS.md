@@ -2042,6 +2042,28 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   是端口冲突测量伪影。
 - 定时循环后续不再需要临时切端口。
 
+**M80.16 —— 批 47（定时）最小可用点击交互（响应"点得了吗"关注）**：
+
+- **命中测试**：`pixel::hit_test(tree, x_px, y_px) -> Option<NodeId>`——
+  深度优先子盒优先（CSS 命中语义），格换算与 render_pixel 同映射
+  （看到的盒 = 命中的盒）。6 个单元测试。
+- **`--click <selector>`**（可多次，render-url/file/script 三命令）：
+  CSS 选择器 + `text=xxx` 文本匹配；执行点在页面脚本+事件循环**之后**、
+  布局/截图**之前**——同引擎会话内 eval 合成 MouseEvent
+  （bubbles/clientX/Y/view）+ dispatchEvent，每次点击后泵事件循环
+  （500ms 上限 + timer 地平线语义）。
+- **两个关键发现驱动实现**：① 监听器寿命 = 引擎会话寿命（__elCache
+  缓存在包装上，run_scripts 返回即失）→ 新增 `run_scripts_with_post_exprs`
+  pub API；② dispatchEvent 原本不触发 on* 处理器（onclick 属性和
+  el.onclick=fn 都不触发）→ target 相位补齐（property 优先，否则
+  __getAttr + new Function 编译，GC 安全）。`Element.prototype.click()`
+  原型方法同步补齐（两引擎）。
+- **实证**：onclick 属性 ✓ / addEventListener 异步 handler ✓ /
+  text= 匹配 ✓ / el.click() ✓ / 链式点击（点击→fetch→二次点击读
+  fetch 后 DOM）✓ / 未命中上报 ✓。CDP `Input.dispatchMouseEvent`
+  去除 no-op 的入口已预留（hit_test + run_scripts_with_post_exprs）。
+- 864 tests 全绿（+9：integration_click 3 用例 + hit_test 6 单测）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

@@ -506,11 +506,38 @@ Object.defineProperty(Element.prototype, 'tagName', {
             this.__listeners[type] = this.__listeners[type].filter(function(f) { return f !== cb; });
         };
         Element.prototype.dispatchEvent = function(ev) {
-            if (!this.__listeners || !ev || !this.__listeners[ev.type]) return true;
-            var cbs = this.__listeners[ev.type];
-            ev.target = this; ev.currentTarget = this;
-            for (var i = 0; i < cbs.length; i++) { try { cbs[i](ev); } catch(e) {} }
+            if (!ev) return true;
+            if (this.__listeners && this.__listeners[ev.type]) {
+                var cbs = this.__listeners[ev.type];
+                ev.target = this; ev.currentTarget = this;
+                for (var i = 0; i < cbs.length; i++) { try { cbs[i](ev); } catch(e) {} }
+            }
+            // M81: on* 处理器——property 赋值（el.onclick = fn）优先，其次读
+            // DOM 树属性表（<button onclick="...">）。new Function 全局作用域
+            // 编译，局部变量不外存。
+            if (ev && ev.type) {
+                var __onh = this['on' + ev.type];
+                if (typeof __onh !== 'function') {
+                    try {
+                        var __onattr = __getAttr(this.__nodeId, 'on' + ev.type);
+                        if (typeof __onattr === 'string' && __onattr) {
+                            try { __onh = new Function('event', __onattr); } catch (cfe) { __onh = null; }
+                        }
+                    } catch (gfe) { __onh = null; }
+                }
+                if (typeof __onh === 'function') {
+                    ev.target = this; ev.currentTarget = this;
+                    try { __onh.call(this, ev); } catch(one) {}
+                }
+            }
             return true;
+        };
+        // M81: HTMLElement.click()——合成 click MouseEvent 并 dispatch
+        // （bubbles/cancelable 对齐浏览器；MouseEvent 由 compat_shim 定义，
+        // 调用期解析）。
+        Element.prototype.click = function() {
+            var ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+            this.dispatchEvent(ev);
         };
         Element.prototype.scrollIntoView = function() {};
         Element.prototype.getClientRects = function() { return []; };

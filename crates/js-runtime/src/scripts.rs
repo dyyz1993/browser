@@ -1385,11 +1385,15 @@ fn fire_dyn_pending(engine: &mut crate::engine_quickjs::QuickJsEngine, raw_src: 
 
 /// M66-B: QuickJS 专用执行路径。
 /// 安装 bridge（已在 engine 内部完成）+ JS shim + eval 脚本 + event loop。
+/// M81: `post_exprs` —— 页面脚本 + 事件循环跑完后在同一会话内按序 eval 的
+/// 表达式（`--click` 合成点击用；addEventListener 监听器注册在会话内
+/// `__elCache` 缓存的元素包装上，引擎 drop 即失效，点击必须留在本会话）。
 #[cfg(feature = "quickjs")]
 fn run_scripts_quickjs(
     shared: crate::bridge::SharedTree,
     base_url: Option<String>,
     mut engine_box: Box<dyn crate::engine::JsEngine>,
+    post_exprs: &[String],
 ) -> (crate::bridge::SharedTree, usize) {
     // downcast 到 QuickJsEngineWrapper（需要 &mut）
     let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (*engine_box)
@@ -2058,11 +2062,79 @@ fn run_scripts_quickjs(
         }
         std::thread::sleep(std::time::Duration::from_millis(EL_TICK_MS));
     }
+    // M81: --click 后处理——同一会话内按序合成点击，每次后泵一轮事件循环
+    // （点击回调常排 setTimeout(0)/fetch，需 drain 才能反映到 DOM）。
+    if !post_exprs.is_empty() {
+        run_post_exprs_quickjs(engine, post_exprs);
+    }
     // M66-fix: 最后再 drain 一轮（最后一波 timer 回调可能 schedule 了 microtask）。
     engine.run_jobs();
     engine.gc();
     eprintln!("[serve] event_loop: {}ms", el_start.elapsed().as_millis());
     (shared, executed)
+}
+
+/// M81: 单次合成点击后的事件循环泵上限（ms）。点击回调排 setTimeout/fetch
+/// 需要时间完成；上限防挂死（对齐主循环 EL_TICK/IDLE 语义，窗口更短）。
+const CLICK_PUMP_MAX_MS: u64 = 500;
+
+/// M81: 在同一 QuickJS 会话内按序 eval 点击表达式，每次后泵一轮事件循环。
+/// 表达式约定返回数字：`-1` = 未命中（选择器没匹配到元素）；否则目标 nodeId。
+#[cfg(feature = "quickjs")]
+fn run_post_exprs_quickjs(
+    engine: &mut crate::engine_quickjs::QuickJsEngine,
+    post_exprs: &[String],
+) {
+    for (idx, expr) in post_exprs.iter().enumerate() {
+        match engine.eval_i32(expr) {
+            Some(-1) => eprintln!("[click] #{idx} no element matched"),
+            Some(id) => eprintln!("[click] #{idx} dispatched on node {id}"),
+            None => eprintln!("[click] #{idx} eval failed (see [js] errors above)"),
+        }
+        pump_after_click_quickjs(engine, CLICK_PUMP_MAX_MS);
+    }
+}
+
+/// M81: 点击后事件循环泵——drain 动态 script / timer / microtask / WS 事件，
+/// 连续 idle 三轮或超时退出。镜像 `run_scripts_quickjs` 主循环的 drain 顺序
+/// （动态 script → timer → transition → WS → microtask）。
+#[cfg(feature = "quickjs")]
+fn pump_after_click_quickjs(engine: &mut crate::engine_quickjs::QuickJsEngine, max_ms: u64) {
+    let start = std::time::Instant::now();
+    let deadline = std::time::Duration::from_millis(max_ms);
+    let mut idle_rounds = 0u32;
+    while idle_rounds < 3 && start.elapsed() < deadline {
+        let dyn_executed = drain_and_eval_dynamic_scripts(engine);
+        let fired = engine.eval_i32("__drainDueTimers()").unwrap_or(0);
+        let _ = engine.eval_i32("__drainDueTransitions()").unwrap_or(0);
+        let ws_events = crate::bridge::drain_ws_events();
+        let mut ws_fired = 0usize;
+        for (id, etype, data) in &ws_events {
+            let escaped = data.replace('\\', "\\\\").replace('\'', "\\'");
+            let js = format!("__wsDispatchEvent({id}, '{etype}', '{escaped}')");
+            let _ = engine.eval_safe(&js);
+            ws_fired += 1;
+        }
+        if fired > 0 || dyn_executed > 0 || ws_fired > 0 {
+            engine.run_jobs();
+            idle_rounds = 0;
+        } else {
+            // M78.8 同款地平线语义：500ms 内有待到期 timer → 视为活动不推进
+            // idle（点击回调常排 setTimeout(50-200ms)，3 个 idle tick ~15ms
+            // 就退出的话永远等不到它）。
+            let pending_soon = engine
+                .eval_js_bool("__nextTimerDueInMs()<=500")
+                .unwrap_or(false);
+            if pending_soon {
+                idle_rounds = 0;
+            } else {
+                engine.run_jobs();
+                idle_rounds += 1;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    engine.run_jobs();
 }
 
 /// M66-B: 获取所有 JS shim 的 JS 字符串（引擎无关）。
@@ -5032,6 +5104,14 @@ document.importNode = function(node, deep) {
     try { return node.cloneNode(deep !== false); } catch(e) { return null; }
 };
 Element.prototype.removeEventListener = function(type, cb) {};
+// M81: HTMLElement.click()——合成 click MouseEvent 并 dispatch
+// （bubbles/cancelable 对齐浏览器；坐标 0——合成点击无真实指针）。
+// MouseEvent 构造器在 XHR shim 段定义，调用期解析（eval 期不引用）。
+Element.prototype.click = function() {
+    var ev = new MouseEvent('click', { bubbles: true, cancelable: true,
+        view: (typeof window !== 'undefined') ? window : null });
+    this.dispatchEvent(ev);
+};
 // M78.129: capture 标志登记（__listenerCaps[type][i] 与 __listeners[type][i] 一一对应）。
 // 供 dispatchEvent 三阶段过滤：capture listener 只在 capture 相位触发，
 // 非 capture 只在 at-target/bubble 相位触发（at-target 全部按注册序触发）。
@@ -5105,6 +5185,32 @@ Element.prototype.dispatchEvent = function(ev) {
     // WPT Event-stopPropagation-cancel-bubbling）。
     if (!__stopped()) __elVisit(this, 2, 1);
     if (!__stopped()) __elVisit(this, 2, 3);
+    // M81: on* 处理器——target 相位在 addEventListener 监听器之后触发
+    // （浏览器语义：attribute/property handler 是按注册序排最后的
+    // bubble-phase listener）。两种来源：property 赋值（el.onclick = fn）
+    // 优先；否则读 DOM 树属性表（<button onclick="...">，__getAttr），
+    // 以 `event` 为参数名 new Function 编译（全局作用域，无词法捕获）。
+    // 局部变量不外存——QuickJS GC 安全。
+    if (!__stopped() && ev && ev.type) {
+        var __onh = this['on' + ev.type];
+        if (typeof __onh !== 'function') {
+            try {
+                var __onattr = __getAttr(this.__nodeId, 'on' + ev.type);
+                if (typeof __onattr === 'string' && __onattr) {
+                    try { __onh = new Function('event', __onattr); } catch (__cfe) { __onh = null; }
+                }
+            } catch (__gfe) { __onh = null; }
+        }
+        if (typeof __onh === 'function') {
+            ev.currentTarget = this;
+            try { __onh.call(this, ev); } catch (__one) {
+                try {
+                    var __om = (__one && __one.message !== undefined) ? String(__one.message) : String(__one);
+                    if (typeof window.onerror === 'function') window.onerror(__om, '', 0, 0, __one);
+                } catch (__oe2) {}
+            }
+        }
+    }
     // Phase 3: bubble（target 父 → 根 → document → window，仅 bubbles=true）
     if (ev.bubbles) {
         for (var bi = 1; bi < chain.length; bi++) {
@@ -7535,6 +7641,21 @@ pub fn run_scripts_with_base_engine(
     base_url: Option<String>,
     engine_kind: &crate::engine::EngineKind,
 ) -> (crate::bridge::SharedTree, usize) {
+    run_scripts_with_post_exprs(tree, base_url, engine_kind, &[])
+}
+
+/// M81: [`run_scripts_with_base_engine`] 的 `--click` 扩展版——页面脚本 +
+/// 事件循环跑完后，在**同一引擎会话**内按序 eval `post_exprs`（合成点击）。
+/// addEventListener 监听器注册在会话内 `__elCache` 缓存的元素包装上，
+/// 引擎 drop 即失效——点击必须留在本会话，不能事后开新引擎补 eval。
+/// 当前仅 QuickJS 实现；boa 引擎忽略（告警）。
+#[must_use]
+pub fn run_scripts_with_post_exprs(
+    tree: Tree,
+    base_url: Option<String>,
+    engine_kind: &crate::engine::EngineKind,
+    post_exprs: &[String],
+) -> (crate::bridge::SharedTree, usize) {
     use std::cell::RefCell;
     use std::rc::Rc;
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
@@ -7565,7 +7686,7 @@ pub fn run_scripts_with_base_engine(
     // M66-B: QuickJS 走独立执行路径（不经过 boa Context）。
     #[cfg(feature = "quickjs")]
     if engine_name == "quickjs" {
-        return run_scripts_quickjs(shared, base_url, engine);
+        return run_scripts_quickjs(shared, base_url, engine, post_exprs);
     }
     #[cfg(not(feature = "quickjs"))]
     if engine_name == "quickjs" {
@@ -7576,6 +7697,9 @@ pub fn run_scripts_with_base_engine(
     //（QuickJS 分支已 return，或 EngineKind 只有 QuickJs）。
     #[cfg(feature = "boa")]
     {
+        if !post_exprs.is_empty() {
+            eprintln!("[js-runtime] --click post evals not supported on boa engine; ignored");
+        }
         #[allow(clippy::needless_return)]
         return run_scripts_with_base_boa(shared, base_url, engine, engine_name);
     }
@@ -7583,6 +7707,7 @@ pub fn run_scripts_with_base_engine(
     {
         let _ = engine;
         let _ = engine_name;
+        let _ = post_exprs;
         // 不可能到达：engine_kind 只能是 QuickJs，上面已 return。
         (shared, 0)
     }

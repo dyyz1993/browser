@@ -266,6 +266,50 @@ pub fn layout_columns_for_px(px_width: usize) -> usize {
     ((px_width as f32 / cell_w).round() as usize).max(1)
 }
 
+/// M81: 屏幕坐标命中测试——CSS px 坐标 → 最深层带 `element_id` 的布局盒。
+///
+/// 入参是 CSS px（与 pixel 模式 `--width` 语义一致，scale=1.0）；布局坐标
+/// 是字符格单位，按 [`cell_metrics`] 的 `cell_w`/`line_h` 换算（与
+/// [`render_pixel`] 相同的映射，保证"看到的盒子"和"命中的盒子"一致）。
+///
+/// 算法：深度优先遍历盒树，**子盒优先**（更深的 DOM 节点接收事件——CSS
+/// 命中语义的最内层元素规则）；子树都不含点时本盒若包含点且带
+/// `element_id` 则命中（Anonymous 等无 id 盒自动跳过，命中落到其祖先）。
+/// 右/下边缘半开区间（`x < x0+w`），零宽/高盒不命中。
+///
+/// 供 CLI `--click` 与 CDP `Input.dispatchMouseEvent`（坐标→NodeId）复用。
+#[must_use]
+pub fn hit_test(tree: &LayoutTree, x_px: f32, y_px: f32) -> Option<NodeId> {
+    let (cell_w, line_h) = cell_metrics();
+    if !x_px.is_finite() || !y_px.is_finite() || cell_w <= 0.0 || line_h <= 0.0 {
+        return None;
+    }
+    let xc = x_px / cell_w;
+    let yc = y_px / line_h;
+    deepest_hit(&tree.root, xc, yc)
+}
+
+/// [`hit_test`] 的递归体：`(x, y)` 已换算为格单位。子树有命中（含跨越
+/// 无 id 盒落到祖先的命中）时以子树为准，否则本盒自匹配。
+fn deepest_hit(bx: &LayoutBox, xc: f32, yc: f32) -> Option<NodeId> {
+    for child in &bx.children {
+        if let Some(id) = deepest_hit(child, xc, yc) {
+            return Some(id);
+        }
+    }
+    let d = &bx.dimensions;
+    if d.width > 0.0
+        && d.height > 0.0
+        && xc >= d.x
+        && xc < d.x + d.width
+        && yc >= d.y
+        && yc < d.y + d.height
+    {
+        return bx.element_id;
+    }
+    None
+}
+
 /// M80: 把布局树光栅化为 RGBA 位图。
 ///
 /// - `styles`：`compute_styles` 产物（含 UA 阶梯），用于读每元素的
@@ -1422,5 +1466,88 @@ mod tests {
             matches!(parse_font_ratio("32px"), FontRatio::Absolute(v) if (v - 2.0).abs() < 1e-6)
         );
         assert!(matches!(parse_font_ratio("garbage"), FontRatio::Em(v) if (v - 1.0).abs() < 1e-6));
+    }
+
+    // ---- M81: hit_test 屏幕坐标命中测试 ----
+
+    fn box_at(id: Option<NodeId>, x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
+        let mut b = LayoutBox::new(BoxType::Block);
+        b.element_id = id;
+        b.dimensions = Dimensions::new(x, y, w, h);
+        b
+    }
+
+    #[test]
+    fn hit_test_hits_box_and_converts_px() {
+        // 盒 (0,0,10,2) 格；格中心 (5,1) 换算成 px 必须命中 element_id=7。
+        let tree = LayoutTree {
+            root: box_at(Some(7), 0.0, 0.0, 10.0, 2.0),
+        };
+        let (cw, lh) = cell_metrics();
+        assert_eq!(hit_test(&tree, 5.0 * cw, 1.0 * lh), Some(7));
+        // 右缘外（x >= 10*cw）不命中。
+        assert_eq!(hit_test(&tree, 10.0 * cw + 1.0, 1.0 * lh), None);
+        // 下缘外（y >= 2*lh）不命中。
+        assert_eq!(hit_test(&tree, 5.0 * cw, 2.0 * lh), None);
+    }
+
+    #[test]
+    fn hit_test_skips_anonymous_to_ancestor() {
+        // 无 id 的中间盒（Anonymous）：点落在其中时命中其带 id 的祖先。
+        let anon = box_at(None, 0.0, 0.0, 20.0, 5.0);
+        let mut root = box_at(Some(3), 0.0, 0.0, 40.0, 10.0);
+        root.children.push(anon);
+        let tree = LayoutTree { root };
+        let (cw, lh) = cell_metrics();
+        assert_eq!(hit_test(&tree, 1.0 * cw, 0.5 * lh), Some(3));
+    }
+
+    #[test]
+    fn hit_test_none_on_empty_tree_and_nan() {
+        let tree = LayoutTree {
+            root: LayoutBox::new(BoxType::Block),
+        };
+        assert_eq!(hit_test(&tree, 10.0, 10.0), None);
+        let tree2 = LayoutTree {
+            root: box_at(Some(1), 0.0, 0.0, 10.0, 2.0),
+        };
+        assert_eq!(hit_test(&tree2, f32::NAN, 1.0), None);
+        assert_eq!(hit_test(&tree2, -1.0, -1.0), None);
+    }
+
+    #[test]
+    fn hit_test_zero_size_box_never_hits() {
+        // 零宽/高盒不命中（退化盒防御）。
+        let tree = LayoutTree {
+            root: box_at(Some(9), 5.0, 5.0, 0.0, 1.0),
+        };
+        let (cw, lh) = cell_metrics();
+        assert_eq!(hit_test(&tree, 5.0 * cw, 5.0 * lh), None);
+    }
+
+    #[test]
+    fn hit_test_deepest_child_wins_over_parent() {
+        // 父 id=1 (0,0,40,10)，子 id=2 (2,1,6,1)：重叠区命中更深的子。
+        let child = box_at(Some(2), 2.0, 1.0, 6.0, 1.0);
+        let mut root = box_at(Some(1), 0.0, 0.0, 40.0, 10.0);
+        root.children.push(child);
+        let tree = LayoutTree { root };
+        let (cw, lh) = cell_metrics();
+        assert_eq!(hit_test(&tree, 3.0 * cw, 1.5 * lh), Some(2));
+        // 父独占区域命中父。
+        assert_eq!(hit_test(&tree, 20.0 * cw, 8.0 * lh), Some(1));
+    }
+
+    #[test]
+    fn hit_test_first_matching_sibling_wins() {
+        // 两个同级盒重叠时，树序在前的先命中（绘制顺序近似）。
+        let a = box_at(Some(1), 0.0, 0.0, 10.0, 2.0);
+        let b = box_at(Some(2), 0.0, 0.0, 10.0, 2.0);
+        let mut root = box_at(None, 0.0, 0.0, 40.0, 10.0);
+        root.children.push(a);
+        root.children.push(b);
+        let tree = LayoutTree { root };
+        let (cw, lh) = cell_metrics();
+        assert_eq!(hit_test(&tree, 1.0 * cw, 1.0 * lh), Some(1));
     }
 }

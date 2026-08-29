@@ -78,6 +78,11 @@ enum Cmd {
         /// 契约，默认）；pixel = 2D 画布近似渲染，此时 --width 按 CSS px 解释。
         #[arg(long, default_value = "ascii")]
         render_mode: String,
+        /// M81: 合成点击（可多次）。JS 跑完后、渲染/截图前按序执行：
+        /// querySelector → 合成 MouseEvent click → 泵事件循环。
+        /// 支持 CSS 选择器与 `text=xxx`（textContent 包含匹配）。
+        #[arg(long = "click")]
+        clicks: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -95,6 +100,9 @@ enum Cmd {
         /// M80: 截图渲染模式（ascii | pixel）。含义同 render-file。
         #[arg(long, default_value = "ascii")]
         render_mode: String,
+        /// M81: 合成点击（可多次）。含义同 render-file。
+        #[arg(long = "click")]
+        clicks: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -130,6 +138,11 @@ enum Cmd {
         /// M66: JS engine (boa | quickjs). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
+        /// M81: 合成点击（可多次）。JS 跑完后、渲染/截图前按序执行：
+        /// querySelector → 合成 MouseEvent click → 泵事件循环。
+        /// 支持 CSS 选择器与 `text=xxx`。仅 QuickJS 引擎生效。
+        #[arg(long = "click")]
+        clicks: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -367,24 +380,36 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             screenshot,
             max_height,
             render_mode,
+            clicks,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
+            // M81: --click 表达式（同会话合成点击；空列表 = 原行为）。
+            let click_exprs = click_post_exprs(&clicks);
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
             if render_mode == "pixel" {
                 let text = match &screenshot {
-                    Some(p) => {
-                        render_pixel_screenshot(&html, width, true, None, "boa", p, max_height)?
+                    Some(p) => render_pixel_screenshot(
+                        &html,
+                        width,
+                        true,
+                        None,
+                        "boa",
+                        p,
+                        max_height,
+                        &click_exprs,
+                    )?,
+                    None => {
+                        render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?
                     }
-                    None => render_html_to_string(&html, width, true, None)?,
                 };
                 print!("{text}");
                 return Ok(());
             }
             // M37: render-file 现在执行 JS + 等待异步（setTimeout/fetch/XHR/WS）。
             // 之前 run_js=false 导致 SPA 动态内容永远不渲染。
-            let text = render_html_to_string(&html, width, true, None)?;
+            let text = render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?;
             print!("{text}");
             if let Some(p) = screenshot {
                 let colored = render_html_to_string_colored(&html, width, true, None)?;
@@ -399,21 +424,33 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             screenshot,
             max_height,
             render_mode,
+            clicks,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
+            let click_exprs = click_post_exprs(&clicks);
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
                 let text = match &screenshot {
-                    Some(p) => {
-                        render_pixel_screenshot(&html, width, true, None, "boa", p, max_height)?
+                    Some(p) => render_pixel_screenshot(
+                        &html,
+                        width,
+                        true,
+                        None,
+                        "boa",
+                        p,
+                        max_height,
+                        &click_exprs,
+                    )?,
+                    None => {
+                        render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?
                     }
-                    None => render_html_to_string(&html, width, true, None)?,
                 };
                 print!("{text}");
             } else {
-                let text = render_html_to_string(&html, width, true, None)?;
+                let text =
+                    render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?;
                 print!("{text}");
                 if let Some(p) = screenshot {
                     let colored = render_html_to_string_colored(&html, width, true, None)?;
@@ -446,10 +483,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             assert_network_idle,
             js_memory_limit_mb,
             js_engine,
+            clicks,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
+            let click_exprs = click_post_exprs(&clicks);
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
             if render_mode == "pixel" {
@@ -462,6 +501,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                         &js_engine,
                         p,
                         max_height,
+                        &click_exprs,
                     )?,
                     None => {
                         let cols = browser_render::layout_columns_for_px(width);
@@ -474,6 +514,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                             &js_engine,
                             true,
                             browser_render::pixel::cell_metrics().1,
+                            &click_exprs,
                         )?;
                         render_ascii(&layout, cols)
                     }
@@ -482,7 +523,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             } else {
                 // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。
                 // M66: QuickJS 引擎内存效率高，跳过沙箱直接进程内渲染。
-                let (text, colored) = if !no_js && js_memory_limit_mb > 0 && js_engine == "boa" {
+                // M81: --click 需要同会话 post eval，跳过沙箱（子进程无法回传）。
+                let (text, colored) = if !no_js
+                    && js_memory_limit_mb > 0
+                    && js_engine == "boa"
+                    && click_exprs.is_empty()
+                {
                     match sandbox::run_js_render_in_sandbox(&html, &url, width, js_memory_limit_mb)
                     {
                         Ok(Some(text)) => {
@@ -516,6 +562,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                         false,
                         base.clone(),
                         &js_engine,
+                        &click_exprs,
                     )?
                 };
                 print!("{text}");
@@ -863,7 +910,13 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
             let (text, _colored) = render_html_to_string_inner_ex_engine(
-                &html, width, !no_js, false, base, &js_engine,
+                &html,
+                width,
+                !no_js,
+                false,
+                base,
+                &js_engine,
+                &[],
             )?;
             if check {
                 print!("{text}");
@@ -1024,17 +1077,6 @@ async fn fetch_with_jar_once(url: &str) -> Result<String> {
     String::from_utf8(bytes).map_err(|e| anyhow!("response is not valid UTF-8: {e}"))
 }
 
-/// Shared render pipeline — returns ASCII text. Used by `render-*` (prints)
-/// and `open` (passes to GUI window).
-fn render_html_to_string(
-    html: &str,
-    width: usize,
-    run_js: bool,
-    base_url: Option<String>,
-) -> Result<String> {
-    Ok(render_html_to_string_inner(html, width, run_js, base_url)?.0)
-}
-
 /// M30: colored variant for screenshots — link text gets ANSI blue/underline,
 /// which the PNG renderer parses to paint blue text.
 fn render_html_to_string_colored(
@@ -1072,10 +1114,31 @@ fn render_html_to_string_inner_ex(
     csr_fallback: bool,
     base_url: Option<String>,
 ) -> Result<(String, String)> {
-    render_html_to_string_inner_ex_engine(html, width, run_js, csr_fallback, base_url, "boa")
+    render_html_to_string_inner_ex_engine(html, width, run_js, csr_fallback, base_url, "boa", &[])
+}
+
+/// M81: 带 `--click` 的渲染入口——clicks 作为 post_exprs 传入 JS 会话，
+/// 页面脚本 + 事件循环跑完后在同一会话内按序合成点击（addEventListener
+/// 监听器注册在会话内，引擎 drop 即失效），再 layout + ASCII 渲染。
+#[allow(clippy::too_many_arguments)]
+fn render_html_to_string_clicks(
+    html: &str,
+    width: usize,
+    run_js: bool,
+    base_url: Option<String>,
+    js_engine: &str,
+    clicks: &[String],
+) -> Result<String> {
+    // 走 inner_ex_engine 完整渲染（含 [IMG]/[SVG] 占位符后处理，
+    // 与无点击路径产物一致）。
+    let (text, _colored) = render_html_to_string_inner_ex_engine(
+        html, width, run_js, run_js, base_url, js_engine, clicks,
+    )?;
+    Ok(text)
 }
 
 /// M66: 引擎可切换版本的渲染入口。
+#[allow(clippy::too_many_arguments)]
 fn render_html_to_string_inner_ex_engine(
     html: &str,
     width: usize,
@@ -1083,6 +1146,7 @@ fn render_html_to_string_inner_ex_engine(
     csr_fallback: bool,
     base_url: Option<String>,
     js_engine: &str,
+    clicks: &[String],
 ) -> Result<(String, String)> {
     let (layout, _styles) = layout_tree_after_js_engine(
         html,
@@ -1093,6 +1157,7 @@ fn render_html_to_string_inner_ex_engine(
         js_engine,
         false,
         1.0,
+        clicks,
     )?;
     let plain = render_ascii(&layout, width);
     let colored = render_ascii_colored(&layout, width);
@@ -1108,9 +1173,51 @@ fn render_html_to_string_inner_ex_engine(
     ))
 }
 
+/// M81: 把 `--click` 选择器列表转成同会话合成点击表达式（post_exprs）。
+/// 每个表达式返回数字：`-1` = 未命中；否则目标 nodeId（js-runtime 的
+/// `run_post_exprs_quickjs` 用 eval_i32 读回打日志）。支持两种形式：
+/// - CSS 选择器（主路径）：`querySelector → 合成 MouseEvent('click',
+///   {bubbles, cancelable, clientX, clientY, view}) → dispatchEvent`；
+///   坐标取 getBoundingClientRect 中心（本引擎 rect 是零桩，坐标 0 ——
+///   合成点击 isTrusted=false，handler 一般不校验坐标）。
+/// - `text=xxx`：遍历全元素，取 textContent 包含 xxx 且文本最短的元素
+///   （避开 html/body 祖先先命中）。
+fn click_post_exprs(selectors: &[String]) -> Vec<String> {
+    selectors
+        .iter()
+        .map(|sel| {
+            if let Some(text) = sel.strip_prefix("text=") {
+                let esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "(function(){{var els=document.querySelectorAll('*');\
+                     var best=null,bl=Infinity;for(var i=0;i<els.length;i++){{\
+                     var t=(els[i].textContent||'').trim();\
+                     if(t.length>0&&t.indexOf('{esc}')>=0&&t.length<bl){{best=els[i];bl=t.length;}}}}\
+                     if(!best||typeof best.__nodeId!=='number'){{return -1;}}\
+                     var ev=new MouseEvent('click',{{bubbles:true,cancelable:true,view:window}});\
+                     best.dispatchEvent(ev);return best.__nodeId;}})()"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "(function(){{var el=null;try{{el=document.querySelector('{esc}');}}\
+                     catch(e){{return -1;}}\
+                     if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                     var cx=0,cy=0;try{{var r=el.getBoundingClientRect();\
+                     if(r){{cx=(r.left||0)+(r.width||0)/2;cy=(r.top||0)+(r.height||0)/2;}}}}catch(re){{}}\
+                     var ev=new MouseEvent('click',{{bubbles:true,cancelable:true,view:window,\
+                     clientX:cx,clientY:cy}});el.dispatchEvent(ev);return el.__nodeId;}})()"
+                )
+            }
+        })
+        .collect()
+}
+
 /// M80: 共用布局管线（parse → JS → style → construct → run_layout），
 /// 返回布局树 + computed styles。ASCII（爬虫契约）与 pixel（近似像素
 /// 渲染）两条渲染路径共用此前半段；JS 只执行一次。
+/// M81: `clicks` —— post_exprs（--click 合成点击），在同一 JS 会话内于
+/// 页面脚本 + 事件循环之后按序 eval（空切片 = 原行为）。
 #[allow(clippy::too_many_arguments)]
 fn layout_tree_after_js_engine(
     html: &str,
@@ -1121,13 +1228,21 @@ fn layout_tree_after_js_engine(
     js_engine: &str,
     pixel: bool,
     unit_scale: f32,
+    clicks: &[String],
 ) -> Result<(browser_layout::LayoutTree, browser_render::StyleMap)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
         #[cfg(feature = "quickjs")]
-        let (shared, n) = if base_url.is_some() {
-            browser_js_runtime::run_scripts_with_base_engine(tree, base_url.clone(), &engine_kind)
+        let (shared, n) = if base_url.is_some() || !clicks.is_empty() {
+            // M81: 有 --click 时必须走 post_exprs 变体（同会话合成点击）；
+            // 无 base_url 的本地文件 QuickJS 也支持（base_url 仅影响相对 URL 解析）。
+            browser_js_runtime::run_scripts_with_post_exprs(
+                tree,
+                base_url.clone(),
+                &engine_kind,
+                clicks,
+            )
         } else {
             // 无 base_url 时用 boa 默认路径（QuickJS 需要 base_url 解析 URL）
             let tree2 = tree;
@@ -1187,6 +1302,8 @@ fn layout_tree_after_js_engine(
 /// M80: pixel 模式截图管线。`width_px` 按 CSS px 解释：先换算布局列数
 /// 喂给布局（折行按格数），再把 px 宽度交给像素光栅化。JS 只执行一次。
 /// 返回 ASCII 纯文本供 stdout（与截图解耦，方便 pipe）。
+/// M81: `clicks` —— post_exprs（--click 合成点击，同 JS 会话）。
+#[allow(clippy::too_many_arguments)]
 fn render_pixel_screenshot(
     html: &str,
     width_px: usize,
@@ -1195,12 +1312,14 @@ fn render_pixel_screenshot(
     js_engine: &str,
     path: &PathBuf,
     max_height: Option<usize>,
+    clicks: &[String],
 ) -> Result<String> {
     let cols = browser_render::layout_columns_for_px(width_px);
     let cm = browser_render::pixel::cell_metrics();
     eprintln!("[dbg-cm] cell_metrics=({:.2},{:.2})", cm.0, cm.1);
-    let (layout, styles) =
-        layout_tree_after_js_engine(html, cols, run_js, false, base_url, js_engine, true, cm.1)?;
+    let (layout, styles) = layout_tree_after_js_engine(
+        html, cols, run_js, false, base_url, js_engine, true, cm.1, clicks,
+    )?;
     let (w, h, rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
     screenshot::render_rgba_to_png(&rgba, w, h, path, max_height)
         .map_err(|e| anyhow!("pixel screenshot failed: {e}"))?;
