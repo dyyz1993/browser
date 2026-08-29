@@ -1970,6 +1970,21 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - storage **206→208/272**（event 族 no-results 4 个清零；window.open ×2
   确认结构性）。855 tests 全绿。
 
+**M80.10 —— 批 40（定时）Error.stack 访问器名规范化 + own stack 语义修正**：
+
+- **getter/setter name**：对象字面量 `get stack(){}` 在 QuickJS 里
+  `__acc.get` 为 undefined（对象同名访问器对在此引擎的行为差异）——
+  改回普通 function + defineProperty 后置改 name 为 "get stack"/"set
+  stack"（test262 name descriptor 断言）。
+- **own stack 语义**：原生 QuickJS 在实例上放 own data stack，但规范
+  要求新实例 `hasOwnProperty('stack') === false`（accessor 只在原型）——
+  Wrapped 构造器 construct 后 `delete e.stack`，原值缓存进 `__stackInit`
+  （getter 返回源）。setter 建 own 数据属性往返验证通过。
+- test262 **1603 持平**（name 断言 +2、own 语义 +2/-2 相抵——净变化 0，
+  但语义对齐规范）；855 tests 全绿；ASCII 路径零变化。
+- 教训：对象字面量访问器对（同 get/set 名）在 QuickJS 的兼容性不可靠——
+  复杂访问器一律普通函数 + defineProperty 挂载 + 手动设 name。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

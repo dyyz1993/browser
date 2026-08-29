@@ -502,7 +502,13 @@ impl QuickJsEngine {
                     ? Reflect.construct(Native, [m], nt)
                     : Reflect.construct(Native, [m, options], nt);
                 try {
-                    Object.defineProperty(e, '__stackInit', { value: e.stack,
+                    // M80.11: 原生 QuickJS 在实例上放 own data stack——规范里
+                    // own stack 只能由 setter 创建（test262 hasOwnProperty 断言
+                    // 要求新实例 hasOwnProperty('stack') === false）。删 own，
+                    // 值缓存进 __stackInit（getter 的返回源）。
+                    var __sv = e.stack;
+                    delete e.stack;
+                    Object.defineProperty(e, '__stackInit', { value: __sv,
                         writable: true, enumerable: false, configurable: false });
                 } catch (x) {}
                 return e;
@@ -521,7 +527,7 @@ impl QuickJsEngine {
     };
     // 对象方法简写：提取后无 [[Construct]]（new 抛 TypeError——isConstructor=false）。
     var __acc = {
-        get() {
+        get: function() {
             if (!__isObj(this)) {
                 throw new TypeError('Error.prototype.stack getter called on non-object');
             }
@@ -532,7 +538,7 @@ impl QuickJsEngine {
             if (own && 'value' in own) return own.value;
             return this.__stackInit;
         },
-        set(v) {
+        set: function(v) {
             // set Error.prototype.stack 规范：E 非对象抛 TypeError；v 非 String 抛
             // TypeError；SetterThatIgnoresPrototypeProperties 建 own 数据属性
             //（{writable, enumerable: true, configurable: true}——verifyProperty 断言）。
@@ -550,11 +556,17 @@ impl QuickJsEngine {
         }
     };
     try {
+        // M80.10: 规范访问器名——"get stack"/"set stack"（test262
+        // name descriptor 断言）。普通函数先改 name 再挂。
+        try {
+            Object.defineProperty(__acc.get, 'name', { value: 'get stack' });
+            Object.defineProperty(__acc.set, 'name', { value: 'set stack' });
+        } catch (ne) {}
         Object.defineProperty(Error.prototype, 'stack', {
             get: __acc.get, set: __acc.set,
             enumerable: true, configurable: true
         });
-    } catch (e) {}
+    } catch (e) { __log('acc-err=' + e.message); }
 })();
 "#,
                 );
