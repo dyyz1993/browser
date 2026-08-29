@@ -2158,6 +2158,14 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   html 482/541 (0.891)、css 68/68 (1.000)、webapi 66/70 (0.943)、
   storage 213/279 (0.763)。REALITY PASS。总分 ≈0.919 维持。
 
+**M80.25 —— 批 75（定时）点击工作流扩展验证（todomvc 筛选器 + CDP 存活）**：
+
+- todomvc 筛选器 --click：`a[href="#/active"]` 点击后 hashchange 正常
+  （HC=#/active）——空 todo 列表场景下筛选器视觉差异有限，但路由链路
+  验证通过（bark #/deploy 深度验证仍是最佳样本）。
+- CDP server 存活检查：cdp --port 18995 起服务 + /json/version 响应
+  browser-rs/0.0.1 ✓（批 48 点击链路的 server 侧健康）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
