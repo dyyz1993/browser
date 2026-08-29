@@ -3087,6 +3087,19 @@ if (typeof window.__QI_KEY__ === 'undefined') { window.__QI_KEY__ = ''; }
 if (typeof window.__QI_URL__ === 'undefined') { window.__QI_URL__ = ''; }
 if (typeof window.__QI_BASE__ === 'undefined') { window.__QI_BASE__ = ''; }
 
+// M80.28: requestIdleCallback / cancelIdleCallback——VueUse/框架调度依赖。
+// 缺失时调用抛 ReferenceError 被组件吞掉 → 整个功能静默失效。用 setTimeout 近似。
+if (typeof window.requestIdleCallback !== 'function') {
+    window.requestIdleCallback = function(cb, options) {
+        var opts = options || {};
+        return setTimeout(function() {
+            try { cb({ didTimeout: false, timeRemaining: function() { return Math.max(0, (opts.timeout || 50) - 1); } }); } catch (e) {}
+        }, 1);
+    };
+}
+if (typeof window.cancelIdleCallback !== 'function') {
+    window.cancelIdleCallback = function(id) { clearTimeout(id); };
+}
 // M80.27: IntersectionObserver——爬虫语义：所有元素视为"已进入视口"，
 // observe 后异步立即回调一次（isIntersecting=true），懒加载组件（vite
 // sponsors、图片 lazy）立即渲染。旧 no-op 版让懒加载内容永不出现。

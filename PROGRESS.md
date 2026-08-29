@@ -2205,6 +2205,23 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - vite sponsors 链接未变（66%）——其懒加载在 Vue 异步组件层（onMounted
   可视区域检测），非 IO；记录为已知。872 tests 全绿 + REALITY PASS。
 
+**M80.28 —— 批 80（定时）vite sponsors 深挖定论：Vue 水合失败（根因升级）**：
+
+- **数据链修正**：sponsors grid **不是 SSG 直出**（raw HTML 无 spsr-link），
+  也不是 IO 懒加载——是 **Vue 水合后 onMounted → fetch(sponsors.vite.dev)
+  → reactive 重渲染**。
+- **断点**：我们页面 **Vue 水合失败**——`#app.__vue_app__` 不存在
+  （CDP evaluate 实测），故 onMounted/异步链全不执行 → <!----> 占位
+  保留、sponsors grid 整段缺失。
+- **已修的配套**（本批有效）：requestIdleCallback 补齐（VueUse 调度依赖）、
+  IntersectionObserver 激活（observe→异步立即回调 isIntersecting=true）。
+  872 tests 全绿 + REALITY PASS。
+- **下一步（新方向）**：修 Vue 水合 = 排查 createApp().mount('#app')
+  失败原因。render-url 吞掉了 mount 阶段错误，需 CDP Runtime.evaluate
+  在水合前后对比 + 抓 window.onerror。这是 react.dev 同款问题的另一种
+  表现（React 水合也是静默失败）——**两者共同根因可能是同一批缺失 API**
+  （如 queueMicrotask 语义、getComputedStyle 精确值、rAF 时序等）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
