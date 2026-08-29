@@ -4479,6 +4479,16 @@ Object.defineProperty(Element.prototype, 'textContent', {
     },
     enumerable: true, configurable: true
 });
+window.__serAttrsOf = function(id) {
+    if (typeof __attrsOf !== 'function') return '';
+    var out = '';
+    var raw = __attrsOf(id) || '';
+    raw.split('\n').forEach(function(line) {
+        var eq = line.indexOf('=');
+        if (eq > 0) out += ' ' + line.slice(0, eq) + '="' + line.slice(eq + 1) + '"';
+    });
+    return out;
+};
 Object.defineProperty(Element.prototype, 'innerHTML', {
     get: function() {
         // 从 Rust Tree 读子节点的文本拼接（近似 innerHTML）
@@ -4488,36 +4498,53 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
         var out = '';
         var __voidTags = { br:1, hr:1, img:1, input:1, meta:1, link:1, area:1,
             base:1, col:1, embed:1, source:1, track:1, wbr:1 };
+        // M80.21: 递归序列化子树——旧版只处理直接子节点（元素子节点用
+        // __getText 纯文本，嵌套的 h3/a/p/属性全部丢失——todomvc learn-bar
+        // 的 aside.outerHTML 缺臂断腿再注入后结构破坏的根因）。
+        function __serNode(id, tag) {
+            var out = '';
+            var attrsStr = '';
+            if (typeof __attrsOf === 'function') {
+                var raw = __attrsOf(id);
+                (raw || '').split('\n').forEach(function(line) {
+                    var eq = line.indexOf('=');
+                    if (eq > 0) attrsStr += ' ' + line.slice(0, eq) + '="' + line.slice(eq + 1) + '"';
+                });
+            }
+            var low = tag.toLowerCase();
+            if (__voidTags[low]) return '<' + low + attrsStr + '>';
+            var inner = '';
+            var kids = (__children(id) || '').split(',').filter(function(x) { return x; });
+            for (var k = 0; k < kids.length; k++) {
+                var kid = parseInt(kids[k], 10);
+                var ktag = __getTag(kid);
+                if (!ktag || ktag === '__text__') {
+                    var td = (typeof __textData === 'function') ? __textData(kid) : '';
+                    inner += td || __getText(kid);
+                } else if (ktag === '__comment__') {
+                    // 注释不可见（同 html_ser.rs）
+                } else {
+                    inner += __serNode(kid, ktag);
+                }
+            }
+            out += '<' + low + attrsStr + '>' + inner + '</' + low + '>';
+            return out;
+        }
         for (var i = 0; i < ids.length; i++) {
             var id = parseInt(ids[i], 10);
             var tag = __getTag(id);
-            var text = __getText(id);
             // M78.10: 真 Text 节点（__parseHtml/html5ever 插入）getTag 返回空串，
             // 与 shim 的 '__text__' 伪标签同等按文本输出。
             if (!tag || tag === '__text__') {
                 // M78.38: 文本值优先 __textData（节点自身 data）；__getText 聚合
                 // 子树对文本节点本身返回空（M78.21 重写时曾丢失此 fallback）。
                 var td = (typeof __textData === 'function') ? __textData(id) : '';
-                out += td || text;
+                var txt = td || __getText(id);
+                out += txt;
             } else if (tag === '__comment__') {
                 // M79: 注释节点不可见于 innerHTML（与序列化器 html_ser.rs 对齐）
             } else {
-                // M78.21: 属性序列化 + void 元素无闭合（innerText setter 断言
-                // innerHTML === 'abc<br>def'）。
-                var attrsStr = '';
-                if (typeof __attrsOf === 'function') {
-                    var raw = __attrsOf(id);
-                    (raw || '').split('\n').forEach(function(line) {
-                        var eq = line.indexOf('=');
-                        if (eq > 0) attrsStr += ' ' + line.slice(0, eq) + '="' + line.slice(eq + 1) + '"';
-                    });
-                }
-                var low = tag.toLowerCase();
-                if (__voidTags[low]) {
-                    out += '<' + low + attrsStr + '>';
-                } else {
-                    out += '<' + low + attrsStr + '>' + text + '</' + low + '>';
-                }
+                out += __serNode(id, tag);
             }
         }
         return out;
@@ -5320,25 +5347,60 @@ Element.prototype.insertAdjacentHTML = function(pos, html) {
     // 还在元素上留 innerHTML="<markup>" 垃圾属性污染序列化输出。
     // 实现：临时 div 承载 __parseHtml 产出的真实子节点，再逐个 move 到
     // 目标（__appendChild 是 move 语义，先快照 children 再遍历，同 GAP-K）。
-    if (pos !== 'beforeend') return;
+    // M80.20: 4 位置全支持（M80.18 只实现了 beforeend——base.js 的
+    // insertAdjacentHTML('afterBegin', aside.outerHTML) 被静默 return，
+    // todomvc learn-bar 侧栏注入整段丢失）。位置语义镜像
+    // insertAdjacentElement 的既有实现（afterbegin/beforebegin/afterend
+    // 用 __insertBefore 定位，wrap 子节点快照后 move）。
+    var posL = String(pos || '').toLowerCase();
+    if (posL !== 'beforeend' && posL !== 'afterbegin' && posL !== 'beforebegin' && posL !== 'afterend') return;
     var s = (html == null) ? '' : String(html);
     if (!s.length) return;
     if (typeof __parseHtml !== 'function' || typeof __createEl !== 'function') {
         // 无解析桥（极端环境）：退化为文本插入，保证内容可见不静默丢失
         var _tid = __createEl('__text__');
         __setText(_tid, s);
-        __appendChild(this.__nodeId, _tid);
+        if (posL === 'beforebegin' || posL === 'afterend') {
+            var _pid = __getParent(this.__nodeId);
+            if (_pid >= 0) __appendChild(_pid, _tid); else __appendChild(this.__nodeId, _tid);
+        } else {
+            __appendChild(this.__nodeId, _tid);
+        }
         return;
     }
     var wrapId = __createEl('div');
     __parseHtml(wrapId, s);
+    var wrapParent = __getParent(wrapId);
     var kidsStr = __children(wrapId) || '';
     var kids = kidsStr.split(',').filter(function(x) { return x; });
+    // 目标挂载点：beforeend/afterbegin → 本盒；beforebegin/afterend → 父盒
+    var mountPid = (posL === 'beforebegin' || posL === 'afterend')
+        ? __getParent(this.__nodeId) : this.__nodeId;
+    if (mountPid < 0) { if (wrapParent >= 0) __removeChild(wrapParent, wrapId); return; }
+    // 参考节点：beforebegin→本节点；afterend→本节点的下一兄弟；其余 → null（追加）
+    var ref = null;
+    if (posL === 'beforebegin') ref = this.__nodeId;
+    else if (posL === 'afterend') {
+        var sibs = (__children(mountPid) || '').split(',').filter(function(x) { return x; });
+        for (var si = 0; si < sibs.length; si++) {
+            if (parseInt(sibs[si], 10) === this.__nodeId) {
+                ref = (si + 1 < sibs.length) ? parseInt(sibs[si + 1], 10) : null;
+                break;
+            }
+        }
+    }
+    // 逐个 move（__appendChild 是 move 语义）。afterend 用 __insertBefore 对
+    // ref 定位；其余按顺序 append（beforeend 尾插 / afterbegin 头插需逆序）。
+    if (posL === 'afterbegin' && kids.length > 1) kids = kids.reverse();
     for (var i = 0; i < kids.length; i++) {
-        __appendChild(this.__nodeId, parseInt(kids[i], 10));
+        var kidId = parseInt(kids[i], 10);
+        if (posL === 'beforebegin' || posL === 'afterend') {
+            __insertBefore(mountPid, kidId, ref);
+        } else {
+            __appendChild(mountPid, kidId);
+        }
     }
     // 清理临时 wrap（__createEl 会把节点挂到 body 下）
-    var wrapParent = __getParent(wrapId);
     if (wrapParent >= 0) __removeChild(wrapParent, wrapId);
     try { window.__fireMutation(this.__nodeId, 'childList'); } catch(e) {}
 };
@@ -5756,7 +5818,16 @@ window.__normalizeParent = function(pid) {
     }
 };
 Object.defineProperty(Element.prototype, 'outerHTML', {
-    get: function() { return this.innerHTML || ''; },
+    // M80.21: 规范语义——outerHTML 含自身标签（<aside>outer</aside>）。
+    // 旧版只回 innerHTML——base.js 的 aside.outerHTML 注入丢掉 aside 壳。
+    get: function() {
+        var tg = (typeof __getTag === 'function') ? __getTag(this.__nodeId) : '';
+        if (!tg || tg === '__text__') return this.innerHTML || '';
+        var low = tg.toLowerCase();
+        var attrs = '';
+        try { attrs = window.__serAttrsOf(this.__nodeId); } catch (e) {}
+        return '<' + low + attrs + '>' + (this.innerHTML || '') + '</' + low + '>';
+    },
     set: function(v) {
         // 简化：等同 innerHTML（爬虫够用）
         this.innerHTML = v;

@@ -2166,6 +2166,23 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - CDP server 存活检查：cdp --port 18995 起服务 + /json/version 响应
   browser-rs/0.0.1 ✓（批 48 点击链路的 server 侧健康）。
 
+**M80.21 —— 批 77（定时）innerHTML/outerHTML 递归序列化（重大通用性修复）**：
+
+- **根因链**（数据提取对比实验的深度产出）：todomvc learn-bar 侧栏缺失
+  → base.js 注入用 `aside.outerHTML` → outerHTML getter 只回 innerHTML
+  → innerHTML getter **非递归**（只序列化直接子节点的纯文本，嵌套元素
+  的标签/属性全部丢弃）→ aside.outerHTML 残缺 → 注入后结构破坏。
+- **修复**：① innerHTML getter 递归序列化子树（`__serNode` 递归函数，
+  嵌套标签/属性全保留）；② outerHTML getter 含自身标签 + 属性
+  （`__serAttrsOf` 辅助）。
+- **实证**：探针 T0/T2 序列化嵌套结构完整（`<h3>`/`<a href>`/`<p>`/
+  `<footer>` 全保留）；线上 todomvc learn-bar 标记出现（tastejs/
+  source-links）；probe9 aside 注入后 qsAll=2 ✓。
+- 872 tests 全绿、html_dom 482/541 持平、REALITY PASS。
+- **影响面**：所有依赖 outerHTML/innerHTML 序列化的场景（爬虫 HTML
+  输出、框架 diff、docsify/SPA 内容提取）——此前嵌套结构一直在静默
+  丢失，此修复提升所有真站的数据提取保真度。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
