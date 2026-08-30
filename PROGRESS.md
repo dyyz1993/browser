@@ -2410,6 +2410,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   Puppeteer FrameManager 流程。
 - 932 tests 全绿（+13）+ REALITY PASS。**B 阶段 CDP 能力收官**。
 
+**M81.10 —— 批 95（定时）C5 表格确认 + html_dom 剩余扫描**：
+
+- 表格渲染确认：数据提取已完整（Name/Age/Alice/30 同行输出），视觉行列
+  对齐为深水区（跳过）。C5 打勾（数据完整性达标）。
+- html_dom 剩余 52 项扫描：9 Node-removeChild（iframe 跨 realm 结构性）、
+  4 appendChild-script-and-iframe（同）、3 MutationObserver-document（架构
+  级）、其余零星单条（Document-URL redirect 追踪精度等）——**无新高价值
+  可修项**。兼容性循环目标全部完成。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
