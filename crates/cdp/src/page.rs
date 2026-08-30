@@ -34,6 +34,9 @@ use browser_js_runtime::EngineKind;
 
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
 
+/// M81(B2): 未指定视口时的默认渲染宽度（格列数，与 CLI `--width` 缺省一致）。
+pub const DEFAULT_RENDER_WIDTH: usize = 80;
+
 /// The current page state for a CDP session (single-tab model, M43).
 ///
 /// Stored in an `Arc<Mutex>` so the async session loop can share it between
@@ -51,6 +54,11 @@ pub struct PageState {
     pub rendered_colored: String,
     /// Render width in chars.
     pub width: usize,
+    /// M81(B2): Emulation.setDeviceMetricsOverride 的视口覆盖，**CSS px**。
+    /// `Some((w, h))` 时布局宽度换算为 `layout_columns_for_px(w)` 格列，
+    /// navigate 也沿用该宽度（Chrome 语义：override 跨导航持续）。
+    /// `None` → 默认 [`DEFAULT_RENDER_WIDTH`] 列。
+    pub viewport: Option<(usize, usize)>,
     /// M80.17: 布局树快照（`render_from_tree` 填充），供
     /// `Input.dispatchMouseEvent` 做坐标 hit_test（CSS px → NodeId）。
     /// 未渲染（未 navigate）时为 `None`。
@@ -84,11 +92,15 @@ impl Default for PageState {
     fn default() -> Self {
         Self {
             url: String::new(),
-            tree: Tree::new(),
+            // M81(B2): 默认树带 Document 根（与 html-parser 一致）。裸 `Tree::new()`
+            // 会在 navigate 前的 `Runtime.evaluate` / `setDeviceMetricsOverride`
+            // 重布局路径上撞 `Tree::root` 空树 panic，杀掉整个 CDP 会话。
+            tree: Tree::with_root(browser_dom::NodeData::Document),
             raw_html: String::new(),
             rendered_text: String::new(),
             rendered_colored: String::new(),
-            width: 80,
+            width: DEFAULT_RENDER_WIDTH,
+            viewport: None,
             layout: None,
             last_status: 0,
             last_headers: Vec::new(),
@@ -99,6 +111,51 @@ impl Default for PageState {
 }
 
 impl PageState {
+    /// M81(B2): 视口覆盖生效时的布局列数（`layout_columns_for_px` 换算）；
+    /// 无覆盖 → 默认 [`DEFAULT_RENDER_WIDTH`] 列。navigate 与
+    /// `render_from_tree` 都用这个宽度，保证 override 跨导航持续。
+    #[must_use]
+    pub fn effective_width(&self) -> usize {
+        self.viewport.map_or(DEFAULT_RENDER_WIDTH, |(w, _)| {
+            browser_render::layout_columns_for_px(w)
+        })
+    }
+
+    /// M81(B2): Emulation.setDeviceMetricsOverride 落地——存 px 视口、
+    /// 换算布局列数并重跑 css+layout+render。后续 `Page.captureScreenshot`
+    /// / `Runtime.evaluate`（clientWidth）读到的都是新视口下的布局。
+    pub fn set_viewport(&mut self, width_px: usize, height_px: usize) {
+        self.viewport = Some((width_px, height_px));
+        self.width = self.effective_width();
+        self.render_from_tree();
+    }
+
+    /// M81(B2): Emulation.clearDeviceMetricsOverride——清空覆盖、
+    /// 宽度回默认列数并重渲染。无覆盖时 no-op（避免无谓重排）。
+    pub fn clear_viewport(&mut self) {
+        if self.viewport.take().is_some() {
+            self.width = self.effective_width();
+            self.render_from_tree();
+        }
+    }
+
+    /// M81(B2): 布局视口的 px 尺寸（`document.documentElement.clientWidth`
+    /// /`clientHeight` 语义）。宽度 = 实际布局列数 × `cell_w` 回换 px
+    /// （800px → 格列 → ≈800）；高度 = 覆盖值，无覆盖时用布局树根盒
+    /// 高度（内容行数 × 行高）近似，未渲染时 0。
+    #[must_use]
+    pub fn client_viewport_px(&self) -> (i64, i64) {
+        let (cell_w, cell_h) = browser_render::cell_metrics();
+        let w = (f64::from(self.effective_width() as f32 * cell_w)).round() as i64;
+        let h = match self.viewport {
+            Some((_, h)) => h as i64,
+            None => self.layout.as_ref().map_or(0, |l| {
+                f64::from(l.root.dimensions.height * cell_h).round() as i64
+            }),
+        };
+        (w, h)
+    }
+
     /// Render `html` (already fetched) and store the result.
     ///
     /// 便捷封装：parse → render_from_tree。M68 起 navigate 不再调这个
@@ -121,6 +178,13 @@ impl PageState {
     /// JS 改完 DOM 后调这个，用新 tree 重新渲染。
     /// M80.17: 同时保存布局树到 `self.layout`（Input hit_test 用）。
     pub fn render_from_tree(&mut self) {
+        // M81(B2): Playwright 的 `viewport` 参数在 newPage 时就下发
+        // setDeviceMetricsOverride——早于第一次 navigate，此时 tree 为空，
+        // `Tree::root` 会 panic。空树直接跳过布局：视口已存入 `self.viewport`，
+        // navigate 时经 `effective_width` 消费。
+        if self.tree.is_empty() {
+            return;
+        }
         let style_text = extract_style_text(&self.tree);
         let sheet = browser_css_engine::parse(&style_text);
         let styles = browser_css_engine::compute_styles(&self.tree, &sheet);
@@ -342,11 +406,13 @@ pub async fn dispatch(
             }
 
             // M68: ① parse HTML 存 tree（不 layout），给 JS 步骤留插入点。
+            // M81(B2): 宽度用视口覆盖换算的列数（override 跨导航持续，Chrome 语义）。
             {
                 let mut st = state
                     .lock()
                     .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
-                st.parse_only(&html, url, 80);
+                let width = st.effective_width();
+                st.parse_only(&html, url, width);
                 st.raw_html = html.clone();
             }
 
@@ -986,5 +1052,120 @@ mod tests {
             st.rendered_text
         );
         let _ = before;
+    }
+
+    // ── M81(B2): Emulation.setDeviceMetricsOverride 的 PageState 落地 ──
+
+    #[test]
+    fn set_viewport_relayouts_with_px_columns() {
+        // set_viewport(800,600)：布局列数 = layout_columns_for_px(800)，
+        // 重渲染后 rendered_text/rendered_colored/layout 都更新。
+        let mut st = PageState::default();
+        st.render("<html><body><p>VP</p></body></html>", "test://vp", 80);
+        assert_eq!(st.width, 80);
+        assert!(st.viewport.is_none());
+
+        st.set_viewport(800, 600);
+        assert_eq!(st.viewport, Some((800, 600)));
+        let expect_cols = browser_render::layout_columns_for_px(800);
+        assert_eq!(st.width, expect_cols);
+        assert!(st.rendered_text.contains("VP"), "content preserved");
+        assert!(st.layout.is_some(), "layout tree snapshot refreshed");
+    }
+
+    #[test]
+    fn client_width_px_round_trips_through_columns() {
+        // clientWidth 语义：800px → 格列 → 回换 px 应接近 800（格宽舍入误差 ≤ 1 格）。
+        let mut st = PageState::default();
+        st.render("<html><body><p>x</p></body></html>", "test://cw", 80);
+        st.set_viewport(800, 600);
+        let (w, h) = st.client_viewport_px();
+        let (cell_w, _) = browser_render::cell_metrics();
+        let expect_w = (st.width as f32 * cell_w).round() as i64;
+        assert_eq!(w, expect_w, "clientWidth = cols × cell_w");
+        assert!(
+            (w - 800).abs() as f32 <= cell_w,
+            "clientWidth {w} must be within one cell of 800"
+        );
+        assert_eq!(h, 600, "clientHeight = 覆盖高度");
+    }
+
+    #[test]
+    fn client_viewport_without_override_uses_layout_height() {
+        // 无覆盖：宽 = 80 列回换 px；高 = 布局树根盒高度（内容行）× 行高。
+        let st = {
+            let mut s = PageState::default();
+            s.render("<html><body><p>a</p></body></html>", "test://d", 80);
+            s
+        };
+        let (w, h) = st.client_viewport_px();
+        let (cell_w, cell_h) = browser_render::cell_metrics();
+        assert_eq!(w, (80.0_f32 * cell_w).round() as i64);
+        assert_eq!(
+            h,
+            (st.layout.as_ref().unwrap().root.dimensions.height * cell_h).round() as i64
+        );
+    }
+
+    #[test]
+    fn clear_viewport_restores_default_width() {
+        let mut st = PageState::default();
+        st.render("<html><body><p>x</p></body></html>", "test://c", 80);
+        st.set_viewport(800, 600);
+        assert_ne!(st.width, 80);
+
+        st.clear_viewport();
+        assert!(st.viewport.is_none());
+        assert_eq!(st.width, DEFAULT_RENDER_WIDTH);
+        assert!(st.rendered_text.contains("x"));
+    }
+
+    #[test]
+    fn clear_viewport_without_override_is_noop() {
+        let mut st = PageState::default();
+        st.render("<html><body><p>x</p></body></html>", "test://n", 80);
+        let before = st.rendered_text.clone();
+        st.clear_viewport();
+        assert!(st.viewport.is_none());
+        assert_eq!(st.width, 80);
+        assert_eq!(st.rendered_text, before);
+    }
+
+    #[test]
+    fn effective_width_follows_override() {
+        let mut st = PageState::default();
+        assert_eq!(st.effective_width(), 80);
+        st.viewport = Some((800, 600));
+        assert_eq!(
+            st.effective_width(),
+            browser_render::layout_columns_for_px(800)
+        );
+        // 0 宽防御：layout_columns_for_px 保底 1。
+        st.viewport = Some((0, 0));
+        assert_eq!(st.effective_width(), 1);
+    }
+
+    #[test]
+    fn set_viewport_before_navigate_survives_empty_tree() {
+        // Playwright 的 viewport 参数在 newPage（navigate 前）下发——空 tree
+        // 不能 panic（Tree::root 对空树断言）；视口存住，navigate 时消费。
+        let mut st = PageState::default();
+        st.set_viewport(800, 600);
+        assert_eq!(st.viewport, Some((800, 600)));
+        assert_eq!(
+            st.effective_width(),
+            browser_render::layout_columns_for_px(800)
+        );
+        // 之后 navigate（dispatch 路径：effective_width → parse_only → render_from_tree）
+        // 布局按 override 列数跑。
+        let width = st.effective_width();
+        st.render(
+            "<html><body><p>late</p></body></html>",
+            "test://late",
+            width,
+        );
+        assert_eq!(st.width, browser_render::layout_columns_for_px(800));
+        assert!(st.rendered_text.contains("late"));
+        assert_eq!(st.client_viewport_px().1, 600);
     }
 }

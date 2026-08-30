@@ -29,6 +29,36 @@
 
 ## 最近变更（倒序）
 
+### M81.B2 —— CDP Emulation.setDeviceMetricsOverride 真生效（Playwright setViewportSize）
+
+**改动**（全部在 `crates/cdp/`）：
+- **`page.rs`**：`PageState` 新增 `viewport: Option<(usize, usize)>`（CSS px）。
+  `set_viewport(w,h)` 存 px、按 `layout_columns_for_px(w)` 换算布局列数并
+  `render_from_tree` 重跑布局；`clear_viewport` 回默认 80 列；`effective_width()`
+  供 navigate 消费（override 跨导航持续，Chrome 语义）；`client_viewport_px()`
+  输出布局视口 px（宽 = 列数 × `cell_w` 回换，高 = 覆盖值 / 布局根盒高度）。
+  默认树改为 `Tree::with_root(Document)`——裸 `Tree::new()` 会在 navigate 前的
+  evaluate/重布局路径撞 `Tree::root` 空树 panic 杀会话。
+- **`emulation_domain.rs`**：`dispatch` 接 `&mut PageState`；`setDeviceMetricsOverride`
+  的 width/height 落地 PageState（width=0 = puppeteer resetViewport 撤销语义）；
+  `clearDeviceMetricsOverride` 撤销覆盖。
+- **`server.rs`**：Emulation 分支页锁+仿真锁同持（锁序固定 page→emulation）；
+  Runtime 分支把 `client_viewport_px()` 传给 runtime_domain。
+- **`runtime_domain.rs`**：evaluate/callFunctionOn 前注入 clientWidth/clientHeight
+  prologue（Element.prototype getter，仅 documentElement/body 返回视口 px，
+  其余元素 0——与 getBoundingClientRect 零桩语义一致；每次 eval 会话独立，
+  不跨会话泄漏，无 GC 风险）。
+
+**验证**：
+- 单测 +17（PageState 视口落地/空树防御/px↔格回换/清除恢复；dispatch 语义；
+  clientWidth 注入）。`cargo test --workspace` 919 passed（基线 902）。
+- 裸 CDP（node WebSocket）：navigate example.com → setDeviceMetricsOverride(800×600)
+  → evaluate `document.documentElement.clientWidth` = **803**（≈800，一格舍入内），
+  clientHeight = 600，普通 div clientWidth = 0，clear 后回 764（默认 80 列）。
+- 真实 puppeteer-core 25：`page.setViewport({390×844})`（navigate 前）→ clientWidth
+  392；navigate 后 override 持续；`setViewport(1280×800)` → 1280/800 精确；
+  页面标题/内容不受重布局影响。
+
 ### M81.A1 —— CDP 多会话并发：Playwright connect_over_cdp 打通（goto + title 端到端）
 
 **架构改动**（`crates/cdp/src/server.rs`）：

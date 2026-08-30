@@ -29,6 +29,11 @@ use crate::jsonrpc::{CdpError, CdpMessage, Json};
 ///
 /// M67: `engine_kind` selects the JS backend (QuickJs default, Boa fallback).
 /// Both produce a unified display-format string consumed by `classify_value`.
+///
+/// M81(B2): `client_viewport` 是当前布局视口的 px 尺寸（`PageState::
+/// client_viewport_px`）。`Some` 时在表达式前注入 `clientWidth`/`clientHeight`
+/// getter，`document.documentElement.clientWidth` 等 viewport 查询随
+/// `Emulation.setDeviceMetricsOverride` 生效。
 pub fn dispatch(
     id: i64,
     method: &str,
@@ -36,6 +41,7 @@ pub fn dispatch(
     tree: &Tree,
     url: &str,
     engine_kind: &EngineKind,
+    client_viewport: Option<(i64, i64)>,
 ) -> Result<String, CdpError> {
     match method {
         "Runtime.enable" | "Runtime.disable" | "Runtime.runIfWaitingForDebugger" => {
@@ -48,6 +54,8 @@ pub fn dispatch(
             let expr = params
                 .and_then(|p| p.get_str("expression"))
                 .ok_or_else(|| CdpError::InvalidJson("missing expression".to_string()))?;
+            // M81(B2): clientWidth/clientHeight 注入（prologue 在表达式最前）。
+            let expr = prepend_client_metrics(expr, client_viewport);
             // M81(B4): `awaitPromise: true` —— 表达式返回 Promise 时驱动至
             // Fulfilled/Rejected，返回真实值而非 "[object Promise]"。
             let await_promise =
@@ -55,7 +63,7 @@ pub fn dispatch(
             match eval_in_tree_engine_await(
                 tree.clone(),
                 url_or_default(url),
-                expr,
+                &expr,
                 engine_kind,
                 await_promise,
             ) {
@@ -149,6 +157,9 @@ pub fn dispatch(
                     ARGS = args_str.join(",")
                 )
             };
+            // M81(B2): clientWidth/clientHeight 注入（Playwright evaluate 全走
+            // callFunctionOn，prologue 同样要挂上）。
+            let expr = prepend_client_metrics(&expr, client_viewport);
             // M81(B4): awaitPromise 透传（async 函数声明的 Playwright evaluate
             // 返回 Promise——等 resolve 后返回真实值）。
             let await_promise =
@@ -192,6 +203,34 @@ fn url_or_default(url: &str) -> Option<String> {
     } else {
         Some(url.to_string())
     }
+}
+
+/// M81(B2): 在被 eval 的程序前注入 `clientWidth`/`clientHeight`。
+///
+/// `Element.prototype` 上挂 getter：`documentElement`/`body` 返回布局视口
+/// px（`Emulation.setDeviceMetricsOverride` 生效时 = 覆盖宽度按格回换），
+/// 其余元素返回 0——与引擎的 `getBoundingClientRect` 零桩/`offsetHeight=0`
+/// 桩保持一致的"无布局数据"语义。每次 eval 会话独立重建 context，prototype
+/// 改动不跨会话泄漏；getter 是原型方法（非全局持有的 JS 对象引用），符合
+/// QuickJS GC 安全约定。`viewport=None` 时不注入（旧行为，undefined）。
+fn prepend_client_metrics(expr: &str, viewport: Option<(i64, i64)>) -> String {
+    let Some((w, h)) = viewport else {
+        return expr.to_string();
+    };
+    format!(
+        concat!(
+            "(function(){{",
+            "var EP=(typeof Element!=='undefined'&&Element&&Element.prototype)?Element.prototype:null;",
+            "if(EP&&!EP.__psClientMetrics){{",
+            "Object.defineProperty(EP,'__psClientMetrics',{{value:true,configurable:true}});",
+            "var isRoot=function(el){{try{{var t=(el&&typeof el.tagName==='string')?el.tagName.toUpperCase():'';return t==='HTML'||t==='BODY';}}catch(e){{return false;}}}};",
+            "Object.defineProperty(EP,'clientWidth',{{get:function(){{return isRoot(this)?{W}:0;}},configurable:true,enumerable:true}});",
+            "Object.defineProperty(EP,'clientHeight',{{get:function(){{return isRoot(this)?{H}:0;}},configurable:true,enumerable:true}});",
+            "}}}})();"
+        ),
+        W = w,
+        H = h
+    ) + expr
 }
 
 /// Classify a JS string result into CDP type + value JSON.
@@ -244,6 +283,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::Boa,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"value\":5"), "got: {resp}");
@@ -264,6 +304,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::Boa,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"value\":\"HELLO\""), "got: {resp}"); // boa quotes; classify strips
@@ -280,6 +321,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::Boa,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"type\":\"boolean\""), "got: {resp}");
@@ -300,6 +342,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::Boa,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"exceptionDetails\""), "got: {resp}");
@@ -314,6 +357,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::Boa,
+            None,
         )
         .unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
@@ -349,6 +393,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::Boa,
+            None,
         )
         .unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
@@ -370,6 +415,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::QuickJs,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"value\":5"), "got: {resp}");
@@ -391,6 +437,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::QuickJs,
+            None,
         )
         .unwrap();
         // QuickJS 分支模拟 boa display 格式：字符串结果带引号。
@@ -409,6 +456,7 @@ mod tests {
             &Tree::new(),
             "",
             &EngineKind::QuickJs,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"type\":\"boolean\""), "got: {resp}");
@@ -433,6 +481,7 @@ mod tests {
             &tree,
             "http://example.com/",
             &EngineKind::QuickJs,
+            None,
         )
         .unwrap();
         assert!(resp.contains("\"QJS Title\""), "got: {resp}");
@@ -456,6 +505,7 @@ mod await_promise_tests {
             &Tree::new(),
             "",
             &EngineKind::QuickJs,
+            None,
         )
         .unwrap()
     }
@@ -558,11 +608,97 @@ mod await_promise_tests {
             &tree,
             "http://example.com/",
             &EngineKind::QuickJs,
+            None,
         )
         .unwrap();
         assert!(
             resp.contains("\"value\":7"),
             "callFunctionOn awaitPromise must unwrap async fn, got: {resp}"
         );
+    }
+}
+
+// ── M81(B2): clientWidth/clientHeight 视口注入（QuickJS，默认 feature 即跑）──
+// Emulation.setDeviceMetricsOverride 后，Runtime.evaluate 的
+// documentElement/body clientWidth 应反映新视口（px 按格回换）。
+#[cfg(all(test, feature = "quickjs"))]
+mod client_metrics_tests {
+    use super::*;
+
+    fn evaluate_with_viewport(expr: &str, vp: Option<(i64, i64)>) -> String {
+        let html = "<html><body><p>x</p></body></html>";
+        let tree = browser_html_parser::parse(html);
+        let mut p = BTreeMap::new();
+        p.insert("expression".to_string(), Json::String(expr.to_string()));
+        dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &tree,
+            "http://example.com/",
+            &EngineKind::QuickJs,
+            vp,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn client_width_reflects_emulated_viewport() {
+        let resp = evaluate_with_viewport("document.documentElement.clientWidth", Some((799, 600)));
+        assert!(
+            resp.contains("\"value\":799") && resp.contains("\"type\":\"number\""),
+            "clientWidth must read the emulated viewport, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn client_height_reflects_emulated_viewport() {
+        let resp = evaluate_with_viewport("document.body.clientHeight", Some((799, 600)));
+        assert!(
+            resp.contains("\"value\":600") && resp.contains("\"type\":\"number\""),
+            "clientHeight must read the emulated viewport, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn client_width_on_plain_element_is_zero() {
+        // 非根元素没有布局数据（与 getBoundingClientRect 零桩一致）。
+        let resp = evaluate_with_viewport(
+            "document.createElement('div').clientWidth",
+            Some((799, 600)),
+        );
+        assert!(
+            resp.contains("\"value\":0"),
+            "non-root clientWidth must be 0, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn no_viewport_keeps_client_width_undefined() {
+        // viewport=None（旧调用方/测试）不注入 → 保持旧行为 undefined。
+        let resp = evaluate_with_viewport("document.documentElement.clientWidth", None);
+        assert!(
+            resp.contains("\"type\":\"undefined\""),
+            "legacy behavior preserved, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn prologue_does_not_break_expression() {
+        let resp = evaluate_with_viewport("2 + 3", Some((800, 600)));
+        assert!(
+            resp.contains("\"value\":5"),
+            "prologue must not change the expression result, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn prepend_client_metrics_formats_and_passes_through() {
+        let s = prepend_client_metrics("1+1", Some((800, 600)));
+        assert!(s.contains("?800:0"), "width literal inlined: {s}");
+        assert!(s.contains("?600:0"), "height literal inlined: {s}");
+        assert!(s.ends_with("1+1"), "expression kept verbatim");
+        // None → 原样透传（旧行为）。
+        assert_eq!(prepend_client_metrics("1+1", None), "1+1");
     }
 }

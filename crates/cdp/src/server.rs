@@ -429,6 +429,9 @@ impl CdpSession {
                 };
                 let tree = &st.tree;
                 let url = st.url.as_str();
+                // M81(B2): 布局视口 px（clientWidth/clientHeight 注入用）——
+                // setDeviceMetricsOverride 后 evaluate 读到新视口。
+                let client_vp = st.client_viewport_px();
                 // M48: Runtime.enable 时，标准浏览器会为每个 execution context
                 // 发 Runtime.executionContextCreated 事件。puppeteer 的 FrameManager
                 // 靠它把 context 绑到 frame（否则 mainWorld/isolatedWorld 永远没就绪，
@@ -470,6 +473,7 @@ impl CdpSession {
                         tree,
                         url,
                         &self.engine_kind,
+                        Some(client_vp),
                     ) {
                         Ok(resp) => {
                             // M81(B1): JS 侧 focus() 上报 → 回写 PageState.focused_node
@@ -496,6 +500,7 @@ impl CdpSession {
                         tree,
                         url,
                         &self.engine_kind,
+                        Some(client_vp),
                     ) {
                         Ok(resp) => {
                             // M81(B1): JS 侧 focus() 上报 → 回写 focused_node。
@@ -533,12 +538,25 @@ impl CdpSession {
                 }
             }
             // ── M49: Emulation domain (device metrics, user agent) ──
+            // M81(B2): setDeviceMetricsOverride 的视口要写入 PageState 并重跑
+            // 布局——页锁 + 仿真锁同持。锁序固定 page → emulation（其余分支
+            // 至多持其一，无反向嵌套，无死锁风险）。
             m if m.starts_with("Emulation.") => {
+                let mut page = self
+                    .page
+                    .lock()
+                    .map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
                 let mut st = self
                     .emulation
                     .lock()
                     .map_err(|_| CdpMessage::error_response(id, -32000, "Lock poisoned"))?;
-                match crate::emulation_domain::dispatch(id, m, msg.params.as_ref(), &mut st) {
+                match crate::emulation_domain::dispatch(
+                    id,
+                    m,
+                    msg.params.as_ref(),
+                    &mut st,
+                    &mut page,
+                ) {
                     Ok(resp) => (resp, vec![]),
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                         CdpMessage::error_response(id, -32601, "Method not found"),

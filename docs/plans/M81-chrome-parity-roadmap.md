@@ -38,7 +38,7 @@
 ## B. CDP 自动化能力对齐（Playwright/Puppeteer 完整驱动）
 
 - [x] B1. Input.dispatchKeyEvent 真实现（keydown/char/keyUp + text 插入 + 焦点桥）✓
-- [ ] B2. Emulation.setDeviceMetricsOverride（viewport 调整真生效）
+- [x] B2. Emulation.setDeviceMetricsOverride（viewport 真生效，跨导航持续，Puppeteer setViewportSize 实测）✓
 - [ ] B3. Page.captureScreenshot 增强（clip 区域截图、fullpage 模式）
 - [x] B4. Runtime.evaluate awaitPromise（Promise 驱动循环 + fetch then 链端到端）✓
 - [ ] B5. DOM.getBoxModel（Puppeteer click 定位依赖）
@@ -103,13 +103,13 @@
 | 阶段 | 总项 | 完成 | 状态 |
 |------|------|------|------|
 | A 交互/输入 | 8 | 8 | ✅ 完成（全交互链路） |
-| B CDP | 7 | 2 | 进行中 |
+| B CDP | 7 | 3 | 进行中 |
 | C 渲染 | 7 | 0 | 待开始 |
 | D CSS | 7 | 0 | 待开始 |
 | E JS API | 7 | 0 | 待开始 |
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **11** | **23%** |
+| **合计** | **48** | **12** | **25%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。
