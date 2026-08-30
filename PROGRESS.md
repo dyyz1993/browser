@@ -2331,6 +2331,12 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   scroll 事件。配合 M80.27 IO 激活，滚动后 lazy 内容立即渲染。
 - 实证：SCROLL-fired-1（监听器触发 ✓）。885 tests 全绿。
 
+**M81.8 —— 批 87（定时）A7 双击/右键（路线图 8/48）**：
+
+- **--dblclick <selector>**：click ×2 + dblclick（detail:2）序列。
+- **--contextmenu <selector>**：contextmenu 事件（button:2）。
+- 实证：DBL-CLICKED ✓ CTX-MENU ✓。885 tests 全绿。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

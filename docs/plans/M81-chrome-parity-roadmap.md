@@ -32,7 +32,7 @@
 - [x] A4. 键盘事件（--type "SELECTOR=TEXT"：keydown/keypress/input/keyup 逐字符 + change；CDP KeyEvent 待接）✓
 - [x] A5. 表单交互闭环（--check checkbox/radio + --select "SEL=VALUE" 下拉）✓
 - [x] A6. 滚动事件（--scroll-to 元素/像素；scroll 事件派发；IO 激活后 lazy 内容触发）✓
-- [ ] A7. 双击/右键事件（dblclick/contextmenu）
+- [x] A7. 双击/右键事件（--dblclick click×2+dblclick、--contextmenu）✓
 - [ ] A8. 拖放事件基础（dragstart/drop 最小语义，爬虫场景够用即可）
 
 ## B. CDP 自动化能力对齐（Playwright/Puppeteer 完整驱动）
@@ -102,7 +102,7 @@
 
 | 阶段 | 总项 | 完成 | 状态 |
 |------|------|------|------|
-| A 交互/输入 | 8 | 6 | 进行中（+scroll-to） |
+| A 交互/输入 | 8 | 7 | 进行中（+dblclick/contextmenu） |
 | B CDP | 7 | 0 | 待开始 |
 | C 渲染 | 7 | 0 | 待开始 |
 | D CSS | 7 | 0 | 待开始 |
@@ -110,6 +110,6 @@
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **7** | **15%** |
+| **合计** | **48** | **8** | **17%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。

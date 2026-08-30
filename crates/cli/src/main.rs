@@ -108,6 +108,12 @@ enum Cmd {
         /// IntersectionObserver 回调（lazy 内容加载）。
         #[arg(long = "scroll-to")]
         scroll_tos: Vec<String>,
+        /// M81.8: 双击（可多次）。序列：click ×2 + dblclick。
+        #[arg(long = "dblclick")]
+        dblclicks: Vec<String>,
+        /// M81.8: 右键（可多次）。派发 contextmenu 事件。
+        #[arg(long = "contextmenu")]
+        contextmenus: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -148,6 +154,12 @@ enum Cmd {
         /// IntersectionObserver 回调（lazy 内容加载）。
         #[arg(long = "scroll-to")]
         scroll_tos: Vec<String>,
+        /// M81.8: 双击（可多次）。序列：click ×2 + dblclick。
+        #[arg(long = "dblclick")]
+        dblclicks: Vec<String>,
+        /// M81.8: 右键（可多次）。派发 contextmenu 事件。
+        #[arg(long = "contextmenu")]
+        contextmenus: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -210,6 +222,12 @@ enum Cmd {
         /// IntersectionObserver 回调（lazy 内容加载）。
         #[arg(long = "scroll-to")]
         scroll_tos: Vec<String>,
+        /// M81.8: 双击（可多次）。序列：click ×2 + dblclick。
+        #[arg(long = "dblclick")]
+        dblclicks: Vec<String>,
+        /// M81.8: 右键（可多次）。派发 contextmenu 事件。
+        #[arg(long = "contextmenu")]
+        contextmenus: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -454,6 +472,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             checks,
             select_args,
             scroll_tos,
+            dblclicks,
+            contextmenus,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -466,6 +486,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(check_post_exprs(&checks))
                 .chain(select_post_exprs(&select_args))
                 .chain(scroll_post_exprs(&scroll_tos))
+                .chain(dblclick_post_exprs(&dblclicks))
+                .chain(contextmenu_post_exprs(&contextmenus))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
@@ -524,6 +546,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             checks,
             select_args,
             scroll_tos,
+            dblclicks,
+            contextmenus,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -537,6 +561,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(check_post_exprs(&checks))
                 .chain(select_post_exprs(&select_args))
                 .chain(scroll_post_exprs(&scroll_tos))
+                .chain(dblclick_post_exprs(&dblclicks))
+                .chain(contextmenu_post_exprs(&contextmenus))
                 .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
@@ -609,6 +635,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             checks,
             select_args,
             scroll_tos,
+            dblclicks,
+            contextmenus,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -622,6 +650,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(check_post_exprs(&checks))
                 .chain(select_post_exprs(&select_args))
                 .chain(scroll_post_exprs(&scroll_tos))
+                .chain(dblclick_post_exprs(&dblclicks))
+                .chain(contextmenu_post_exprs(&contextmenus))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
@@ -1524,6 +1554,65 @@ fn scroll_post_exprs(targets: &[String]) -> Vec<String> {
                      return el.__nodeId;}})()"
                 )
             }
+        })
+        .collect()
+}
+
+/// M81.8: --dblclick 表达式——click ×2 + dblclick 事件（浏览器标准序列）。
+fn dblclick_post_exprs(selectors: &[String]) -> Vec<String> {
+    selectors
+        .iter()
+        .map(|sel| {
+            let find = if let Some(text) = sel.strip_prefix("text=") {
+                let esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "var els=document.querySelectorAll('*');\
+                     for(var i=0;i<els.length;i++){{\
+                     var t=(els[i].textContent||'').trim();\
+                     if(t.length>0&&t.indexOf('{esc}')>=0&&t.length<bl){{el=els[i];bl=t.length;}}}}"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("try{{el=document.querySelector('{esc}');}}catch(e){{return -1;}}")
+            };
+            format!(
+                "(function(){{var el=null,bl=Infinity;{find}\
+                 if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                 var opt={{bubbles:true,cancelable:true,view:window,detail:2}};\
+                 try{{el.dispatchEvent(new MouseEvent('click',opt));}}catch(e){{}}\
+                 try{{el.dispatchEvent(new MouseEvent('click',opt));}}catch(e){{}}\
+                 try{{el.dispatchEvent(new MouseEvent('dblclick',opt));}}catch(e){{}}\
+                 return el.__nodeId;}})()"
+            )
+        })
+        .collect()
+}
+
+/// M81.8: --contextmenu 表达式——右键 contextmenu 事件（不冒泡到 window 的
+/// 特殊性忽略，爬虫场景菜单展开靠 JS 监听 contextmenu）。
+fn contextmenu_post_exprs(selectors: &[String]) -> Vec<String> {
+    selectors
+        .iter()
+        .map(|sel| {
+            let find = if let Some(text) = sel.strip_prefix("text=") {
+                let esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "var els=document.querySelectorAll('*');\
+                     for(var i=0;i<els.length;i++){{\
+                     var t=(els[i].textContent||'').trim();\
+                     if(t.length>0&&t.indexOf('{esc}')>=0&&t.length<bl){{el=els[i];bl=t.length;}}}}"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("try{{el=document.querySelector('{esc}');}}catch(e){{return -1;}}")
+            };
+            format!(
+                "(function(){{var el=null,bl=Infinity;{find}\
+                 if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                 var ev=new MouseEvent('contextmenu',{{bubbles:true,cancelable:true,view:window,button:2}});\
+                 try{{el.dispatchEvent(ev);}}catch(e){{}}\
+                 return el.__nodeId;}})()"
+            )
         })
         .collect()
 }
