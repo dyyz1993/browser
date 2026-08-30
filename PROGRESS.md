@@ -29,6 +29,52 @@
 
 ## 最近变更（倒序）
 
+### M81.A1 —— CDP 多会话并发：Playwright connect_over_cdp 打通（goto + title 端到端）
+
+**架构改动**（`crates/cdp/src/server.rs`）：
+- **单会话串行 accept → 并发会话**：`CdpServer::listen` 每连接 `tokio::spawn`
+  独立任务；新增 `SharedBrowserState { page, emulation }`（`Arc<Mutex>`）在
+  **所有连接间共享同一个单 tab PageState**——Playwright 的 browser 级 + page 级
+  双连接（或 Puppeteer 复连）互不阻塞，任一连接的 navigate 对其它连接立即可见。
+  门禁依赖：`PageState: Send`（Tree owned clone 模型已满足），当前 CLI 用
+  current_thread runtime，调度安全。
+- **Playwright 1.41 connect 硬性依赖补齐**：
+  - `discovery::target_object` 增加 `browserContextId`（`CRBrowser._onAttachedToTarget`
+    对它 assert，缺失直接断言失败）；
+  - `Target.getTargetInfo` 返回 `{targetInfo}`（connect 时 setAutoAttach 后必发）；
+  - `Browser.*` 未实现方法统一 no-op ack（`Browser.setDownloadBehavior` 在
+    默认 context 初始化路径，-32601 会拒掉整个 connect）；
+  - `Runtime.enable` 不再要求 session_id 才发 `executionContextCreated`
+    （page 级直连无 sessionId，同样需要绑定 main world）。
+
+**Runtime 域两处语义修复**（连带修复，均为 CDP 专用路径）：
+- `js-runtime::eval_display_string`：旧封装 `return (EXPR);` 把 eval 当**单表达式**，
+  CDP `Runtime.evaluate` 实际是**程序**（语句序列合法）。Playwright utilityScript
+  （`var __commonJS=...; class UtilityScript ...`）直接 `Unexpected token ';'`。
+  改为 JSON 转义 + 间接 eval 的**完成值**语义（对齐 Chrome）；QuickJS 无 GC 风险
+  （结果立即 String 化，无全局引用）。
+- `cdp::runtime_domain::callFunctionOn`：Playwright 所有 evaluate 走
+  `(utilityScript, ...args) => utilityScript.evaluate(...args)` 且 utilityScript
+  作为 arguments[0]（我们侧无 objectId，收到 `{}`）。eval 作用域内**合成等价
+  utilityScript 对象**（evaluate = 内层 eval 用户函数再调用），by-value 的
+  evaluate 端到端工作。
+
+**端到端验证**（`/tmp/m81_verify.py`，fixtures + `browser cdp --port 18995`）：
+- T1 单连接 Puppeteer 风格回归：setAutoAttach→attachedToTarget→Runtime/Page.enable→
+  navigate→lifecycle→Input.dispatchMouseEvent(10,8)→evaluate 读 `#out` = **CLICKED-OK** ✅
+- T2 裸 WS 双连接模拟（browser 连接 + page 连接同时存活）：browser 侧收
+  attachedToTarget/getTargetInfo、page 侧 navigate，browser 侧 getNavigationHistory
+  立即读到新 URL（共享状态实证）✅
+- T3 真实 Playwright 1.41 `connect_over_cdp`：`contexts[0].pages[0]` 就位，
+  `page.goto()` + `page.title()` = **'Click Target'** ✅
+- 已知边界（A2）：`page.click` 等元素句柄 API 需要 CDP objectId 元素句柄
+  （持久 JS 对象模型），A1 范围外；`Runtime.callFunctionOn` 的 evaluateHandle
+  抛显式错误提示。
+
+**测试**：+8（server 多会话 3：并发握手、共享 PageState、Playwright connect
+blockers；target getTargetInfo 1；js-runtime 程序 eval 3）。**879 pass 全绿**
+（基线 871），fmt/clippy -D warnings 干净。改动留工作区未 commit。
+
 ### M78 — 兼容性评分基线 + 自优化循环（进行中）🎯
 
 **目标**（[docs/plans/M78-compat-score-loop.md](./docs/plans/M78-compat-score-loop.md)）：

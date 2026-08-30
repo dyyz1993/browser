@@ -26,7 +26,7 @@
 
 ## A. 交互/输入事件（Chrome 核心交互对齐）
 
-- [ ] A1. CDP Playwright 双连接支持（server 并发会话，M42 单会话限制解除）
+- [x] A1. CDP Playwright 双连接支持（server 并发会话，M42 单会话限制解除）✓ commit 见 M81.A1
 - [ ] A2. hover 事件（mouseenter/mouseleave/mouseover/mouseout 合成 + CLI --hover）
 - [ ] A3. focus/blur 事件（--focus 参数；已部分有 activeElement 追踪）
 - [ ] A4. 键盘事件（--type 参数：keydown/keypress/keyup + input value 注入；CDP Input.dispatchKeyEvent 接线）
@@ -102,7 +102,7 @@
 
 | 阶段 | 总项 | 完成 | 状态 |
 |------|------|------|------|
-| A 交互/输入 | 8 | 0 | 待开始 |
+| A 交互/输入 | 8 | 1 | 进行中（批 48 点击 + A1 双连接） |
 | B CDP | 7 | 0 | 待开始 |
 | C 渲染 | 7 | 0 | 待开始 |
 | D CSS | 7 | 0 | 待开始 |
@@ -110,6 +110,6 @@
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **1** | **2%** |
+| **合计** | **48** | **2** | **4%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。

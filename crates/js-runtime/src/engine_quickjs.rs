@@ -1205,22 +1205,45 @@ impl QuickJsEngine {
         self.ctx.with(|ctx: Ctx| ctx.eval::<String, _>(js).ok())
     }
 
-    /// M67: eval 单表达式，返回对齐 boa `display()` 格式的结果字符串。
+    /// M67: eval CDP 传入的 JS **程序**，返回对齐 boa `display()` 格式的结果字符串。
     ///
     /// 供 CDP `eval_in_tree_engine` 的 QuickJS 分支用。CDP evaluate 的返回类型
     /// 不定（number/bool/string/undefined/null/object），用 JS 层统一格式化：
     /// - string → JSON.stringify 包引号（正确转义换行/引号），模拟 boa display
     /// - undefined / null / number / bool → String(r) 原样字面量
     ///
-    /// 用 `CatchResultExt::catch` 捕获错误，CaughtError 在 `with` 闭包内 drop（GC 安全）。
+    /// M81(A1)：CDP `Runtime.evaluate` / `callFunctionOn` 传入的是**程序**
+    ///（语句序列合法，例如 Playwright 的 utilityScript 是
+    /// `var __commonJS = ...; class UtilityScript ...; return ...`），不一定是
+    /// 单表达式。旧封装 `return (EXPR);` 把程序放进**表达式**上下文，遇到
+    /// 语句分隔符直接语法错误（`Unexpected token ';'`），Playwright 的
+    /// page.title()/click 等全部卡死在这里。
+    /// 改用间接 eval 的**完成值**（completion value）语义 —— 与 Chrome
+    /// Runtime.evaluate 一致：单表达式返回其值，语句序列返回最后一条
+    /// 表达式语句的值。源码 JSON 转义后以字符串传入；结果立即 String() 化，
+    /// 不在全局存任何 JS 对象引用（GC 安全，CaughtError 在 with 闭包内 drop）。
     pub fn eval_display_string(&mut self, js: &str) -> Result<String, String> {
         use rquickjs::CatchResultExt;
-        // 用 IIFE 在 JS 层格式化结果，避免 rquickjs Value 跨闭包取值的复杂性。
-        // 注意：expr 原样注入到 return 后，不转义（CDP evaluate 的 expr 本就是 JS 代码）。
+        // JSON 转义源码（引号/反斜杠/控制字符/U+2028/U+2029）。
+        let mut esc = String::with_capacity(js.len() + 16);
+        for c in js.chars() {
+            match c {
+                '"' => esc.push_str("\\\""),
+                '\\' => esc.push_str("\\\\"),
+                '\n' => esc.push_str("\\n"),
+                '\r' => esc.push_str("\\r"),
+                '\t' => esc.push_str("\\t"),
+                '\u{2028}' => esc.push_str("\\u2028"),
+                '\u{2029}' => esc.push_str("\\u2029"),
+                c if (c as u32) < 0x20 => esc.push_str(&format!("\\u{:04x}", c as u32)),
+                c => esc.push(c),
+            }
+        }
+        // (0, eval) 是间接 eval：全局作用域 + 程序完成值语义（ES 标准）。
         let wrapper = format!(
-            "(function() {{ var r = (function(){{ return ({EXPR}); }})(); \
+            "(function() {{ var r = (0, eval)(\"{SRC}\"); \
              return typeof r === 'string' ? JSON.stringify(r) : String(r); }})()",
-            EXPR = js
+            SRC = esc
         );
         self.ctx.with(
             |ctx: Ctx| match ctx.eval::<String, _>(wrapper.as_str()).catch(&ctx) {
@@ -1656,5 +1679,41 @@ mod gc_leak_tests {
             depth >= 150,
             "recursion depth {depth} below floor 150 — stack limit regressed to <2MB?"
         );
+    }
+}
+
+#[cfg(test)]
+mod m81_display_tests {
+    use super::*;
+
+    fn eval(expr: &str) -> Result<String, String> {
+        let mut engine_box = crate::engine::EngineKind::QuickJs.create(None);
+        let wrapper = (*engine_box)
+            .as_any_mut()
+            .downcast_mut::<QuickJsEngineWrapper>()
+            .unwrap();
+        wrapper.engine().eval_display_string(expr)
+    }
+
+    #[test]
+    fn m81_expression() {
+        assert_eq!(eval("2 + 3").unwrap(), "5");
+    }
+
+    #[test]
+    fn m81_class_statement_sequence() {
+        // CDP 程序语义：语句序列（class 声明 + 尾表达式）必须合法。
+        let r = eval("class A { m() { return 7; } }; new A().m()").unwrap();
+        assert_eq!(r, "7");
+    }
+
+    #[test]
+    fn m81_playwright_utility_shape() {
+        // Playwright utilityScript 形状：var + IIFE + async arrow + 尾 return。
+        let src = "(() => { const module = {}; var f = (a) => a + 1; \
+                   class K { go() { return (async () => { const v = await 2; return f(v); })(); } } \
+                   return new K().go(); })()";
+        let r = eval(src).unwrap();
+        assert_eq!(r, "[object Promise]");
     }
 }

@@ -38,16 +38,49 @@ use std::time::Duration;
 /// Default CDP port (Chrome standard).
 pub const DEFAULT_CDP_PORT: u16 = 9222;
 
+/// M81(A1): browser-level state shared by **all** concurrent CDP connections.
+///
+/// Playwright's `connect_over_cdp()` opens a browser-level WebSocket and a
+/// page-level WebSocket concurrently (and Puppeteer may open follow-up
+/// connections too). Every connection is its own `CdpSession` task, but they
+/// all share this single-tab state so a `Page.navigate` on one connection is
+/// immediately visible to `DOM.*` / `Runtime.*` on the other.
+#[derive(Clone)]
+pub(crate) struct SharedBrowserState {
+    /// Shared page state (single-tab model, M44).
+    pub(crate) page: Arc<Mutex<crate::page::PageState>>,
+    /// M49: emulation state (device metrics, user agent).
+    pub(crate) emulation: Arc<Mutex<crate::emulation_domain::EmulationState>>,
+}
+
+impl SharedBrowserState {
+    pub(crate) fn new() -> Self {
+        Self {
+            page: Arc::new(Mutex::new(crate::page::PageState::default())),
+            emulation: Arc::new(Mutex::new(crate::emulation_domain::EmulationState::new())),
+        }
+    }
+
+    /// Test-only: build shared state pre-seeded with a page (no network).
+    #[cfg(test)]
+    pub(crate) fn with_page(page: crate::page::PageState) -> Self {
+        Self {
+            page: Arc::new(Mutex::new(page)),
+            emulation: Arc::new(Mutex::new(crate::emulation_domain::EmulationState::new())),
+        }
+    }
+}
+
 /// A running CDP server bound to a port.
 ///
-/// Call [`CdpServer::listen`] to accept connections. The server processes
-/// one session at a time (M42 scope — adequate for a single-Tab browser;
-/// M43 adds multi-Tab + discovery endpoints).
+/// Call [`CdpServer::listen`] to accept connections. M81(A1): each accepted
+/// connection is handled **concurrently** in its own task (Playwright
+/// dual-connection model); connections share [`SharedBrowserState`].
 pub struct CdpServer;
 
 impl CdpServer {
-    /// Bind to `port` and accept connections in a loop, handling each session
-    /// to completion before the next. Runs until the listener errors.
+    /// Bind to `port` and accept connections in a loop, spawning a concurrent
+    /// session task per connection (M81(A1)). Runs until the listener errors.
     ///
     /// # Errors
     /// Returns an error if binding fails or the accept loop hits an
@@ -62,23 +95,32 @@ impl CdpServer {
                 EngineKind::Boa => "boa",
             }
         );
+        // M81(A1): one SharedBrowserState for the whole server — every
+        // connection (browser-level + page-level) sees the same page.
+        let shared = SharedBrowserState::new();
         loop {
             let (stream, addr) = listener.accept().await?;
             eprintln!("[cdp] connection from {addr}");
-            if let Err(e) = CdpSession::handle(stream, engine_kind).await {
-                eprintln!("[cdp] session ended: {e}");
-            }
+            let state = shared.clone();
+            // Handle connections concurrently instead of serially: the second
+            // (page-level) connection must not be blocked by the first.
+            tokio::spawn(async move {
+                if let Err(e) = CdpSession::handle(stream, engine_kind, state).await {
+                    eprintln!("[cdp] session ended: {e}");
+                }
+            });
         }
     }
 
     /// Accept and handle exactly one connection, then return. Used by tests.
-    #[cfg(all(test, feature = "boa"))]
+    #[cfg(test)]
     pub(crate) async fn accept_one(
         listener: TcpListener,
         engine_kind: EngineKind,
+        shared: SharedBrowserState,
     ) -> std::io::Result<()> {
         let (stream, _) = listener.accept().await?;
-        let _ = CdpSession::handle(stream, engine_kind).await;
+        let _ = CdpSession::handle(stream, engine_kind, shared).await;
         Ok(())
     }
 }
@@ -97,12 +139,16 @@ fn parse_request_path(request: &str) -> String {
 /// A single CDP client session (one WebSocket connection).
 ///
 /// M42 scope: handshake + frame I/O + dispatch loop. Unknown methods get a
-/// `-32601 Method not found` error response. M44+ adds real domain handlers.
+/// `-32601 Method not found` error response.
+///
+/// M81(A1): multiple sessions run concurrently and share one
+/// [`SharedBrowserState`] (single-tab page + emulation), so Playwright's
+/// browser-level and page-level connections observe the same page.
 pub struct CdpSession {
     stream: TcpStream,
-    /// M44: per-session page state (single-tab model).
+    /// M44: shared page state (single-tab model; M81: shared across sessions).
     page: Arc<Mutex<crate::page::PageState>>,
-    /// M49: emulation state (device metrics, user agent).
+    /// M49: emulation state (device metrics, user agent; M81: shared).
     emulation: Arc<Mutex<crate::emulation_domain::EmulationState>>,
     /// M67: JS engine backend for `Runtime.evaluate` / `callFunctionOn`.
     /// Default QuickJs (aligns with CLI); Boa fallback via `--js-engine boa`.
@@ -112,13 +158,20 @@ pub struct CdpSession {
 impl CdpSession {
     /// Handle a connection end-to-end: handshake → message loop.
     ///
+    /// `shared` is the browser-level state this session operates on (M81(A1):
+    /// all concurrent connections share the same instance).
+    ///
     /// # Errors
     /// Returns an error string on handshake or I/O failure.
-    pub async fn handle(stream: TcpStream, engine_kind: EngineKind) -> Result<(), String> {
+    pub(crate) async fn handle(
+        stream: TcpStream,
+        engine_kind: EngineKind,
+        shared: SharedBrowserState,
+    ) -> Result<(), String> {
         let mut session = CdpSession {
             stream,
-            page: Arc::new(Mutex::new(crate::page::PageState::default())),
-            emulation: Arc::new(Mutex::new(crate::emulation_domain::EmulationState::new())),
+            page: shared.page,
+            emulation: shared.emulation,
             engine_kind,
         };
         session.route().await
@@ -321,6 +374,11 @@ impl CdpSession {
                     vec![],
                 )
             }
+            // ── M81(A1): Browser.* fallback — Playwright's default browser
+            // context init sends Browser.setDownloadBehavior; a -32601 here
+            // rejects `CRBrowserContext._initialize()` and kills the whole
+            // connect_over_cdp handshake. Ack the rest no-op.
+            m if m.starts_with("Browser.") => (CdpMessage::ok_empty(id), vec![]),
             // ── M44+M50: Page domain (navigate, captureScreenshot + events) ──
             m if m.starts_with("Page.") => {
                 match crate::page::dispatch(
@@ -377,7 +435,9 @@ impl CdpSession {
                 // _createIsolatedWorld 等不到 frame 的 context → newPage() 卡死）。
                 // 单页单 context 模型：发一个 main-world context（id=1, auxData 指向
                 // 主 frame，isDefault=true）。
-                if m == "Runtime.enable" && session_id.is_some() {
+                // M81(A1): 不再要求 session_id —— Playwright 的 page 级直连
+                // （无 sessionId 的连接）同样需要这个事件来绑定 main world。
+                if m == "Runtime.enable" {
                     let mut ctx = BTreeMap::new();
                     ctx.insert("id".to_string(), Json::Number(1.0));
                     ctx.insert("origin".to_string(), Json::String(String::new()));
@@ -503,7 +563,8 @@ impl CdpSession {
             }
             // ── M48+M51: Target domain (Puppeteer connect flow + events) ──
             m if m.starts_with("Target.") => {
-                let resp = match crate::target_domain::dispatch(id, m) {
+                let ws_host = self.ws_host();
+                let resp = match crate::target_domain::dispatch(id, m, &ws_host) {
                     Ok(resp) => resp,
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => {
                         CdpMessage::error_response(id, -32601, "Method not found")
@@ -511,7 +572,6 @@ impl CdpSession {
                     Err(e) => CdpMessage::error_response(id, -32000, &e.to_string()),
                 };
                 // M53: flatten session mode — emit events at the right time
-                let ws_host = self.ws_host();
                 let events: Vec<String> = match m {
                     // setDiscoverTargets → emit targetCreated so puppeteer discovers our page target
                     "Target.setDiscoverTargets" => {
@@ -717,7 +777,7 @@ mod tests {
         // Server task: accept and handle one session.
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            CdpSession::handle(stream, EngineKind::Boa).await
+            CdpSession::handle(stream, EngineKind::Boa, SharedBrowserState::new()).await
         });
 
         // Client: connect, do WS handshake.
@@ -766,7 +826,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            CdpSession::handle(stream, EngineKind::Boa).await
+            CdpSession::handle(stream, EngineKind::Boa, SharedBrowserState::new()).await
         });
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let key = browser_ws::handshake::key_from_random([0x01; 16]);
@@ -798,7 +858,11 @@ mod tests {
     async fn http_discovery_version_endpoint() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
+        let server = tokio::spawn(CdpServer::accept_one(
+            listener,
+            EngineKind::Boa,
+            SharedBrowserState::new(),
+        ));
 
         // Plain HTTP GET /json/version (no WebSocket upgrade).
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -832,7 +896,11 @@ mod tests {
     async fn http_discovery_list_endpoint() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
+        let server = tokio::spawn(CdpServer::accept_one(
+            listener,
+            EngineKind::Boa,
+            SharedBrowserState::new(),
+        ));
 
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         client
@@ -864,7 +932,11 @@ mod tests {
         use browser_ws::handshake::build_client_request;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
+        let server = tokio::spawn(CdpServer::accept_one(
+            listener,
+            EngineKind::Boa,
+            SharedBrowserState::new(),
+        ));
 
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let key = browser_ws::handshake::key_from_random([0x99; 16]);
@@ -888,7 +960,11 @@ mod tests {
     async fn non_json_plain_http_returns_404() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(CdpServer::accept_one(listener, EngineKind::Boa));
+        let server = tokio::spawn(CdpServer::accept_one(
+            listener,
+            EngineKind::Boa,
+            SharedBrowserState::new(),
+        ));
 
         let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         client
@@ -902,6 +978,186 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 404"), "got: {resp}");
 
         drop(client);
+        let _ = server.await;
+    }
+}
+
+/// M81(A1): multi-session tests (Playwright dual-connection model).
+///
+/// Not boa-gated: these flows never touch the JS engine (Browser.getVersion /
+/// Page.getNavigationHistory are pure state reads), so they run under the
+/// default feature set.
+#[cfg(test)]
+mod multi_session_tests {
+    use super::*;
+
+    use browser_ws::handshake::{build_client_request, parse_accept_from_response};
+
+    /// Do a WS handshake on `client` and assert the 101 response.
+    async fn ws_handshake(client: &mut TcpStream, seed: [u8; 16], path: &str) {
+        let key = browser_ws::handshake::key_from_random(seed);
+        let req = build_client_request("127.0.0.1", path, &key);
+        client.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = vec![0u8; 1024];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(2), client.read(&mut buf))
+            .await
+            .expect("handshake timed out")
+            .expect("handshake read failed");
+        let resp = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(resp.starts_with("HTTP/1.1 101"), "not a 101: {resp}");
+        let accept = parse_accept_from_response(&resp).expect("accept header");
+        assert_eq!(accept, browser_ws::handshake::compute_accept(&key));
+    }
+
+    /// Send one CDP request (masked frame) and read one response frame.
+    async fn cdp_roundtrip(client: &mut TcpStream, id: i64, method: &str) -> String {
+        let msg = format!(r#"{{"id":{id},"method":"{method}"}}"#);
+        let bytes = encode_frame(&Frame::text(&msg), Some([0x0A, 0x0B, 0x0C, 0x0D]));
+        client.write_all(&bytes).await.unwrap();
+        let mut rbuf = vec![0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(2), client.read(&mut rbuf))
+            .await
+            .expect("response timed out")
+            .expect("response read failed");
+        let (frame, _) = decode_frame(&rbuf[..n]).unwrap().unwrap();
+        String::from_utf8_lossy(&frame.payload).to_string()
+    }
+
+    /// Connect with a short retry — the server binds asynchronously.
+    async fn connect_with_retry(port: u16) -> TcpStream {
+        for _ in 0..50 {
+            if let Ok(c) = TcpStream::connect(("127.0.0.1", port)).await {
+                return c;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("server never came up on port {port}");
+    }
+
+    /// Two WebSocket connections must be served **concurrently**: both
+    /// handshakes complete while neither connection has closed. Under the old
+    /// serial accept loop the second connection was never even handshaked
+    /// until the first one closed.
+    #[tokio::test]
+    async fn two_connections_served_concurrently() {
+        // Reserve a free port, release it, then let CdpServer::listen bind it.
+        let port = {
+            let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        let server = tokio::spawn(CdpServer::listen(port, EngineKind::QuickJs));
+
+        // Open BOTH connections and complete BOTH handshakes first.
+        let mut conn_a = connect_with_retry(port).await;
+        let mut conn_b = connect_with_retry(port).await;
+        ws_handshake(
+            &mut conn_a,
+            [0x01; 16],
+            "/devtools/browser/browser-rs-target-0",
+        )
+        .await;
+        ws_handshake(
+            &mut conn_b,
+            [0x02; 16],
+            "/devtools/page/browser-rs-target-0",
+        )
+        .await;
+
+        // Both must answer while both stay open (serial server would hang
+        // on the second connection's handshake above).
+        let resp_b = cdp_roundtrip(&mut conn_b, 10, "Browser.getVersion").await;
+        assert!(resp_b.contains("\"id\":10"), "got: {resp_b}");
+        assert!(resp_b.contains("browser-rs"), "got: {resp_b}");
+        let resp_a = cdp_roundtrip(&mut conn_a, 11, "Browser.getVersion").await;
+        assert!(resp_a.contains("\"id\":11"), "got: {resp_a}");
+
+        drop(conn_a);
+        drop(conn_b);
+        server.abort();
+        let _ = server.await;
+    }
+
+    /// Concurrent connections must share one page state: a URL seeded into
+    /// the shared state is visible from BOTH connections (M81(A1) — the
+    /// page-level connection reads what the browser-level connection did).
+    #[tokio::test]
+    async fn connections_share_page_state() {
+        let page = crate::page::PageState {
+            url: "http://shared.test/doc".to_string(),
+            ..Default::default()
+        };
+        let shared = SharedBrowserState::with_page(page);
+
+        let listener = std::sync::Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let port = listener.local_addr().unwrap().port();
+        // Two sessions, same shared state (mirrors listen()).
+        let sa = shared.clone();
+        let l1 = listener.clone();
+        let server_a = tokio::spawn(async move {
+            let (stream, _) = l1.accept().await.unwrap();
+            CdpSession::handle(stream, EngineKind::QuickJs, sa).await
+        });
+        let sb = shared.clone();
+        let l2 = listener.clone();
+        let server_b = tokio::spawn(async move {
+            let (stream, _) = l2.accept().await.unwrap();
+            CdpSession::handle(stream, EngineKind::QuickJs, sb).await
+        });
+
+        let mut conn_a = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut conn_b = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        ws_handshake(&mut conn_a, [0x11; 16], "/devtools/browser/x").await;
+        ws_handshake(&mut conn_b, [0x12; 16], "/devtools/page/x").await;
+
+        // Both connections must observe the SAME (seeded) page URL.
+        for (conn, id) in [(&mut conn_a, 20), (&mut conn_b, 21)] {
+            let resp = cdp_roundtrip(conn, id, "Page.getNavigationHistory").await;
+            assert!(
+                resp.contains("http://shared.test/doc"),
+                "conn id={id} missing shared url, got: {resp}"
+            );
+        }
+
+        drop(conn_a);
+        drop(conn_b);
+        let _ = server_a.await;
+        let _ = server_b.await;
+    }
+
+    /// M81(A1) Playwright connect-blocker: `Target.getTargetInfo` (fired by
+    /// connect_over_cdp after setAutoAttach) must return targetInfo, and
+    /// `Browser.setDownloadBehavior` (default-context init) must be acked —
+    /// a -32601 on either rejects Playwright's connect handshake.
+    #[tokio::test]
+    async fn playwright_connect_blockers_answered() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(CdpServer::accept_one(
+            listener,
+            EngineKind::QuickJs,
+            SharedBrowserState::new(),
+        ));
+
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        ws_handshake(
+            &mut conn,
+            [0x21; 16],
+            "/devtools/browser/browser-rs-target-0",
+        )
+        .await;
+
+        let info = cdp_roundtrip(&mut conn, 30, "Target.getTargetInfo").await;
+        assert!(info.contains("\"targetInfo\""), "got: {info}");
+        assert!(
+            info.contains("\"browserContextId\""),
+            "Playwright asserts browserContextId, got: {info}"
+        );
+
+        let dl = cdp_roundtrip(&mut conn, 31, "Browser.setDownloadBehavior").await;
+        assert!(dl.contains(r#""result":{}"#), "got: {dl}");
+        assert!(!dl.contains("error"), "must not error, got: {dl}");
+
+        drop(conn);
         let _ = server.await;
     }
 }

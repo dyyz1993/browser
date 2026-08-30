@@ -97,14 +97,48 @@ pub fn dispatch(
                     _ => a.to_json_string(),
                 })
                 .collect();
-            // 构造 (<functionDecl>)(arg0, arg1, ...) —— IIFE 形式，避免函数声明
-            // 需要名字。不套 JSON.stringify：boa display() 对字符串会加引号，
-            // classify_value 据此归类；若再 stringify 会导致字符串双重引号。
-            let expr = format!(
-                "({FD})({ARGS})",
-                FD = function_decl,
-                ARGS = args_str.join(",")
-            );
+            // 构造 eval 程序。
+            // M81(A1): Playwright 的所有 evaluate 都经 `Runtime.callFunctionOn`
+            // 且声明固定为 `(utilityScript, ...args) => utilityScript.evaluate(...args)`
+            // （arguments = [isFunction, returnByValue, expose, expression, argCount, ...],
+            // 见 Playwright javascript.js `evaluateExpression`）。我们没有持久 JS
+            // 对象模型（objectId 句柄是 A2），无法给它真对象 —— 但可以在 eval
+            // 作用域里**合成**一个等价 utilityScript（evaluate = 内层 eval 用户
+            // 函数再调用），让 by-value 的 evaluate（title / textContent /
+            // getAttribute 等）端到端工作。非 utilityScript 形态（puppeteer 的
+            // callFunctionOn）保持原 `(FD)(ARGS)` 不变。
+            let expr = if function_decl.contains("utilityScript") {
+                // Playwright 把 utilityScript 作为 arguments[0] 传入（我们收到的
+                // 是 {}/undefined，因为没有真 objectId）。合成对象**替换**第一参，
+                // 其余参数保持原位（[isFunction, returnByValue, expose, expr, ...]）。
+                let rest = args_str.iter().skip(1).cloned().collect::<Vec<_>>();
+                format!(
+                    "(function(){{ var __psUtilityScript = {{ \
+                       evaluate: function(isFunction, returnByValue, exposeUtilityScript, expression, argCount) {{ \
+                         var result = globalThis.eval(expression); \
+                         if (isFunction === true || (isFunction !== false && typeof result === 'function')) {{ \
+                           var psArgs = Array.prototype.slice.call(arguments, 5); \
+                           result = result.apply(null, psArgs.slice(0, argCount)); \
+                         }} \
+                         return result; \
+                       }}, \
+                       evaluateHandle: function() {{ throw new Error('browser-rs: objectId element handles are not supported yet (M81 A2)'); }}, \
+                       jsonValue: function(returnByValue, value) {{ return value; }} \
+                     }}; \
+                     return ({FD}).apply(null, [__psUtilityScript].concat({REST})); }})()",
+                    FD = function_decl,
+                    REST = rest.join(",")
+                )
+            } else {
+                // IIFE 形式，避免函数声明需要名字。不套 JSON.stringify：boa
+                // display() 对字符串会加引号，classify_value 据此归类；若再
+                // stringify 会导致字符串双重引号。
+                format!(
+                    "({FD})({ARGS})",
+                    FD = function_decl,
+                    ARGS = args_str.join(",")
+                )
+            };
             match eval_in_tree_engine(tree.clone(), url_or_default(url), &expr, engine_kind) {
                 Ok(value) => {
                     // boa display() 的输出，classify_value 据此归类。

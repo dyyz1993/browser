@@ -28,6 +28,14 @@ use crate::jsonrpc::Json;
 /// Fixed target id for the single browser tab (M43 single-tab scope).
 pub const TARGET_ID: &str = "browser-rs-target-0";
 
+/// M81(A1): fixed browser context id for the single default context.
+///
+/// Playwright's `CRBrowser._onAttachedToTarget` **asserts**
+/// `targetInfo.browserContextId` is truthy before it will create a page —
+/// without this field `connect_over_cdp()` dies on the attachedToTarget
+/// event. Puppeteer ignores the field (treats missing/absent as default).
+pub const BROWSER_CONTEXT_ID: &str = "browser-rs-context-0";
+
 /// Build the `/json/version` response body.
 ///
 /// `ws_host` is e.g. `127.0.0.1:9222` — used to construct the
@@ -89,6 +97,11 @@ pub fn target_object(ws_host: &str) -> Json {
     m.insert("title".to_string(), Json::String("browser-rs".to_string()));
     m.insert("type".to_string(), Json::String("page".to_string()));
     m.insert("attached".to_string(), Json::Bool(true)); // M53: puppeteer checks this
+                                                        // M81(A1): Playwright asserts browserContextId on Target.targetInfo.
+    m.insert(
+        "browserContextId".to_string(),
+        Json::String(BROWSER_CONTEXT_ID.to_string()),
+    );
     m.insert("url".to_string(), Json::String("about:blank".to_string()));
     m.insert(
         "webSocketDebuggerUrl".to_string(),

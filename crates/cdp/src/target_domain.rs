@@ -13,7 +13,12 @@ use std::collections::BTreeMap;
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
 
 /// Dispatch a `Target.*` CDP method.
-pub fn dispatch(id: i64, method: &str) -> Result<String, CdpError> {
+///
+/// `ws_host` (e.g. `127.0.0.1:9222`) builds the target's
+/// `webSocketDebuggerUrl`. M81(A1) adds `Target.getTargetInfo` — Playwright's
+/// `connect_over_cdp` fires it right after `Target.setAutoAttach` (Chrome-side
+/// workaround), and a -32601 here rejects the connect handshake.
+pub fn dispatch(id: i64, method: &str, ws_host: &str) -> Result<String, CdpError> {
     match method {
         "Target.getBrowserContexts" => {
             // Single default context, no browser-context isolation.
@@ -31,9 +36,18 @@ pub fn dispatch(id: i64, method: &str) -> Result<String, CdpError> {
         }
         "Target.getTargets" => {
             // Return our single page target.
-            let target = crate::discovery::target_object("127.0.0.1:9222");
+            let target = crate::discovery::target_object(ws_host);
             let mut result = BTreeMap::new();
             result.insert("targetInfos".to_string(), Json::Array(vec![target]));
+            Ok(CdpMessage::ok_response(id, Json::Object(result)))
+        }
+        "Target.getTargetInfo" => {
+            // M81(A1): Playwright fires this on connect. Return our single
+            // page target's info (targetId param is ignored in the
+            // single-tab model).
+            let target = crate::discovery::target_object(ws_host);
+            let mut result = BTreeMap::new();
+            result.insert("targetInfo".to_string(), target);
             Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
         "Target.createTarget" => {
@@ -67,33 +81,47 @@ pub fn dispatch(id: i64, method: &str) -> Result<String, CdpError> {
 mod tests {
     use super::*;
 
+    const HOST: &str = "127.0.0.1:9222";
+
     #[test]
     fn get_browser_contexts_empty() {
-        let resp = dispatch(1, "Target.getBrowserContexts").unwrap();
+        let resp = dispatch(1, "Target.getBrowserContexts", HOST).unwrap();
         assert!(resp.contains("\"browserContextIds\":[]"), "got: {resp}");
     }
 
     #[test]
     fn set_discover_targets_ok() {
-        let resp = dispatch(1, "Target.setDiscoverTargets").unwrap();
+        let resp = dispatch(1, "Target.setDiscoverTargets", HOST).unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
     }
 
     #[test]
     fn set_auto_attach_ok() {
-        let resp = dispatch(1, "Target.setAutoAttach").unwrap();
+        let resp = dispatch(1, "Target.setAutoAttach", HOST).unwrap();
         assert_eq!(resp, r#"{"id":1,"result":{}}"#);
     }
 
     #[test]
     fn get_targets_returns_one() {
-        let resp = dispatch(1, "Target.getTargets").unwrap();
+        let resp = dispatch(1, "Target.getTargets", HOST).unwrap();
         assert!(resp.contains("\"targetInfos\""), "got: {resp}");
         assert!(resp.contains("\"type\":\"page\""), "got: {resp}");
     }
 
     #[test]
+    fn get_target_info_returns_target_info() {
+        // M81(A1): Playwright connect_over_cdp fires this after setAutoAttach.
+        let resp = dispatch(1, "Target.getTargetInfo", HOST).unwrap();
+        assert!(resp.contains("\"targetInfo\""), "got: {resp}");
+        assert!(
+            resp.contains("\"targetId\":\"browser-rs-target-0\""),
+            "got: {resp}"
+        );
+        assert!(resp.contains("\"type\":\"page\""), "got: {resp}");
+    }
+
+    #[test]
     fn unknown_method_errors() {
-        assert!(dispatch(1, "Target.totallyFake").is_err());
+        assert!(dispatch(1, "Target.totallyFake", HOST).is_err());
     }
 }
