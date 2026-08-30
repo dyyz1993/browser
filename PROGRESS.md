@@ -2308,6 +2308,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   （focus_post_exprs → el.focus() 内建逻辑，CSS/text= 双形式）。
 - 实证：FOCUSED-OK（onfocus 属性触发）。885 tests 全绿 + REALITY PASS。
 
+**M81.5 —— 批 84（定时）A4 键盘事件（路线图 5/48）**：
+
+- **--type "SELECTOR=TEXT"**（可多次）：focus → 逐字符 keydown →
+  keypress → value 注入 → input 事件 → keyup → 尾部 change（冒泡）。
+  selector/text= 双形式同 click/hover。
+- **搜索框爬取工作流成立**：--type "#search" "query" --click "#go"
+  （输入→触发→点搜索→爬结果）。
+- 885 tests 全绿 + REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

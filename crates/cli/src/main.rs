@@ -93,6 +93,10 @@ enum Cmd {
         /// 前一焦点元素派 blur → focusout。
         #[arg(long = "focus")]
         focuses: Vec<String>,
+        /// M81.5: 键盘输入（可多次）。格式：--type "SELECTOR=TEXT"。
+        /// 序列：focus → 逐字符 keydown/keypress/input/keyup → change。
+        #[arg(long = "type")]
+        type_args: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -119,6 +123,9 @@ enum Cmd {
         /// M81.4: 合成聚焦（可多次）。
         #[arg(long = "focus")]
         focuses: Vec<String>,
+        /// M81.5: 键盘输入（可多次，两个值：selector 和 text）。
+        #[arg(long = "type")]
+        type_args: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -166,6 +173,10 @@ enum Cmd {
         /// M81.4: 合成聚焦（可多次）。
         #[arg(long = "focus")]
         focuses: Vec<String>,
+        /// M81.5: 键盘输入（可多次，两个值：selector 和 text）。
+        /// 序列：focus → 逐字符 keydown/keypress/input/keyup → change。
+        #[arg(long = "type")]
+        type_args: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -406,6 +417,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             clicks,
             hovers,
             focuses,
+            type_args,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -414,6 +426,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .into_iter()
                 .chain(hover_post_exprs(&hovers))
                 .chain(focus_post_exprs(&focuses))
+                .chain(type_post_exprs(&type_args))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
@@ -468,6 +481,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             clicks,
             hovers,
             focuses,
+            type_args,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -477,6 +491,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .into_iter()
                 .chain(hover_post_exprs(&hovers))
                 .chain(focus_post_exprs(&focuses))
+                .chain(type_post_exprs(&type_args))
                 .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
@@ -545,6 +560,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             clicks,
             hovers,
             focuses,
+            type_args,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -554,6 +570,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .into_iter()
                 .chain(hover_post_exprs(&hovers))
                 .chain(focus_post_exprs(&focuses))
+                .chain(type_post_exprs(&type_args))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
@@ -1314,6 +1331,60 @@ fn focus_post_exprs(selectors: &[String]) -> Vec<String> {
                  if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
                  if(typeof el.focus==='function'){{el.focus();return el.__nodeId;}}\
                  return -1;}})()"
+            )
+        })
+        .collect()
+}
+
+/// M81.5: --type <selector> <text>——键盘输入序列合成（聚焦→逐字符
+/// keydown/keypress/input/keyup + value 注入）。爬虫搜索框场景：
+/// --type "#search" "query" --click "#go"。
+fn type_post_exprs(type_args: &[String]) -> Vec<String> {
+    type_args
+        .iter()
+        .map(|arg| {
+            // 格式："SELECTOR=TEXT"（selector 里不含 =，text 可含 =）
+            let (sel, text) = match arg.find('=') {
+                Some(i) => (arg[..i].to_string(), arg[i+1..].to_string()),
+                None => (arg.clone(), String::new()),
+            };
+            let find = if let Some(t) = sel.strip_prefix("text=") {
+                let esc = t.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "var els=document.querySelectorAll('*');\
+                     for(var i=0;i<els.length;i++){{\
+                     var tt=(els[i].textContent||'').trim();\
+                     if(tt.length>0&&tt.indexOf('{esc}')>=0&&tt.length<bl){{el=els[i];bl=tt.length;}}}}"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("try{{el=document.querySelector('{esc}');}}catch(e){{return -1;}}")
+            };
+            let text_esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+            format!(
+                "(function(){{var el=null,bl=Infinity;{find}\
+                 if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                 if(typeof el.focus==='function')el.focus();\
+                 var text='{text_esc}';\
+                 try{{el.value='';}}catch(e){{}}\
+                 for(var i=0;i<text.length;i++){{\
+                   var ch=text.charAt(i);\
+                   var kd=new KeyboardEvent('keydown',{{key:ch,bubbles:true,cancelable:true}});\
+                   try{{el.dispatchEvent(kd);}}catch(e){{}}\
+                   var kp=new KeyboardEvent('keypress',{{key:ch,bubbles:true,cancelable:true}});\
+                   try{{el.dispatchEvent(kp);}}catch(e){{}}\
+                   try{{\
+                     if(typeof el.value==='string'){{el.value+=ch;}}\
+                     else{{el.textContent=(el.textContent||'')+ch;}}\
+                   }}catch(e){{}}\
+                   var ie=new Event('input',{{bubbles:true}});\
+                   try{{ie.data=ch;}}catch(e){{}}\
+                   try{{el.dispatchEvent(ie);}}catch(e){{}}\
+                   var ku=new KeyboardEvent('keyup',{{key:ch,bubbles:true,cancelable:true}});\
+                   try{{el.dispatchEvent(ku);}}catch(e){{}}\
+                 }}\
+                 try{{el.dispatchEvent(new Event('change',{{bubbles:true}}));}}catch(e){{}}\
+                 return el.__nodeId;}})()"
             )
         })
         .collect()
