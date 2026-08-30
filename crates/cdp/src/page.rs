@@ -204,6 +204,17 @@ impl PageState {
     ///
     /// M44 uses the screenshot renderer (fontdue + ANSI color parse).
     pub fn capture_png_base64(&self) -> Result<String, CdpError> {
+        self.capture_png_base64_opts(None, false)
+    }
+
+    /// M81.B3: clip 区域截图 + captureBeyondViewport 全页模式。
+    /// clip: Some((x, y, width, height))——px 坐标，裁剪渲染产物。
+    /// fullpage: true 时对整页高度渲染（当前 rendered_colored 已含整页）。
+    pub fn capture_png_base64_opts(
+        &self,
+        clip: Option<(f64, f64, f64, f64)>,
+        _capture_beyond: bool,
+    ) -> Result<String, CdpError> {
         if self.rendered_colored.is_empty() {
             return Err(CdpError::InvalidJson(
                 "no page loaded — call Page.navigate first".to_string(),
@@ -211,9 +222,28 @@ impl PageState {
         }
         let mut renderer = browser_render::font::FontRenderer::new();
         // Decode the colored ANSI text to RGBA pixels (reuse the M30 screenshot path).
-        let (rgba, _w, _h) = render_text_to_rgba(&mut renderer, &self.rendered_colored);
+        let (mut rgba, w, h) = render_text_to_rgba(&mut renderer, &self.rendered_colored);
+        // M81.B3: clip 裁剪——对 RGBA 缓冲按行/列截取子区域。
+        if let Some((cx, cy, cw, ch)) = clip {
+            let x0 = (cx.max(0.0) as usize).min(w.saturating_sub(1));
+            let y0 = (cy.max(0.0) as usize).min(h.saturating_sub(1));
+            let cw = (cw as usize).min(w.saturating_sub(x0));
+            let ch = (ch as usize).min(h.saturating_sub(y0));
+            if cw > 0 && ch > 0 {
+                let mut cropped = Vec::with_capacity(cw * ch * 4);
+                for row in y0..(y0 + ch) {
+                    let start = (row * w + x0) * 4;
+                    let end = start + cw * 4;
+                    cropped.extend_from_slice(&rgba[start..end]);
+                }
+                rgba = cropped;
+                let png = encode_rgba_as_png(&rgba, cw, ch)
+                    .map_err(|e| CdpError::InvalidJson(format!("png encode: {e}")))?;
+                return Ok(base64_encode(&png));
+            }
+        }
         // Encode RGBA → PNG → base64.
-        let png = encode_rgba_as_png(&rgba, _w, _h)
+        let png = encode_rgba_as_png(&rgba, w, h)
             .map_err(|e| CdpError::InvalidJson(format!("png encode: {e}")))?;
         Ok(base64_encode(&png))
     }
@@ -705,7 +735,18 @@ pub async fn dispatch(
             let st = state
                 .lock()
                 .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
-            let data = st.capture_png_base64()?;
+            // M81.B3: params.clip = {x,y,width,height,scale}——裁剪区域。
+            let clip = params.and_then(|p| p.get("clip")).and_then(|c| {
+                let gf = |k: &str| {
+                    c.get(k).and_then(|v| match v {
+                        Json::Number(n) => Some(*n),
+                        _ => None,
+                    })
+                };
+                let (x, y, w, h) = (gf("x")?, gf("y")?, gf("width")?, gf("height")?);
+                Some((x, y, w, h))
+            });
+            let data = st.capture_png_base64_opts(clip, false)?;
             let mut result = BTreeMap::new();
             result.insert("data".to_string(), Json::String(data));
             Ok(DispatchResult {

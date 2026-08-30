@@ -2389,6 +2389,14 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 902 tests 全绿（+23：cdp crate 键盘 8 + awaitPromise 9 + 其他）。
 - REALITY PASS。
 
+**M81.B3 —— 批 91（定时）B3 captureScreenshot 增强（路线图 13/48）**：
+
+- **clip 区域截图**：Page.captureScreenshot params.clip =
+  {x,y,width,height}——RGBA 缓冲按行/列截取子区域返回。
+- Json::Number 提取适配（cdp jsonrpc 枚举无 as_f64）。
+- 实证：vuejs.org 外部故障（curl 000，站方故障非回归，批 68 同款已证
+  恢复模式）；其余站正常。919 tests 全绿（+17 B2 遗留入库）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
