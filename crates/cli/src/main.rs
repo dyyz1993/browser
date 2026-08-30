@@ -114,6 +114,10 @@ enum Cmd {
         /// M81.8: 右键（可多次）。派发 contextmenu 事件。
         #[arg(long = "contextmenu")]
         contextmenus: Vec<String>,
+        /// M81.9: 拖放（可多次）。格式："源选择器>目标选择器"。
+        /// 序列：dragstart→dragover→drop→dragend。
+        #[arg(long = "drag")]
+        drags: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -160,6 +164,10 @@ enum Cmd {
         /// M81.8: 右键（可多次）。派发 contextmenu 事件。
         #[arg(long = "contextmenu")]
         contextmenus: Vec<String>,
+        /// M81.9: 拖放（可多次）。格式："源选择器>目标选择器"。
+        /// 序列：dragstart→dragover→drop→dragend。
+        #[arg(long = "drag")]
+        drags: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -228,6 +236,10 @@ enum Cmd {
         /// M81.8: 右键（可多次）。派发 contextmenu 事件。
         #[arg(long = "contextmenu")]
         contextmenus: Vec<String>,
+        /// M81.9: 拖放（可多次）。格式："源选择器>目标选择器"。
+        /// 序列：dragstart→dragover→drop→dragend。
+        #[arg(long = "drag")]
+        drags: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -474,6 +486,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             scroll_tos,
             dblclicks,
             contextmenus,
+            drags,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -488,6 +501,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(scroll_post_exprs(&scroll_tos))
                 .chain(dblclick_post_exprs(&dblclicks))
                 .chain(contextmenu_post_exprs(&contextmenus))
+                .chain(drag_post_exprs(&drags))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
@@ -548,6 +562,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             scroll_tos,
             dblclicks,
             contextmenus,
+            drags,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -563,6 +578,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(scroll_post_exprs(&scroll_tos))
                 .chain(dblclick_post_exprs(&dblclicks))
                 .chain(contextmenu_post_exprs(&contextmenus))
+                .chain(drag_post_exprs(&drags))
                 .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
@@ -637,6 +653,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             scroll_tos,
             dblclicks,
             contextmenus,
+            drags,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -652,6 +669,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(scroll_post_exprs(&scroll_tos))
                 .chain(dblclick_post_exprs(&dblclicks))
                 .chain(contextmenu_post_exprs(&contextmenus))
+                .chain(drag_post_exprs(&drags))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
@@ -1612,6 +1630,41 @@ fn contextmenu_post_exprs(selectors: &[String]) -> Vec<String> {
                  var ev=new MouseEvent('contextmenu',{{bubbles:true,cancelable:true,view:window,button:2}});\
                  try{{el.dispatchEvent(ev);}}catch(e){{}}\
                  return el.__nodeId;}})()"
+            )
+        })
+        .collect()
+}
+
+/// M81.9: --drag 表达式——"源>目标" 拖放序列。
+/// 事件链：dragstart(源) → dragenter/dragover(目标) → drop(目标) → dragend(源)。
+/// DataTransfer 用 text/plain 传递源文本。
+fn drag_post_exprs(drags: &[String]) -> Vec<String> {
+    drags
+        .iter()
+        .map(|d| {
+            let (src, dst) = match d.find('>') {
+                Some(i) => (d[..i].trim().to_string(), d[i+1..].trim().to_string()),
+                None => return "(function(){return -2;})()".to_string(), // 无 > 分隔：跳过
+            };
+            let se = src.replace('\\', "\\\\").replace('\'', "\\'");
+            let de = dst.replace('\\', "\\\\").replace('\'', "\\'");
+            format!(
+                "(function(){{\
+                 var src=null,dst=null;\
+                 try{{src=document.querySelector('{se}');}}catch(e){{}}\
+                 try{{dst=document.querySelector('{de}');}}catch(e){{}}\
+                 if(!src||!dst||typeof src.__nodeId!=='number'){{return -1;}}\
+                 var dt=new DataTransfer();\
+                 try{{dt.setData('text/plain',src.textContent||'');}}catch(e){{}}\
+                 var mk=function(type,tgt){{var e=new MouseEvent(type,{{bubbles:true,cancelable:true,view:window}});\
+                   try{{e.dataTransfer=dt;}}catch(x){{}}return e;}};\
+                 try{{src.dispatchEvent(mk('dragstart',src));}}catch(e){{}}\
+                 try{{src.dispatchEvent(mk('drag',src));}}catch(e){{}}\
+                 try{{dst.dispatchEvent(mk('dragenter',dst));}}catch(e){{}}\
+                 try{{dst.dispatchEvent(mk('dragover',dst));}}catch(e){{}}\
+                 try{{dst.dispatchEvent(mk('drop',dst));}}catch(e){{}}\
+                 try{{src.dispatchEvent(mk('dragend',src));}}catch(e){{}}\
+                 return src.__nodeId;}})()"
             )
         })
         .collect()

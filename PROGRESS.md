@@ -2337,6 +2337,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - **--contextmenu <selector>**：contextmenu 事件（button:2）。
 - 实证：DBL-CLICKED ✓ CTX-MENU ✓。885 tests 全绿。
 
+**M81.9 —— 批 88（定时）A8 拖放（路线图 9/48，A 阶段收官）**：
+
+- **--drag "源>目标"**：完整拖放事件链 dragstart → drag → dragenter →
+  dragover → drop → dragend（DataTransfer text/plain 传源文本）。
+- **DataTransfer 桩补齐**（setData/getData/clearData/dropEffect）。
+- 实证：DROP-GOT:DRAG-SOURCE（dataTransfer 数据端到端传递 ✓）。
+- **A 阶段交互矩阵 8/8 完成**：click/hover/focus/type/check/select/
+  scroll/dblclick/contextmenu/drag。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

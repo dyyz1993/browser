@@ -6270,6 +6270,15 @@ document.getElementsByTagName = function(tag) {
 document.getElementsByClassName = function(cls) {
     return document.querySelectorAll('.' + cls);
 };
+// M80.29: DataTransfer 桩——drag 事件的 dataTransfer 字段载体。
+window.DataTransfer = function() {
+    this._data = {};
+    this.dropEffect = 'move';
+    this.effectAllowed = 'all';
+};
+DataTransfer.prototype.setData = function(type, v) { this._data[type] = String(v); };
+DataTransfer.prototype.getData = function(type) { return this._data[type] || ''; };
+DataTransfer.prototype.clearData = function(type) { if (type) delete this._data[type]; else this._data = {}; };
 // M81: elementFromPoint/elementsFromPoint——合成 hover 的命中测试配套。
 // 本引擎 JS 会话内没有布局树（getBoundingClientRect 是零桩），真实命中
 // 测试做不了；近似：矩形含点测试（rect 未来升级为真实值后自动变准），
