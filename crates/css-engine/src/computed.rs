@@ -9,8 +9,30 @@ use std::collections::HashMap;
 
 use browser_dom::{NodeData, NodeId, Tree};
 
-use crate::ast::{Declaration, Stylesheet};
+use crate::ast::{Declaration, MediaQuery, Stylesheet};
 use crate::selector::Selector;
+
+/// M81: the static viewport width used to evaluate `(max-width)` /
+/// `(min-width)` breakpoints. Matches the layout column budget the renderer
+/// assumes by default; dynamic viewport updates are out of scope for now.
+pub const DEFAULT_VIEWPORT_WIDTH_PX: u32 = 800;
+
+/// M81: does this media condition hold in our (static) rendering context?
+///
+/// - `screen` → yes (we always render for the screen/crawler);
+/// - `print` → no;
+/// - `(max-width: N)` → viewport ≤ N; `(min-width: N)` → viewport ≥ N;
+/// - `All(parts)` → every part holds.
+#[must_use]
+pub fn media_matches(mq: &MediaQuery) -> bool {
+    match mq {
+        MediaQuery::Screen => true,
+        MediaQuery::Print => false,
+        MediaQuery::MaxWidth(n) => DEFAULT_VIEWPORT_WIDTH_PX <= *n,
+        MediaQuery::MinWidth(n) => DEFAULT_VIEWPORT_WIDTH_PX >= *n,
+        MediaQuery::All(parts) => parts.iter().all(media_matches),
+    }
+}
 
 /// For every Element in `tree`, collect the declarations whose selector
 /// list matches that element. Text / Comment / Doctype nodes are skipped.
@@ -28,6 +50,11 @@ use crate::selector::Selector;
 /// defaults while unstyled elements still get them (h1 sizing, p margins,
 /// list indents...). Full order, lowest → highest priority:
 /// UA sheet → page sheet → inline `style="..."`.
+///
+/// M81: rules carrying an `@media` condition ([`MediaQuery`]) are evaluated
+/// against a static viewport ([`DEFAULT_VIEWPORT_WIDTH_PX`]): `screen`
+/// matches, `print` doesn't, and width breakpoints compare against 800px.
+/// Non-matching rules are skipped entirely.
 #[must_use]
 pub fn compute_styles(tree: &Tree, sheet: &Stylesheet) -> HashMap<NodeId, Vec<Declaration>> {
     // Pre-parse every rule's selector list once. UA rules first (lowest
@@ -36,6 +63,12 @@ pub fn compute_styles(tree: &Tree, sheet: &Stylesheet) -> HashMap<NodeId, Vec<De
     let mut parsed: Vec<(Selector, &[Declaration])> =
         Vec::with_capacity(ua.rules.len() + sheet.rules.len());
     for r in ua.rules.iter().chain(sheet.rules.iter()) {
+        // M81: drop rules whose `@media` condition doesn't hold (print, and
+        // breakpoints outside the static viewport). Unconditional rules
+        // (`media: None`) always apply.
+        if r.media.as_ref().is_some_and(|mq| !media_matches(mq)) {
+            continue;
+        }
         if let Ok(s) = Selector::parse(&r.selectors) {
             parsed.push((s, r.declarations.as_slice()));
         }
@@ -507,5 +540,104 @@ mod tests {
             get(&styles, 2, "color").as_deref(),
             Some("rgba(0, 0, 255, .5)")
         );
+    }
+
+    // ---- M81: @media 消费（静态视口 800px）----
+
+    #[test]
+    fn media_screen_matches_in_render_context() {
+        let tree = fixture();
+        let sheet = parse_css("@media screen { .text { color: red; } }");
+        let styles = compute_styles(&tree, &sheet);
+        assert_eq!(get(&styles, 3, "color").as_deref(), Some("red"));
+    }
+
+    #[test]
+    fn media_print_never_matches() {
+        let tree = fixture();
+        let sheet = parse_css("@media print { .text { color: blue; } }");
+        let styles = compute_styles(&tree, &sheet);
+        assert_eq!(get(&styles, 3, "color"), None);
+    }
+
+    /// 视口 800px：(max-width: 1200px) 命中，(max-width: 767px) 不命中。
+    #[test]
+    fn media_max_width_breakpoints() {
+        let tree = fixture();
+        let sheet = parse_css(
+            "@media (max-width: 1200px) { .text { margin: 8px; } } \
+             @media (max-width: 767px) { .text { padding: 2px; } }",
+        );
+        let styles = compute_styles(&tree, &sheet);
+        assert_eq!(get(&styles, 3, "margin").as_deref(), Some("8px"));
+        assert_eq!(get(&styles, 3, "padding"), None);
+    }
+
+    /// 视口 800px：(min-width: 2000px) 不命中，(min-width: 600px) 命中。
+    #[test]
+    fn media_min_width_breakpoints() {
+        let tree = fixture();
+        let sheet = parse_css(
+            "@media (min-width: 2000px) { .text { display: none; } } \
+             @media (min-width: 600px) { .text { margin: 4px; } }",
+        );
+        let styles = compute_styles(&tree, &sheet);
+        assert_eq!(get(&styles, 3, "display"), None);
+        assert_eq!(get(&styles, 3, "margin").as_deref(), Some("4px"));
+    }
+
+    /// and 组合：全真才命中（screen + 命中断点）；一假即不命中。
+    #[test]
+    fn media_and_combination() {
+        let tree = fixture();
+        let sheet = parse_css(
+            "@media screen and (min-width: 600px) { .text { color: green; } } \
+             @media screen and (min-width: 2000px) { .text { color: pink; } }",
+        );
+        let styles = compute_styles(&tree, &sheet);
+        assert_eq!(get(&styles, 3, "color").as_deref(), Some("green"));
+    }
+
+    /// 无条件规则不受 media 过滤影响，且同属性下无条件规则仍按源顺序覆盖
+    /// 先前命中的 media 规则。
+    #[test]
+    fn unconditional_rules_unaffected_by_media() {
+        let tree = fixture();
+        let sheet = parse_css(
+            ".text { font-size: 12px; } \
+             @media print { .text { font-size: 99px; } } \
+             .text { font-size: 16px; }",
+        );
+        let styles = compute_styles(&tree, &sheet);
+        // print 规则被跳过，前后两条无条件规则 last-write-wins → 16px。
+        assert_eq!(get(&styles, 3, "font-size").as_deref(), Some("16px"));
+    }
+
+    /// 不支持的条件整块丢弃 → 内部声明不进 computed 结果。
+    #[test]
+    fn media_unsupported_condition_not_applied() {
+        let tree = fixture();
+        let sheet = parse_css("@media (orientation: landscape) { .text { color: red; } }");
+        let styles = compute_styles(&tree, &sheet);
+        assert_eq!(get(&styles, 3, "color"), None);
+    }
+
+    /// media_matches 直接单测（800px 静态视口边界）。
+    #[test]
+    fn media_matches_boundary() {
+        assert!(media_matches(&MediaQuery::Screen));
+        assert!(!media_matches(&MediaQuery::Print));
+        assert!(media_matches(&MediaQuery::MaxWidth(800)));
+        assert!(!media_matches(&MediaQuery::MaxWidth(799)));
+        assert!(media_matches(&MediaQuery::MinWidth(800)));
+        assert!(!media_matches(&MediaQuery::MinWidth(801)));
+        assert!(media_matches(&MediaQuery::All(vec![
+            MediaQuery::Screen,
+            MediaQuery::MinWidth(800)
+        ])));
+        assert!(!media_matches(&MediaQuery::All(vec![
+            MediaQuery::Screen,
+            MediaQuery::Print
+        ])));
     }
 }

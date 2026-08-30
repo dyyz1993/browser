@@ -5,7 +5,9 @@
 //! - Rules = list of simple selectors + list of declarations
 //! - Declarations = property:value pairs (with `!important` flag)
 //!
-//! At-rule support is intentionally absent; M3+ will revisit.
+//! At-rule support: M81 adds `@media` — the block's condition is parsed
+//! into a [`MediaQuery`] and attached to every inner [`Rule`] (see the
+//! `media` field); other at-rules remain unsupported and are skipped.
 
 use std::fmt;
 
@@ -23,6 +25,31 @@ pub struct Rule {
     /// keep the source string to keep M2.1 self-contained.
     pub selectors: String,
     pub declarations: Vec<Declaration>,
+    /// M81: enclosing `@media` condition, if any. `None` for unconditional
+    /// rules (always apply). Inner rules of one `@media` block each carry a
+    /// clone of the same condition.
+    pub media: Option<MediaQuery>,
+}
+
+/// M81: media query condition from an `@media` prelude.
+///
+/// Minimal-usable subset for responsive SPA rendering: media types
+/// (`screen` / `print`), width breakpoints (`(max-width: Npx)` /
+/// `(min-width: Npx)`), and `and` combinations. `not` / `,` (or) /
+/// non-px units are out of scope; such conditions parse to `None` and the
+/// whole block is dropped (same as pre-M81 behavior).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MediaQuery {
+    /// `screen` — matches (this project always renders on screen).
+    Screen,
+    /// `print` — never matches (no print rendering in a crawler).
+    Print,
+    /// `(max-width: Npx)` — matches when the viewport width ≤ N.
+    MaxWidth(u32),
+    /// `(min-width: Npx)` — matches when the viewport width ≥ N.
+    MinWidth(u32),
+    /// `A and B and ...` — every part must match.
+    All(Vec<MediaQuery>),
 }
 
 /// A `property: value;` declaration, optionally flagged `!important`.

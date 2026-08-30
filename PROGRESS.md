@@ -2454,6 +2454,18 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 954 tests（+14）。**D5 是 Tailwind/Vue/React 现代框架结构一致性的
   基础设施**。
 
+**M81.D6 —— 批 99（定时）D6 media query 基础（路线图 25/48，52%）**：
+
+- **ast.rs**：MediaQuery 枚举（Screen/Print/MaxWidth/MinWidth/All 组合）+
+  Rule.media 字段。
+- **parser.rs**：@media 解析（read_balanced_braces 深度配平 + 递归内部
+  规则 + AND 合并；不支持条件 not/or/非 px 整块丢弃不泄漏）+ 非 media
+  at-rule 跳过（@charset/@import/@font-face）。
+- **computed.rs**：compute_styles 按 media_matches 过滤（默认视口 800px）。
+- E2E：`(max-width:1200px)` 在 800px 视口命中（缩进 8 空格 ✓）、
+  `(min-width:2000px)` 不命中（缩进 0 ✓）。
+- 973 tests 全绿（+19）+ REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

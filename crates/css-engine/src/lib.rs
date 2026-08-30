@@ -3,8 +3,9 @@
 //! M2.1 scope: parsing.
 //! M2.2 scope: selectors.
 //! M2.3 scope: computed styles.
+//! M81 scope: `@media` (screen/print + width breakpoints, static viewport).
 //! - [`parse`] — CSS text → [`Stylesheet`]
-//! - [`Stylesheet`] / [`Rule`] / [`Declaration`] — AST
+//! - [`Stylesheet`] / [`Rule`] / [`Declaration`] / [`MediaQuery`] — AST
 //! - [`Selector`] / [`CompoundSelector`] — selectors with matching
 //! - [`compute_styles`] — apply [`Stylesheet`] to a DOM [`Tree`]
 
@@ -17,9 +18,9 @@ pub mod properties;
 pub mod selector;
 pub mod ua;
 
-pub use ast::{Declaration, Rule, Stylesheet};
-pub use computed::compute_styles;
-pub use parser::{parse, parse_declaration_list};
+pub use ast::{Declaration, MediaQuery, Rule, Stylesheet};
+pub use computed::{compute_styles, media_matches, DEFAULT_VIEWPORT_WIDTH_PX};
+pub use parser::{parse, parse_declaration_list, parse_media_query};
 pub use properties::{parse_box_lengths, parse_color, parse_length, BoxEdges, Length};
 pub use selector::{CompoundSelector, Selector, SelectorChain};
 pub use ua::{ua_stylesheet, UA_STYLESHEET};
