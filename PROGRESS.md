@@ -2317,6 +2317,13 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   （输入→触发→点搜索→爬结果）。
 - 885 tests 全绿 + REALITY PASS。
 
+**M81.6 —— 批 85（定时）A5 表单交互（路线图 6/48）**：
+
+- **--check <selector>**：checkbox/radio 勾选切换（checked 翻转 +
+  click + change 派发）；text= 形式按 value 匹配。
+- **--select "SEL=VALUE"**：下拉选择（value 设置 + change 派发）。
+- 实证：CHECKED ✓、Option 2 ✓。885 tests 全绿 + REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

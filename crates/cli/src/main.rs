@@ -97,6 +97,13 @@ enum Cmd {
         /// 序列：focus → 逐字符 keydown/keypress/input/keyup → change。
         #[arg(long = "type")]
         type_args: Vec<String>,
+        /// M81.6: 勾选/取消 checkbox/radio（可多次）。派发 click+change。
+        #[arg(long = "check")]
+        checks: Vec<String>,
+        /// M81.6: 下拉选择（可多次）。格式：--select "SELECTOR=VALUE"。
+        /// 派发 change 事件。
+        #[arg(long = "select")]
+        select_args: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -126,6 +133,13 @@ enum Cmd {
         /// M81.5: 键盘输入（可多次，两个值：selector 和 text）。
         #[arg(long = "type")]
         type_args: Vec<String>,
+        /// M81.6: 勾选/取消 checkbox/radio（可多次）。派发 click+change。
+        #[arg(long = "check")]
+        checks: Vec<String>,
+        /// M81.6: 下拉选择（可多次）。格式：--select "SELECTOR=VALUE"。
+        /// 派发 change 事件。
+        #[arg(long = "select")]
+        select_args: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -177,6 +191,13 @@ enum Cmd {
         /// 序列：focus → 逐字符 keydown/keypress/input/keyup → change。
         #[arg(long = "type")]
         type_args: Vec<String>,
+        /// M81.6: 勾选/取消 checkbox/radio（可多次）。派发 click+change。
+        #[arg(long = "check")]
+        checks: Vec<String>,
+        /// M81.6: 下拉选择（可多次）。格式：--select "SELECTOR=VALUE"。
+        /// 派发 change 事件。
+        #[arg(long = "select")]
+        select_args: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -418,6 +439,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             hovers,
             focuses,
             type_args,
+            checks,
+            select_args,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -427,6 +450,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(hover_post_exprs(&hovers))
                 .chain(focus_post_exprs(&focuses))
                 .chain(type_post_exprs(&type_args))
+                .chain(check_post_exprs(&checks))
+                .chain(select_post_exprs(&select_args))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
@@ -482,6 +507,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             hovers,
             focuses,
             type_args,
+            checks,
+            select_args,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -492,6 +519,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(hover_post_exprs(&hovers))
                 .chain(focus_post_exprs(&focuses))
                 .chain(type_post_exprs(&type_args))
+                .chain(check_post_exprs(&checks))
+                .chain(select_post_exprs(&select_args))
                 .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
@@ -561,6 +590,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             hovers,
             focuses,
             type_args,
+            checks,
+            select_args,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -571,6 +602,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(hover_post_exprs(&hovers))
                 .chain(focus_post_exprs(&focuses))
                 .chain(type_post_exprs(&type_args))
+                .chain(check_post_exprs(&checks))
+                .chain(select_post_exprs(&select_args))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
@@ -1384,6 +1417,62 @@ fn type_post_exprs(type_args: &[String]) -> Vec<String> {
                    try{{el.dispatchEvent(ku);}}catch(e){{}}\
                  }}\
                  try{{el.dispatchEvent(new Event('change',{{bubbles:true}}));}}catch(e){{}}\
+                 return el.__nodeId;}})()"
+            )
+        })
+        .collect()
+}
+
+/// M81.6: --check 表达式——checkbox/radio 勾选（toggle：已勾则取消）。
+/// 派发 click（含 checked 状态切换）+ change。
+fn check_post_exprs(selectors: &[String]) -> Vec<String> {
+    selectors
+        .iter()
+        .map(|sel| {
+            let find = if let Some(text) = sel.strip_prefix("text=") {
+                let esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "var els=document.querySelectorAll('input[type=checkbox],input[type=radio]');\
+                     for(var i=0;i<els.length;i++){{\
+                     var tt=(els[i].value||'').trim();\
+                     if(tt.length>0&&tt.indexOf('{esc}')>=0&&tt.length<bl){{el=els[i];bl=tt.length;}}}}"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("try{{el=document.querySelector('{esc}');}}catch(e){{return -1;}}")
+            };
+            format!(
+                "(function(){{var el=null,bl=Infinity;{find}\
+                 if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                 el.checked=!el.checked;\
+                 var ce=new MouseEvent('click',{{bubbles:true,cancelable:true,view:window}});\
+                 try{{el.dispatchEvent(ce);}}catch(e){{}}\
+                 var ch=new Event('change',{{bubbles:true}});\
+                 try{{el.dispatchEvent(ch);}}catch(e){{}}\
+                 return el.__nodeId;}})()"
+            )
+        })
+        .collect()
+}
+
+/// M81.6: --select 表达式——下拉选择（设 select.value + 派发 change）。
+fn select_post_exprs(select_args: &[String]) -> Vec<String> {
+    select_args
+        .iter()
+        .map(|arg| {
+            // 格式："SELECTOR=VALUE"
+            let (sel, val) = match arg.find('=') {
+                Some(i) => (arg[..i].to_string(), arg[i+1..].to_string()),
+                None => (arg.clone(), String::new()),
+            };
+            let sel_esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+            let val_esc = val.replace('\\', "\\\\").replace('\'', "\\'").replace('"', "\\\"");
+            format!(
+                "(function(){{var el=null;try{{el=document.querySelector('{sel_esc}');}}catch(e){{}}\
+                 if(!el||el.tagName!=='SELECT'){{return -1;}}\
+                 el.value='{val_esc}';\
+                 var ch=new Event('change',{{bubbles:true}});\
+                 try{{el.dispatchEvent(ch);}}catch(e){{}}\
                  return el.__nodeId;}})()"
             )
         })

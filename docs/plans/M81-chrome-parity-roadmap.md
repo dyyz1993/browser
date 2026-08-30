@@ -30,7 +30,7 @@
 - [x] A2. hover 事件（mouseenter/mouseleave/mouseover/mouseout 合成 + CLI --hover）✓ 含 elementFromPoint 补齐
 - [x] A3. focus/blur 事件（--focus 参数；focus/focusin/blur/focusout 派发 + activeElement 追踪）✓
 - [x] A4. 键盘事件（--type "SELECTOR=TEXT"：keydown/keypress/input/keyup 逐字符 + change；CDP KeyEvent 待接）✓
-- [ ] A5. 表单交互闭环（checkbox/radio toggle、select 下拉选择、textarea 输入）
+- [x] A5. 表单交互闭环（--check checkbox/radio + --select "SEL=VALUE" 下拉）✓
 - [ ] A6. 滚动事件（--scroll-to selector；scroll 事件派发；lazy 内容触发）
 - [ ] A7. 双击/右键事件（dblclick/contextmenu）
 - [ ] A8. 拖放事件基础（dragstart/drop 最小语义，爬虫场景够用即可）
@@ -102,7 +102,7 @@
 
 | 阶段 | 总项 | 完成 | 状态 |
 |------|------|------|------|
-| A 交互/输入 | 8 | 4 | 进行中（click+hover+focus+type+双连接） |
+| A 交互/输入 | 8 | 5 | 进行中（click+hover+focus+type+check+select） |
 | B CDP | 7 | 0 | 待开始 |
 | C 渲染 | 7 | 0 | 待开始 |
 | D CSS | 7 | 0 | 待开始 |
@@ -110,6 +110,6 @@
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **5** | **10%** |
+| **合计** | **48** | **6** | **12.5%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。
