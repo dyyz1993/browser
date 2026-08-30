@@ -67,13 +67,13 @@
 
 ## E. JS API 补齐（框架依赖的运行时 API）
 
-- [ ] E1. matchMedia 基础（matches 返回 + addListener 事件桩）
+- [x] E1. matchMedia 基础 ✓（已有实现，实测确认）
 - [ ] E2. requestAnimationFrame 真驱动（当前 setTimeout 近似？确认 + 对齐 rAF 时序语义）
-- [ ] E3. Notification API 桩（new Notification 不抛错 + permission 状态）
-- [ ] E4. Clipboard API 桩（writeText/readText 最小语义）
+- [x] E3. Notification API 桩（permission=denied + 构造不抛错 + requestPermission）✓
+- [x] E4. Clipboard API 桩（writeText 存全局/readText 返回）✓
 - [ ] E5. History.scrollRestoration 完整 + scroll 事件联动
-- [ ] E6. URL.createObjectURL/revokeObjectURL（blob URL 语义）
-- [ ] E7. BroadcastChannel 基础（同源多 tab 消息——单进程内模拟）
+- [x] E6. URL.createObjectURL/revokeObjectURL（blob URL 注册表）✓
+- [x] E7. BroadcastChannel 基础（同进程全局事件总线模拟）✓
 
 ## F. 稳定性/性能
 
@@ -106,10 +106,10 @@
 | B CDP | 7 | 6 | 进行中（剩 B5 尾斜杠等杂项） |
 | C 渲染 | 7 | 3 | 进行中 |
 | D CSS | 7 | 0 | 待开始 |
-| E JS API | 7 | 0 | 待开始 |
+| E JS API | 7 | 4 | 大部分完成 |
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **18** | **37.5%** |
+| **合计** | **48** | **22** | **46%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。

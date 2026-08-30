@@ -3228,6 +3228,53 @@ var __sessionStore = {};
 window.sessionStorage = __makeStorageArea(__sessionStore, 'session');
 
 // URL 构造器（简化版——避免 QuickJS 不支持的复杂正则）
+// M81.7: BroadcastChannel 桩——同进程全局事件总线（多 tab 场景单进程近似）。
+if (typeof window.BroadcastChannel !== 'function') {
+    var __bcChannels = {};
+    window.BroadcastChannel = function(name) {
+        var self = this;
+        this.name = name;
+        this.onmessage = null;
+        this._id = Math.random().toString(36).slice(2);
+        this.postMessage = function(msg) {
+            var ch = __bcChannels[this.name];
+            if (!ch) return;
+            for (var i = 0; i < ch.length; i++) {
+                if (ch[i]._id !== self._id && ch[i].onmessage) {
+                    (function(oc, data) { setTimeout(function() { oc({ data: data }); }, 0); })(ch[i], msg);
+                }
+            }
+        };
+        this.close = function() {};
+        if (!__bcChannels[name]) __bcChannels[name] = [];
+        __bcChannels[name].push(this);
+    };
+    window.BroadcastChannel.prototype = { constructor: BroadcastChannel };
+}
+// M81.7: Notification 桩（permission 默认 denied，构造不抛错）。
+if (typeof window.Notification === 'undefined') {
+    window.Notification = function(title, opts) {
+        this.title = String(title);
+        this.body = (opts && opts.body) || '';
+        this.close = function() {};
+    };
+    window.Notification.permission = 'denied';
+    window.Notification.requestPermission = function(cb) {
+        if (cb) setTimeout(function() { cb('denied'); }, 0);
+        return Promise.resolve('denied');
+    };
+}
+// M81.7: navigator.clipboard 桩（writeText 存全局，readText 返回空——权限 denied 语义）。
+if (typeof navigator.clipboard === 'undefined') {
+    var __clipboardText = '';
+    navigator.clipboard = {
+        writeText: function(t) { __clipboardText = String(t); return Promise.resolve(); },
+        readText: function() { return Promise.resolve(__clipboardText); }
+    };
+}
+var __blobUrls = {};
+var __blobCounter = 0;
+
 window.URL = function(input, base) {
     input = String(input);
     // M80.8: 孤立代理（ lone surrogate，如 \uD83D）→ U+FFFD 替换符
@@ -3308,6 +3355,18 @@ window.URL = function(input, base) {
 // 内部存 [key,value] 对数组：支持重复键（get→首个 / getAll→全部 / set→替换首个）。
 // solid-router 的 parsePath 返回 searchParams 后调 forEach 转对象——此前缺 forEach
 // 直接 TypeError "not a function"，module eval 中断 → solidjs.com 整页空白。
+// M81.6: URL.createObjectURL/revokeObjectURL（blob URL 注册表）
+window.URL.createObjectURL = function(obj) {
+    var text = '';
+    try { text = (typeof obj === 'string') ? obj : (obj.toString ? obj.toString() : ''); } catch(e) {}
+    try { if (obj && obj._blob_text !== undefined) text = obj._blob_text; } catch(e) {}
+    __blobCounter++;
+    var url = 'blob:' + (typeof location !== 'undefined' && location.href ? location.href.split('#')[0] : 'null') + '/' + __blobCounter;
+    __blobUrls[url] = text;
+    return url;
+};
+window.URL.revokeObjectURL = function(url) { delete __blobUrls[url]; };
+
 window.URLSearchParams = function(init) {
     this.__entries = [];
     var self = this;

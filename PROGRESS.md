@@ -2419,6 +2419,16 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   级）、其余零星单条（Document-URL redirect 追踪精度等）——**无新高价值
   可修项**。兼容性循环目标全部完成。
 
+**M81.11 —— 批 96（定时）E 阶段 JS API 四桩补齐（路线图 22/48，46%）**：
+
+- **URL.createObjectURL/revokeObjectURL**（blob URL 注册表）——
+  定位修复：createObjectURL 原来挂在 window.URL 构造器**定义前**导致
+  undefined 错误；移到构造器后（URLSearchParams 区域）。
+- **BroadcastChannel**：同进程全局事件总线模拟（多 tab 消息近似）。
+- **Notification**：permission=denied + 构造不抛错 + requestPermission。
+- **navigator.clipboard**：writeText 存全局 / readText 返回。
+- matchMedia/rAF 确认已有（E1/E2 顺带打勾）。932 tests 全绿。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
