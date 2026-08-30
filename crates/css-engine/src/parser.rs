@@ -267,4 +267,38 @@ mod tests {
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(sheet.rules[0].selectors, "h1");
     }
+
+    // ---- M81: CSS 变量（custom properties）----
+
+    /// `--xxx: value` 自定义属性必须保留（property 原样、value 原样），
+    /// 不能被当非法属性跳过。
+    #[test]
+    fn parse_keeps_custom_property_declarations() {
+        let sheet = parse(":root { --main-color: #ff0000; --gap: 10px; color: red; }");
+        assert_eq!(sheet.rules.len(), 1);
+        let decls = &sheet.rules[0].declarations;
+        assert_eq!(decls.len(), 3);
+        assert_eq!(decls[0].property, "--main-color");
+        assert_eq!(decls[0].value, "#ff0000");
+        assert_eq!(decls[1].property, "--gap");
+        assert_eq!(decls[1].value, "10px");
+        assert_eq!(decls[2].property, "color");
+    }
+
+    /// 消费侧：`var(--x)` 出现在普通声明 value 中时保留原样（展开在
+    /// computed.rs 的变量解析 pass 做，这里只锁定 parser 不破坏 token）。
+    #[test]
+    fn parse_keeps_var_function_in_value() {
+        let sheet = parse("body { color: var(--main-color); }");
+        assert_eq!(sheet.rules[0].declarations[0].value, "var(--main-color)");
+    }
+
+    /// inline style 声明列表同样保留 `--` 自定义属性。
+    #[test]
+    fn parse_declaration_list_keeps_custom_properties() {
+        let decls = parse_declaration_list("--x: 9px; margin: var(--x)");
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].property, "--x");
+        assert_eq!(decls[0].value, "9px");
+    }
 }

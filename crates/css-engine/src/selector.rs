@@ -76,6 +76,9 @@ pub enum AttrSelector {
 /// M78: 支持的伪类子集（CSS Selectors L4 里爬虫/测试最高频的三个）。
 #[derive(Debug, Clone)]
 pub enum Pseudo {
+    /// `:root` — 文档根元素（parent 是 Document 节点的元素）。
+    /// M81: CSS 变量（custom properties）主要定义在 `:root` 上。
+    Root,
     /// `:lang(en, fr-*)` — BCP47 语言范围列表（RFC4647 basic filtering）。
     Lang(Vec<String>),
     /// `:dir(ltr|rtl)` — 方向（从最近带 dir 属性的祖先继承）。
@@ -102,6 +105,7 @@ impl fmt::Display for CompoundSelector {
         }
         for p in &self.pseudos {
             match p {
+                Pseudo::Root => write!(f, ":root")?,
                 Pseudo::Lang(ranges) => {
                     let joined: Vec<String> = ranges.iter().map(|r| format!("\"{r}\"")).collect();
                     write!(f, ":lang({})", joined.join(", "))?;
@@ -406,6 +410,11 @@ fn parse_pseudo(
     }
     let has_paren = matches!(chars.peek(), Some('('));
     if !has_paren {
+        // M81: `:root` 是唯一的无参伪类子集成员；其余（:hover 等）仍按
+        // "未知符号即整条规则作废" 返回 Err。
+        if name == "root" {
+            return Ok(Pseudo::Root);
+        }
         return Err(format!(
             "pseudo-class :{name} requires arguments in {input:?}"
         ));
@@ -734,6 +743,8 @@ fn compound_matches(tree: &Tree, id: NodeId, sel: &CompoundSelector) -> bool {
     }
     for p in &sel.pseudos {
         let ok = match p {
+            // M81: `:root` —— 父节点是 Document 根节点的元素（文档根元素）。
+            Pseudo::Root => tree.get(id).parent == Some(tree.root()),
             Pseudo::Lang(ranges) => match element_lang(tree, id) {
                 Some(lang) => ranges.iter().any(|r| lang_range_matches(r, &lang)),
                 None => false,
@@ -1323,6 +1334,26 @@ mod tests {
         assert!(!Selector::parse("#in:lang(fr)")
             .unwrap()
             .matches(&tree, p_in));
+    }
+
+    // ---- M81: `:root` 伪类（CSS 变量的主要定义位置）----
+
+    /// `:root` 匹配文档根元素（parent 是 Document 节点的元素）。
+    #[test]
+    fn root_pseudo_matches_document_root_element() {
+        let tree = fixture();
+        // fixture: Document(root=0) > html=1 > body=2 > ...
+        assert!(Selector::parse(":root").unwrap().matches(&tree, 1));
+        assert!(!Selector::parse(":root").unwrap().matches(&tree, 2));
+        // 复合链：:root 的后代 body。
+        assert!(Selector::parse(":root body").unwrap().matches(&tree, 2));
+    }
+
+    #[test]
+    fn root_pseudo_parses_without_arguments() {
+        assert!(Selector::parse(":root").is_ok());
+        // 其他无参伪类仍拒绝（M2 以来"未知符号即整条规则作废"）。
+        assert!(Selector::parse(":hover").is_err());
     }
 
     #[test]

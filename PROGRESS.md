@@ -2440,6 +2440,20 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - **grid.rs**：positioned 排除出 grid item 收集。
 - 语义：不占流空间但不消失（渲染可见）。940 tests（+8）+ REALITY PASS。
 
+**M81.D5 —— 批 98（定时）D5 CSS 变量 var() 消费（路线图 24/48，50%）**：
+
+- **selector.rs**：`:root` 伪类修复（真正的丢弃点——parse_pseudo 拒绝
+  无参伪类导致 `:root { --x: ... }` 整条规则静默丢失）。新增 Pseudo::Root
+  变体 + compound_matches（parent == tree.root()）。
+- **computed.rs**：`resolve_custom_properties` 解析 pass——收集（每元素
+  --* 声明入变量表）→ 继承（pre-order 自顶向下传播）→ 替换（var(--name)
+  / var(--name, fallback)，递归展开嵌套链 depth 16 防循环）。
+- **parser.rs**：`--xxx` 声明保留锁定（+测试）。
+- E2E：`color: var(--main-color)` → PNG 含 410 红色系像素 ✓；
+  margin var(--gap) → 10 列缩进 ✓。
+- 954 tests（+14）。**D5 是 Tailwind/Vue/React 现代框架结构一致性的
+  基础设施**。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
