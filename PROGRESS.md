@@ -2429,6 +2429,17 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - **navigator.clipboard**：writeText 存全局 / readText 返回。
 - matchMedia/rAF 确认已有（E1/E2 顺带打勾）。932 tests 全绿。
 
+**M81.D1 —— 批 97（定时）D1 position:absolute/fixed 基础（路线图 23/48，48%）**：
+
+- **boxes.rs**：LayoutBox 加 `positioned: bool`（out-of-flow 标记）。
+- **construct.rs**：`position:absolute|fixed` 检测（static/relative/sticky
+  不动）+ inline 标签块化（CSS 规范：absolute 的 inline 变 block）。
+- **block.rs**：positioned 子盒原地 layout 但不推进 cursor/不参与
+  margin collapse/不计入父高度；anonymous 内同理。
+- **flex.rs**：absolute 子元素非 flex item——摘出、原点 layout、树尾 append。
+- **grid.rs**：positioned 排除出 grid item 收集。
+- 语义：不占流空间但不消失（渲染可见）。940 tests（+8）+ REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

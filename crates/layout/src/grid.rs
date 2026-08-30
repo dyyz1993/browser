@@ -42,13 +42,27 @@ pub fn layout_grid_children(bx: &mut LayoutBox, containing_width: f32) {
         .children
         .iter()
         .enumerate()
-        .filter(|(_, c)| match c.box_type {
-            BoxType::Anonymous => false,
-            BoxType::Inline => c.text.as_deref().is_some_and(|t| !is_ws(t)),
-            _ => true,
+        .filter(|(_, c)| {
+            // M81: position:absolute/fixed children are out of flow —
+            // they occupy no grid cells.
+            if c.positioned {
+                return false;
+            }
+            match c.box_type {
+                BoxType::Anonymous => false,
+                BoxType::Inline => c.text.as_deref().is_some_and(|t| !is_ws(t)),
+                _ => true,
+            }
         })
         .map(|(i, _)| i)
         .collect();
+
+    // M81: out-of-flow children still get laid out at the container's
+    // origin (approximation: no top/left offsets) so their subtree has
+    // dimensions for rendering; they just don't take cells or space.
+    for child in bx.children.iter_mut().filter(|c| c.positioned) {
+        crate::block::layout_box_pub(child, base_x, base_y, containing_width);
+    }
     if item_idxs.is_empty() {
         bx.dimensions.height = 0.0;
         return;

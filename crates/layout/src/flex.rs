@@ -42,10 +42,34 @@ pub fn layout_flex_children(bx: &mut LayoutBox, containing_width: f32) {
         return;
     }
 
+    // M81: position:absolute/fixed children are out of flow — per CSS
+    // they are not flex items. Pull them out, lay them out at the
+    // container's content origin (approximation: no top/left offsets)
+    // so their subtree keeps renderable dimensions, and append them
+    // back after the in-flow pass so the tree keeps every box.
+    let mut out_of_flow: Vec<LayoutBox> = Vec::new();
+    let mut i = 0;
+    while i < bx.children.len() {
+        if bx.children[i].positioned {
+            out_of_flow.push(bx.children.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    for child in &mut out_of_flow {
+        layout_box_into(child, base_x, base_y, containing_width, em);
+    }
+    if bx.children.is_empty() {
+        bx.dimensions.height = 0.0;
+        bx.children = out_of_flow;
+        return;
+    }
+
     match bx.flex.direction {
         FlexDirection::Row => layout_row(bx, base_x, base_y, containing_width, gap, em),
         FlexDirection::Column => layout_column(bx, base_x, base_y, containing_width, gap, em),
     }
+    bx.children.extend(out_of_flow);
 }
 
 /// `flex-direction: row` — items laid horizontally.

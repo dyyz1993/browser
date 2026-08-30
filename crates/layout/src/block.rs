@@ -56,6 +56,20 @@ fn layout_block_children(bx: &mut LayoutBox, containing_width: f32) {
     let mut prev_margin_bottom: f32 = 0.0;
     let mut first_child = true;
     for child in &mut bx.children {
+        // M81: position:absolute/fixed children are out of flow. Lay
+        // them out in place (approximation: static position at the
+        // current cursor, no top/left/right/bottom offsets) so their
+        // subtree gets dimensions and renderers can paint them, but do
+        // NOT advance the flow cursor, participate in margin
+        // collapsing, or contribute to the parent's height.
+        if child.positioned {
+            let margin_left = child.margin.left.resolve(containing_width, em);
+            let margin_right = child.margin.right.resolve(containing_width, em);
+            let child_x = base_x + margin_left;
+            let child_width = (containing_width - margin_left - margin_right).max(0.0);
+            layout_box(child, child_x, cursor_y, child_width);
+            continue;
+        }
         let margin_left = child.margin.left.resolve(containing_width, em);
         let margin_right = child.margin.right.resolve(containing_width, em);
         let child_x = base_x + margin_left;
@@ -128,6 +142,19 @@ fn layout_anonymous_children(bx: &mut LayoutBox, containing_width: f32) {
                 cursor_y += h;
             }
             let em = 1.0_f32;
+            // M81: position:absolute/fixed children are out of flow.
+            // They still break the inline run and get laid out in place
+            // (approximation: no top/left offsets), but the cursor does
+            // not advance — siblings close the gap they leave behind.
+            if bx.children[i].positioned {
+                let margin_left = bx.children[i].margin.left.resolve(containing_width, em);
+                let margin_right = bx.children[i].margin.right.resolve(containing_width, em);
+                let child_x = base_x + margin_left;
+                let child_width = (containing_width - margin_left - margin_right).max(0.0);
+                layout_box(&mut bx.children[i], child_x, cursor_y, child_width);
+                i += 1;
+                continue;
+            }
             let margin_top = bx.children[i].margin.top.resolve(containing_width, em);
             let margin_bottom = bx.children[i].margin.bottom.resolve(containing_width, em);
             let margin_left = bx.children[i].margin.left.resolve(containing_width, em);
@@ -358,6 +385,116 @@ mod tests {
             "flex column items must stack, got title.y={} subtitle.y={}",
             title.dimensions.y,
             subtitle.dimensions.y
+        );
+    }
+
+    // ---- M81: position:absolute/fixed out-of-flow ----
+
+    #[test]
+    fn absolute_child_does_not_consume_flow_space() {
+        // BADGE is position:absolute: it must not push the following
+        // sibling down, and the parent's height must equal the height
+        // of the in-flow content alone.
+        let mut abs = block();
+        abs.positioned = true;
+        abs.children
+            .push(anonymous_with(vec![inline_text("BADGE")]));
+        let mut content = block();
+        content
+            .children
+            .push(anonymous_with(vec![inline_text("Main content")]));
+        let mut root = block();
+        root.children.push(abs);
+        root.children.push(content);
+        let mut tree = LayoutTree { root };
+
+        layout(&mut tree, LayoutConfig::default());
+
+        let content = &tree.root.children[1];
+        // In-flow content starts at the container top — no gap from BADGE.
+        assert_eq!(content.dimensions.y, 0.0);
+        // Parent height = content only.
+        assert!(
+            (tree.root.dimensions.height - content.dimensions.height).abs() < 0.01,
+            "root height {} must equal content height {}",
+            tree.root.dimensions.height,
+            content.dimensions.height
+        );
+    }
+
+    #[test]
+    fn absolute_child_is_still_laid_out_for_rendering() {
+        // The out-of-flow box stays in the tree with dimensions (laid
+        // out at the approximated static position) so renderers can
+        // paint it.
+        let mut abs = block();
+        abs.positioned = true;
+        abs.children
+            .push(anonymous_with(vec![inline_text("BADGE")]));
+        let mut root = block();
+        root.children.push(abs);
+        let mut tree = LayoutTree { root };
+
+        layout(&mut tree, LayoutConfig::default());
+
+        let abs = &tree.root.children[0];
+        assert!(abs.dimensions.width > 0.0, "absolute box keeps a width");
+        assert!(abs.dimensions.height > 0.0, "absolute box keeps a height");
+        let text = &abs.children[0].children[0];
+        assert!(text.dimensions.width >= 5.0, "BADGE text laid out");
+    }
+
+    #[test]
+    fn absolute_child_between_siblings_leaves_no_gap() {
+        // a, ABS, b — b must stack directly after a, as if ABS were
+        // not in the flow at all.
+        let mut a = block();
+        a.children.push(anonymous_with(vec![inline_text("aaa")]));
+        let mut abs = block();
+        abs.positioned = true;
+        abs.children.push(anonymous_with(vec![inline_text("ABS")]));
+        let mut b = block();
+        b.children.push(anonymous_with(vec![inline_text("bbb")]));
+        let mut root = block();
+        root.children.push(a);
+        root.children.push(abs);
+        root.children.push(b);
+        let mut tree = LayoutTree { root };
+
+        layout(&mut tree, LayoutConfig::default());
+
+        let a = &tree.root.children[0];
+        let b = &tree.root.children[2];
+        assert!(
+            (b.dimensions.y - a.dimensions.bottom()).abs() < 0.01,
+            "b.y={} must start right after a.bottom={}",
+            b.dimensions.y,
+            a.dimensions.bottom()
+        );
+    }
+
+    #[test]
+    fn absolute_child_in_anonymous_wrapper_does_not_advance_cursor() {
+        // Inline-tag element blockified by position:absolute lands in an
+        // anonymous wrapper; the following inline run must not be pushed
+        // down by it.
+        let mut abs = block();
+        abs.positioned = true;
+        abs.children
+            .push(anonymous_with(vec![inline_text("BADGE")]));
+        let anon = anonymous_with(vec![abs, inline_text("after")]);
+        let mut root = block();
+        root.children.push(anon);
+        let mut tree = LayoutTree { root };
+
+        layout(&mut tree, LayoutConfig::default());
+
+        let anon = &tree.root.children[0];
+        // Wrapper height = the inline run only (1 line).
+        assert!(
+            anon.dimensions.height <= 1.0,
+            "anonymous wrapper height {} must not include the absolute box",
+            anon.dimensions.height
         );
     }
 }

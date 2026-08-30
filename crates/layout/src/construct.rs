@@ -182,6 +182,9 @@ fn build_box(
             }
             let tag_lower = tag.to_ascii_lowercase();
             let mut bt = box_type_for_element(&tag_lower);
+            // M81: `position: absolute | fixed` → out of flow. Detected
+            // here, consumed by block.rs / flex.rs / grid.rs layout.
+            let mut positioned = false;
             // M32: CSS `display` 声明覆盖 tag-based 默认值。
             // 支持 display:flex / display:block / display:inline。
             if let Some(decls) = styles.get(&id) {
@@ -195,10 +198,24 @@ fn build_box(
                             "inline" => bt = BoxType::Inline,
                             _ => {}
                         }
+                    } else if d.property.eq_ignore_ascii_case("position") {
+                        let v = d.value.trim().to_ascii_lowercase();
+                        if v == "absolute" || v == "fixed" {
+                            positioned = true;
+                        }
                     }
                 }
             }
+            // M81: CSS blockification — absolutely positioned elements
+            // compute to block-level, so an inline tag (`<span
+            // style="position:absolute">`) becomes a Block box and is
+            // routed through the block/anonymous out-of-flow path
+            // instead of taking space in an inline run.
+            if positioned && bt == BoxType::Inline {
+                bt = BoxType::Block;
+            }
             let mut bx = LayoutBox::new(bt).with_element(id);
+            bx.positioned = positioned;
             // M32: 如果是 flex 容器，从 CSS 读 flex-direction/justify-content/gap。
             if bt == BoxType::Flex {
                 apply_flex_props(id, styles, &mut bx);
@@ -1650,5 +1667,81 @@ mod ua_visual_tests {
         wrap_first_last_text(&mut bx, "**", "**");
         let leaf = find_first_text_leaf_mut(&mut bx).expect("leaf");
         assert_eq!(leaf.text.as_deref(), Some("**link**"));
+    }
+
+    // ---- M81: position:absolute/fixed detection ----
+
+    fn decl(property: &str, value: &str) -> Declaration {
+        Declaration {
+            property: property.into(),
+            value: value.into(),
+            important: false,
+        }
+    }
+
+    /// Document > body > div(text) with `position:absolute` style.
+    fn absolute_div_tree() -> (Tree, NodeId) {
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let body = t.insert(Some(root), elem("body", ""));
+        let div = t.insert(Some(body), elem("div", ""));
+        let _ = t.insert(Some(div), text("BADGE"));
+        (t, div)
+    }
+
+    #[test]
+    fn position_absolute_marks_box_positioned() {
+        let (tree, div) = absolute_div_tree();
+        let mut styles = HashMap::new();
+        styles.insert(div, vec![decl("position", "absolute")]);
+        let layout = construct_layout_tree(&tree, &styles);
+        // body > div(BADGE). The div box must carry positioned=true.
+        let div_box = &layout.root.children[0].children[0];
+        assert!(div_box.positioned, "position:absolute must set positioned");
+    }
+
+    #[test]
+    fn position_fixed_marks_box_positioned() {
+        let (tree, div) = absolute_div_tree();
+        let mut styles = HashMap::new();
+        styles.insert(div, vec![decl("position", "fixed")]);
+        let layout = construct_layout_tree(&tree, &styles);
+        let div_box = &layout.root.children[0].children[0];
+        assert!(div_box.positioned, "position:fixed must set positioned");
+    }
+
+    #[test]
+    fn position_static_or_relative_is_in_flow() {
+        let (tree, div) = absolute_div_tree();
+        let mut styles = HashMap::new();
+        styles.insert(
+            div,
+            vec![decl("position", "relative"), decl("position", "static")],
+        );
+        let layout = construct_layout_tree(&tree, &styles);
+        let div_box = &layout.root.children[0].children[0];
+        assert!(!div_box.positioned, "static/relative stay in flow");
+    }
+
+    #[test]
+    fn position_absolute_blockifies_inline_tag() {
+        // CSS spec: absolutely positioned elements compute to
+        // block-level, so `<span style="position:absolute">` becomes a
+        // Block box (out-of-flow path) instead of an inline run member.
+        let mut t = Tree::with_root(NodeData::Document);
+        let root = t.root();
+        let body = t.insert(Some(root), elem("body", ""));
+        let span = t.insert(Some(body), elem("span", ""));
+        let _ = t.insert(Some(span), text("BADGE"));
+        let mut styles = HashMap::new();
+        styles.insert(span, vec![decl("position", "absolute")]);
+        let layout = construct_layout_tree(&t, &styles);
+        // body is Block, span was inline → anonymous wrapper > span.
+        let body_box = &layout.root.children[0];
+        let wrap = &body_box.children[0];
+        assert_eq!(wrap.box_type, BoxType::Anonymous);
+        let span_box = &wrap.children[0];
+        assert_eq!(span_box.box_type, BoxType::Block);
+        assert!(span_box.positioned);
     }
 }

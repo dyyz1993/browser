@@ -249,6 +249,13 @@ pub struct LayoutBox {
     /// of word-wrapping, so the renderer reproduces the original line
     /// structure (ASCII "monospace preservation").
     pub preserve_whitespace: bool,
+    /// M81: `position: absolute | fixed` — this box is out of flow.
+    /// Block / anonymous / flex / grid layout skips it when advancing
+    /// the flow cursor (it no longer takes space from siblings or
+    /// contributes to the parent's height). The box itself is still
+    /// laid out — at its approximated static position, without
+    /// top/left/right/bottom offsets — so renderers can paint it.
+    pub positioned: bool,
     pub children: Vec<LayoutBox>,
 }
 
@@ -270,6 +277,7 @@ impl LayoutBox {
             grid_placement: None,
             style: BoxStyle::default(),
             preserve_whitespace: false,
+            positioned: false,
             children: Vec::new(),
         }
     }
@@ -305,6 +313,13 @@ impl LayoutBox {
     #[must_use]
     pub fn with_preserve_whitespace(mut self) -> Self {
         self.preserve_whitespace = true;
+        self
+    }
+
+    /// M81: mark this box as out-of-flow (`position:absolute|fixed`).
+    #[must_use]
+    pub fn with_positioned(mut self) -> Self {
+        self.positioned = true;
         self
     }
 }
