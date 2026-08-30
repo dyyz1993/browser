@@ -2324,6 +2324,13 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - **--select "SEL=VALUE"**：下拉选择（value 设置 + change 派发）。
 - 实证：CHECKED ✓、Option 2 ✓。885 tests 全绿 + REALITY PASS。
 
+**M81.7 —— 批 86（定时）A6 滚动事件（路线图 7/48）**：
+
+- **--scroll-to <target>**（可多次）：CSS 选择器（scrollIntoView）或
+  纯数字（像素位置）；派发 window+document scroll 事件 + 目标元素
+  scroll 事件。配合 M80.27 IO 激活，滚动后 lazy 内容立即渲染。
+- 实证：SCROLL-fired-1（监听器触发 ✓）。885 tests 全绿。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

@@ -104,6 +104,10 @@ enum Cmd {
         /// 派发 change 事件。
         #[arg(long = "select")]
         select_args: Vec<String>,
+        /// M81.7: 滚动到元素/像素位置（可多次）。触发 scroll 事件 +
+        /// IntersectionObserver 回调（lazy 内容加载）。
+        #[arg(long = "scroll-to")]
+        scroll_tos: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -140,6 +144,10 @@ enum Cmd {
         /// 派发 change 事件。
         #[arg(long = "select")]
         select_args: Vec<String>,
+        /// M81.7: 滚动到元素/像素位置（可多次）。触发 scroll 事件 +
+        /// IntersectionObserver 回调（lazy 内容加载）。
+        #[arg(long = "scroll-to")]
+        scroll_tos: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -198,6 +206,10 @@ enum Cmd {
         /// 派发 change 事件。
         #[arg(long = "select")]
         select_args: Vec<String>,
+        /// M81.7: 滚动到元素/像素位置（可多次）。触发 scroll 事件 +
+        /// IntersectionObserver 回调（lazy 内容加载）。
+        #[arg(long = "scroll-to")]
+        scroll_tos: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -441,6 +453,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             type_args,
             checks,
             select_args,
+            scroll_tos,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -452,6 +465,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(type_post_exprs(&type_args))
                 .chain(check_post_exprs(&checks))
                 .chain(select_post_exprs(&select_args))
+                .chain(scroll_post_exprs(&scroll_tos))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
@@ -509,6 +523,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             type_args,
             checks,
             select_args,
+            scroll_tos,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -521,6 +536,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(type_post_exprs(&type_args))
                 .chain(check_post_exprs(&checks))
                 .chain(select_post_exprs(&select_args))
+                .chain(scroll_post_exprs(&scroll_tos))
                 .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
@@ -592,6 +608,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             type_args,
             checks,
             select_args,
+            scroll_tos,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -604,6 +621,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 .chain(type_post_exprs(&type_args))
                 .chain(check_post_exprs(&checks))
                 .chain(select_post_exprs(&select_args))
+                .chain(scroll_post_exprs(&scroll_tos))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
@@ -1475,6 +1493,37 @@ fn select_post_exprs(select_args: &[String]) -> Vec<String> {
                  try{{el.dispatchEvent(ch);}}catch(e){{}}\
                  return el.__nodeId;}})()"
             )
+        })
+        .collect()
+}
+
+/// M81.7: --scroll-to 表达式——滚动到元素位置或绝对像素，派发 scroll
+/// 事件 + window 派发（lazy 内容/无限滚动的 IntersectionObserver 已在
+/// M80.27 激活，滚动后 observe 的元素立即回调）。
+/// 格式：CSS 选择器 或 纯数字（像素位置）。
+fn scroll_post_exprs(targets: &[String]) -> Vec<String> {
+    targets
+        .iter()
+        .map(|t| {
+            if let Ok(px) = t.parse::<f64>() {
+                format!(
+                    "(function(){{\
+                     window.scrollTo(0,{px});\
+                     var se=new Event('scroll');try{{window.dispatchEvent(se);}}catch(e){{}}\
+                     try{{document.dispatchEvent(se);}}catch(e){{}}\
+                     return {px};}})()"
+                )
+            } else {
+                let esc = t.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "(function(){{var el=null;try{{el=document.querySelector('{esc}');}}catch(e){{}}\
+                     if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                     try{{el.scrollIntoView({{behavior:'auto',block:'start'}});}}catch(e){{}}\
+                     var se=new Event('scroll');try{{window.dispatchEvent(se);}}catch(e){{}}\
+                     try{{el.dispatchEvent(new Event('scroll'));}}catch(e){{}}\
+                     return el.__nodeId;}})()"
+                )
+            }
         })
         .collect()
 }
