@@ -28,7 +28,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use browser_dom::Tree;
+use browser_dom::{NodeId, Tree};
 use browser_html_parser::parse as parse_html;
 use browser_js_runtime::EngineKind;
 
@@ -61,6 +61,11 @@ pub struct PageState {
     pub last_headers: Vec<(String, String)>,
     /// M70.4: Cookie jar (Send-safe owned cookies, for Network.getCookies/setCookie).
     pub cookies: Vec<NetworkCookie>,
+    /// M81(B1): 当前焦点元素（`Input.dispatchKeyEvent` 的合成 key/input 事件
+    /// 目标，对应浏览器的 document.activeElement）。`Input.dispatchMouseEvent`
+    /// mousePressed 命中元素时设置；navigate 重建 tree 时清零（NodeId 失效）。
+    /// `None` → 键事件派发到 body。
+    pub focused_node: Option<NodeId>,
 }
 
 /// M70.4: A single cookie for the CDP Network domain. Owned + Send-safe
@@ -88,6 +93,7 @@ impl Default for PageState {
             last_status: 0,
             last_headers: Vec::new(),
             cookies: Vec::new(),
+            focused_node: None,
         }
     }
 }
@@ -107,6 +113,8 @@ impl PageState {
         self.tree = parse_html(html);
         self.url = url.to_string();
         self.width = width;
+        // M81(B1): navigate 重建 tree，旧 NodeId 失效 → 焦点清零。
+        self.focused_node = None;
     }
 
     /// M68: 从 `self.tree` 跑 css+layout+render，填 rendered_text/rendered_colored。

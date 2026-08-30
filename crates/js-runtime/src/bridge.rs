@@ -150,6 +150,30 @@ pub fn drain_captured_network_events() -> Vec<CapturedNetworkEvent> {
     CAPTURED_NETWORK.with(|slot| slot.borrow_mut().drain(..).collect())
 }
 
+// M81(B1): 最近一次 JS 侧 `Element.prototype.focus()` 的元素 NodeId。
+// CDP `Input.dispatchKeyEvent` 的 activeElement 同步用：focus shim 经
+// `__psReportFocus` 原生桥上报；cdp 在 `Runtime.evaluate` / `callFunctionOn`
+// 之后 drain 进 `PageState.focused_node`（eval 与 drain 同一 OS 线程，
+// thread_local 可见）。只存 usize，不存 JS 对象引用（GC 安全）。
+thread_local! {
+    static LAST_FOCUS_NODE: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// `__psReportFocus(nodeId)` 原生桥目标：记录 JS 侧 focus() 的元素。
+/// 负数（shim 的缺省哨兵）忽略。
+pub fn report_focus_node(id: f64) {
+    if id >= 0.0 {
+        LAST_FOCUS_NODE.with(|c| c.set(Some(id as usize)));
+    }
+}
+
+/// 取走并清空上报的焦点 NodeId（cdp 侧在 evaluate 之后调用，同线程）。
+#[must_use]
+pub fn take_focus_node() -> Option<usize> {
+    LAST_FOCUS_NODE.with(std::cell::Cell::take)
+}
+
 /// M70.4: Record a network event (called by fetch_sync_with_method).
 fn record_network_event(
     url: &str,

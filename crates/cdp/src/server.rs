@@ -424,7 +424,7 @@ impl CdpSession {
             // shimmed ctx 上，所以这里 lock page 取 tree + url 传进去。dispatch
             // 是同步的，整段在这个 lock 作用域内完成（无 await）。
             m if m.starts_with("Runtime.") => {
-                let Ok(st) = self.page.lock() else {
+                let Ok(mut st) = self.page.lock() else {
                     return Ok(()); // lock poisoned
                 };
                 let tree = &st.tree;
@@ -471,7 +471,14 @@ impl CdpSession {
                         url,
                         &self.engine_kind,
                     ) {
-                        Ok(resp) => (resp, vec![event]),
+                        Ok(resp) => {
+                            // M81(B1): JS 侧 focus() 上报 → 回写 PageState.focused_node
+                            // （dispatchKeyEvent 的 activeElement 同步）。
+                            if let Some(nid) = browser_js_runtime::take_focus_node() {
+                                st.focused_node = Some(nid);
+                            }
+                            (resp, vec![event])
+                        }
                         Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                             CdpMessage::error_response(id, -32601, "Method not found"),
                             vec![event],
@@ -490,7 +497,13 @@ impl CdpSession {
                         url,
                         &self.engine_kind,
                     ) {
-                        Ok(resp) => (resp, vec![]),
+                        Ok(resp) => {
+                            // M81(B1): JS 侧 focus() 上报 → 回写 focused_node。
+                            if let Some(nid) = browser_js_runtime::take_focus_node() {
+                                st.focused_node = Some(nid);
+                            }
+                            (resp, vec![])
+                        }
                         Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                             CdpMessage::error_response(id, -32601, "Method not found"),
                             vec![],

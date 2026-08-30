@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use browser_dom::Tree;
-use browser_js_runtime::{eval_in_tree_engine, EngineKind};
+use browser_js_runtime::{eval_in_tree_engine_await, EngineKind};
 
 use crate::jsonrpc::{CdpError, CdpMessage, Json};
 
@@ -48,7 +48,17 @@ pub fn dispatch(
             let expr = params
                 .and_then(|p| p.get_str("expression"))
                 .ok_or_else(|| CdpError::InvalidJson("missing expression".to_string()))?;
-            match eval_in_tree_engine(tree.clone(), url_or_default(url), expr, engine_kind) {
+            // M81(B4): `awaitPromise: true` —— 表达式返回 Promise 时驱动至
+            // Fulfilled/Rejected，返回真实值而非 "[object Promise]"。
+            let await_promise =
+                params.and_then(|p| p.get("awaitPromise")) == Some(&Json::Bool(true));
+            match eval_in_tree_engine_await(
+                tree.clone(),
+                url_or_default(url),
+                expr,
+                engine_kind,
+                await_promise,
+            ) {
                 Ok(value) => {
                     // Build RemoteObject { type, value }.
                     let (val_type, val_json) = classify_value(&value);
@@ -139,7 +149,17 @@ pub fn dispatch(
                     ARGS = args_str.join(",")
                 )
             };
-            match eval_in_tree_engine(tree.clone(), url_or_default(url), &expr, engine_kind) {
+            // M81(B4): awaitPromise 透传（async 函数声明的 Playwright evaluate
+            // 返回 Promise——等 resolve 后返回真实值）。
+            let await_promise =
+                params.and_then(|p| p.get("awaitPromise")) == Some(&Json::Bool(true));
+            match eval_in_tree_engine_await(
+                tree.clone(),
+                url_or_default(url),
+                &expr,
+                engine_kind,
+                await_promise,
+            ) {
                 Ok(value) => {
                     // boa display() 的输出，classify_value 据此归类。
                     let (val_type, val_json) = classify_value(&value);
@@ -176,6 +196,9 @@ fn url_or_default(url: &str) -> Option<String> {
 
 /// Classify a JS string result into CDP type + value JSON.
 /// Tries number → bool → string.
+/// M81(B4): awaitPromise 后 object/array 结果是 JSON 文本（js-runtime
+/// `display_resolved_value` 用 JSON.stringify 序列化）——解析归类为
+/// CDP `object` 类型（returnByValue 语义），解析失败仍按字符串兜底。
 fn classify_value(s: &str) -> (String, Json) {
     // boa's display() quotes string values like "\"hello\"" — strip outer quotes.
     let s = if s.len() >= 2 && s.starts_with('\"') && s.ends_with('\"') {
@@ -183,6 +206,12 @@ fn classify_value(s: &str) -> (String, Json) {
     } else {
         s
     };
+    // M81(B4): object/array（JSON 文本）。
+    if s.starts_with('{') || s.starts_with('[') {
+        if let Ok(v) = crate::jsonrpc::parse_json(s) {
+            return ("object".to_string(), v);
+        }
+    }
     // Try integer/float.
     if let Ok(n) = s.parse::<f64>() {
         return ("number".to_string(), Json::Number(n));
@@ -407,5 +436,133 @@ mod tests {
         )
         .unwrap();
         assert!(resp.contains("\"QJS Title\""), "got: {resp}");
+    }
+}
+
+// ── M81(B4): awaitPromise 回归测试（QuickJS，默认 feature 即跑）──
+#[cfg(all(test, feature = "quickjs"))]
+mod await_promise_tests {
+    use super::*;
+
+    fn evaluate(expr: &str, await_promise: bool) -> String {
+        let mut p = BTreeMap::new();
+        p.insert("expression".to_string(), Json::String(expr.to_string()));
+        p.insert("returnByValue".to_string(), Json::Bool(true));
+        p.insert("awaitPromise".to_string(), Json::Bool(await_promise));
+        dispatch(
+            1,
+            "Runtime.evaluate",
+            Some(&Json::Object(p)),
+            &Tree::new(),
+            "",
+            &EngineKind::QuickJs,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn await_promise_resolve_returns_value() {
+        let resp = evaluate("Promise.resolve(42)", true);
+        assert!(
+            resp.contains("\"value\":42") && resp.contains("\"type\":\"number\""),
+            "awaitPromise must unwrap resolved value, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_async_iife_returns_value() {
+        let resp = evaluate("(async function(){ return 42; })()", true);
+        assert!(
+            resp.contains("\"value\":42"),
+            "async IIFE awaited to 42, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_then_chain_returns_value() {
+        let resp = evaluate(
+            "Promise.resolve(1).then(function(v){ return v + 1; })",
+            true,
+        );
+        assert!(
+            resp.contains("\"value\":2"),
+            ".then chain awaited through microtasks, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_fetch_resolves_via_timer_drain() {
+        // fetch 的 resolve 挂 setTimeout(0)（macrotask）——验证 timer drain。
+        let resp = evaluate(
+            "fetch('http://127.0.0.1:9/').then(function(){ return 'FETCHED'; })\
+             .catch(function(){ return 'FETCH-ERR-OK'; })",
+            true,
+        );
+        assert!(
+            resp.contains("FETCH"),
+            "fetch promise must settle via timer drain, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_rejection_returns_exception_details() {
+        let resp = evaluate("Promise.reject(new Error('boom-b1'))", true);
+        assert!(
+            resp.contains("exceptionDetails") && resp.contains("boom-b1"),
+            "rejected promise → exceptionDetails with reason, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_object_result_classified_as_object() {
+        let resp = evaluate("Promise.resolve({a: 1, b: 'x'})", true);
+        assert!(
+            resp.contains("\"type\":\"object\"") && resp.contains("\"a\":1"),
+            "object result must be JSON-classified, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_false_keeps_promise_display() {
+        // 无 awaitPromise → 旧行为：String(Promise) = "[object Promise]"。
+        let resp = evaluate("Promise.resolve(42)", false);
+        assert!(
+            resp.contains("[object Promise]"),
+            "awaitPromise=false must keep legacy display, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn await_promise_non_promise_value_unchanged() {
+        let resp = evaluate("1 + 1", true);
+        assert!(
+            resp.contains("\"value\":2"),
+            "non-promise results unaffected by awaitPromise, got: {resp}"
+        );
+    }
+
+    #[test]
+    fn call_function_on_await_promise_passthrough() {
+        let html = "<html><body><p>x</p></body></html>";
+        let tree = browser_html_parser::parse(html);
+        let mut p = BTreeMap::new();
+        p.insert(
+            "functionDeclaration".to_string(),
+            Json::String("async function(){ return 7; }".to_string()),
+        );
+        p.insert("awaitPromise".to_string(), Json::Bool(true));
+        let resp = dispatch(
+            2,
+            "Runtime.callFunctionOn",
+            Some(&Json::Object(p)),
+            &tree,
+            "http://example.com/",
+            &EngineKind::QuickJs,
+        )
+        .unwrap();
+        assert!(
+            resp.contains("\"value\":7"),
+            "callFunctionOn awaitPromise must unwrap async fn, got: {resp}"
+        );
     }
 }

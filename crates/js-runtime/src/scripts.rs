@@ -5547,6 +5547,12 @@ window.__activeEl = null;
 Element.prototype.focus = function() {
     var prev = window.__activeEl;
     if (prev === this) return;
+    // M81(B1): 上报焦点 NodeId 给宿主（CDP dispatchKeyEvent 的 activeElement
+    // 同步——每个 eval 会话的 __activeEl 不跨会话存续，由 cdp drain 到
+    // PageState.focused_node）。__psReportFocus 缺失（boa）时静默忽略。
+    try {
+        if (typeof this.__nodeId === 'number') __psReportFocus(this.__nodeId);
+    } catch (e) {}
     if (prev && typeof prev.dispatchEvent === 'function') {
         try { prev.dispatchEvent(new FocusEvent('blur', { bubbles: false })); } catch (e) {}
         try { prev.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); } catch (e) {}
@@ -8081,6 +8087,24 @@ pub fn eval_in_tree_engine(
     expr: &str,
     engine_kind: &crate::engine::EngineKind,
 ) -> Result<String, String> {
+    eval_in_tree_engine_await(tree, base_url, expr, engine_kind, false)
+}
+
+/// M81(B4): [`eval_in_tree_engine`] 的 **awaitPromise** 版。`await_promise=true`
+/// 时（仅 QuickJS 引擎生效），表达式完成值若是 Promise，Rust 侧驱动
+/// microtask + timer 至 Fulfilled/Rejected，返回 resolved 值的 display 字符串；
+/// Rejected → Err（CDP 层转 exceptionDetails）。boa 引擎忽略该参数（0.21 的
+/// promise job 执行模型不同，不在此实现——行为同 `await_promise=false`）。
+///
+/// # Errors
+/// 返回 `Err(msg)` 如果 JS 解析/执行失败，或 awaitPromise 的 Promise 被拒绝。
+pub fn eval_in_tree_engine_await(
+    tree: Tree,
+    base_url: Option<String>,
+    expr: &str,
+    engine_kind: &crate::engine::EngineKind,
+    await_promise: bool,
+) -> Result<String, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -8089,10 +8113,11 @@ pub fn eval_in_tree_engine(
     // ── QuickJS 分支 ──
     #[cfg(feature = "quickjs")]
     if matches!(engine_kind, crate::engine::EngineKind::QuickJs) {
-        return eval_in_tree_quickjs(shared, base_url, expr);
+        return eval_in_tree_quickjs(shared, base_url, expr, await_promise);
     }
     // 非 QuickJS（boa）或 quickjs feature 未启用时的回退。
     let _ = engine_kind;
+    let _ = await_promise;
 
     // ── boa 分支（默认 + QuickJS feature 未启用时的回退）──
     #[cfg(feature = "boa")]
@@ -8126,6 +8151,7 @@ fn eval_in_tree_quickjs(
     shared: crate::bridge::SharedTree,
     base_url: Option<String>,
     expr: &str,
+    await_promise: bool,
 ) -> Result<String, String> {
     let mut engine_box = crate::engine::EngineKind::QuickJs.create(None);
     let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (*engine_box)
@@ -8205,7 +8231,13 @@ var self = globalThis;
     );
 
     // eval 调用方表达式 —— 用封装好的 eval_display_string（对齐 boa display 格式）。
-    let result = engine.eval_display_string(expr);
+    // M81(B4): await_promise=true 时用 awaitPromise 版（完成值是 Promise 则
+    // Rust 侧驱动至 Fulfilled/Rejected 取真实值）。
+    let result = if await_promise {
+        engine.eval_display_string_with_await(expr)
+    } else {
+        engine.eval_display_string(expr)
+    };
     // engine 在作用域结束时 drop（释放 QuickJS runtime）
     drop(engine_box);
     result

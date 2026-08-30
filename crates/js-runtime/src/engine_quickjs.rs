@@ -33,6 +33,52 @@ pub(crate) fn format_pending_exception(ctx: &Ctx) -> String {
     }
 }
 
+/// M81(B4): JSON 转义 JS 源码（引号/反斜杠/控制字符/U+2028/U+2029），
+/// 供塞进字符串字面量后 `(0, eval)`。与 `eval_display_string` 的内联转义
+/// 同规则（提取复用仅限新增函数，不动旧实现）。
+fn cdp_escape_program(js: &str) -> String {
+    let mut esc = String::with_capacity(js.len() + 16);
+    for c in js.chars() {
+        match c {
+            '"' => esc.push_str("\\\""),
+            '\\' => esc.push_str("\\\\"),
+            '\n' => esc.push_str("\\n"),
+            '\r' => esc.push_str("\\r"),
+            '\t' => esc.push_str("\\t"),
+            '\u{2028}' => esc.push_str("\\u2028"),
+            '\u{2029}' => esc.push_str("\\u2029"),
+            c if (c as u32) < 0x20 => esc.push_str(&format!("\\u{:04x}", c as u32)),
+            c => esc.push(c),
+        }
+    }
+    esc
+}
+
+/// M81(B4): 把 resolve 后的 Promise 结果 Value 格式化成 CDP display 字符串。
+///
+/// 约定对齐 `eval_display_string`：字符串 JSON 转义带引号，number/bool/null
+/// 原样字面量，undefined 特判；object/array 走 JSON 序列化（比
+/// "[object Object]" 对 returnByValue 有用）。JSON 盲区（symbol/function/
+/// 循环引用）回退 `String(v)`。
+fn display_resolved_value<'js>(ctx: &Ctx<'js>, v: &Value<'js>) -> String {
+    use rquickjs::Type;
+    match v.type_of() {
+        Type::Undefined => "undefined".to_string(),
+        _ => match ctx.json_stringify(v.clone()) {
+            // rquickjs String 的固有 to_string() 返回 Result（非 Display 的）。
+            Ok(Some(s)) => s.to_string().unwrap_or_else(|_| "undefined".to_string()),
+            _ => match ctx.globals().get::<_, Function>("String") {
+                Ok(f) => f
+                    .call::<_, rquickjs::String>((v.clone(),))
+                    .ok()
+                    .and_then(|s| s.to_string().ok())
+                    .unwrap_or_else(|| "undefined".to_string()),
+                Err(_) => "undefined".to_string(),
+            },
+        },
+    }
+}
+
 /// M66: HTTP Resolver —— 把相对路径解析成绝对 URL。
 /// 注意：resolve 用的是 trait 传入的 `base` 参数，不存自身状态；
 /// 结构体保留是因为 rquickjs 的 set_loader 需要具体类型实例。
@@ -380,6 +426,13 @@ impl QuickJsEngine {
                 let _ = g.set("__setValue", Function::new(ctx.clone(), |id: f64, v: String| bridge::qjs_bridge::set_attr(id, "value".to_string(), v)).unwrap());
                 let _ = g.set("__click", Function::new(ctx.clone(), |_: f64| {}).unwrap());
                 let _ = g.set("__submit", Function::new(ctx.clone(), |_: f64| {}).unwrap());
+                // M81(B1): __psReportFocus —— Element.prototype.focus 上报焦点
+                // NodeId（CDP dispatchKeyEvent 的 activeElement 同步；cdp 在
+                // Runtime.evaluate 后 drain 进 PageState.focused_node）。
+                let _ = g.set(
+                    "__psReportFocus",
+                    Function::new(ctx.clone(), |id: f64| bridge::report_focus_node(id)).unwrap(),
+                );
 
                 // === setBody / appendBody / fetchSetBody / fetchAppendBody ===
                 // M66-fix: 用 qjs_bridge::set_body（走 set_body_inner_html，清空子节点+插文本），
@@ -1251,6 +1304,112 @@ impl QuickJsEngine {
                 Err(e) => Err(format!("{e}")),
             },
         )
+    }
+
+    /// M81(B4): `eval_display_string` 的 **awaitPromise** 版（CDP
+    /// `Runtime.evaluate` / `callFunctionOn` 的 `awaitPromise: true` 参数）。
+    ///
+    /// 完成值若是 Promise（`instanceof Promise` 品牌检查——thenable 假对象不算），
+    /// 在 Rust 侧驱动至 Fulfilled/Rejected 再取真实值：
+    /// - 每轮先 drain microtask（`ctx.execute_pending_job`，.then/async 链）
+    /// - 再 drain 到期 timer（`__drainDueTimers()`——`fetch` 的 resolve 走
+    ///   `setTimeout(0)` macrotask，纯 microtask drain 永远 Pending）
+    /// - 每轮必须有一种进展，否则放弃（长定时器/外部事件等不到）→ 返回
+    ///   `"[object Promise]"`（与无 awaitPromise 的旧行为一致）
+    ///
+    /// 返回格式与 `eval_display_string` 相同（字符串带引号、原样字面量），
+    /// Rejected → `Err(reason)`（CDP 层转 exceptionDetails）。
+    ///
+    /// GC 安全：Value/Promise 全部在 `ctx.with` 闭包内创建并 drop，不在全局
+    /// 存任何 JS 引用（AGENTS.md 硬性约定 13）；Rejected reason 用
+    /// `format_pending_exception`（`ctx.catch()`）取回，同样不出闭包。
+    pub fn eval_display_string_with_await(&mut self, js: &str) -> Result<String, String> {
+        use rquickjs::context::EvalOptions;
+        use rquickjs::promise::PromiseState;
+        use rquickjs::CatchResultExt;
+        let esc = cdp_escape_program(js);
+        // (0, eval) 间接 eval：全局作用域 + 程序完成值语义（ES 标准）。
+        // 完成值在 JS 侧分类：真 Promise → `__psAwait` 槽（instanceof 品牌检查
+        // 保证 Rust 侧 Promise::state() 只会作用于真 Promise，不碰 thenable
+        // 假对象）；其余立即按 display 约定格式化进 `__psVal`。
+        let wrapper = format!(
+            "(function() {{ var r = (0, eval)(\"{SRC}\"); \
+             if (r instanceof Promise) return {{ __psAwait: r }}; \
+             return {{ __psVal: typeof r === 'string' ? JSON.stringify(r) : String(r) }}; }})()",
+            SRC = esc
+        );
+        self.ctx.with(|ctx: Ctx| {
+            let mut opts = EvalOptions::default();
+            opts.strict = false;
+            // 包装 IIFE 恒返回对象字面量（{__psAwait} 或 {__psVal}）。
+            let obj: rquickjs::Object = match ctx
+                .eval_with_options::<rquickjs::Object, _>(wrapper.as_str(), opts)
+                .catch(&ctx)
+            {
+                Ok(v) => v,
+                Err(e) => return Err(format!("{e}")),
+            };
+            // 非 Promise 完成值：__psVal 已是格式化好的 display 字符串。
+            let marker: Value = obj
+                .get("__psAwait")
+                .unwrap_or_else(|_| Value::new_undefined(ctx.clone()));
+            if marker.is_undefined() {
+                let display: String = obj
+                    .get::<_, String>("__psVal")
+                    .unwrap_or_else(|_| "[object Undefined]".to_string());
+                return Ok(display);
+            }
+            // try_into_promise 的 Err 是原 Value（thenable 假对象——品牌检查后不应到达）。
+            // marker 被 try_into_promise 消费（Promise 持有同一 JS 引用）。
+            let promise = marker
+                .try_into_promise()
+                .map_err(|e| format!("value is not a Promise ({})", e.type_name()))?;
+            drop(obj);
+            // 驱动循环：microtask + timer 双 drain，每轮需有进展。
+            const MAX_TIMER_ROUNDS: usize = 100;
+            const MAX_MICROTASKS: usize = 1000; // 与 run_jobs 同防御上限
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            for _ in 0..MAX_TIMER_ROUNDS {
+                if promise.state() != PromiseState::Pending || std::time::Instant::now() > deadline
+                {
+                    break;
+                }
+                let mut progressed = false;
+                let mut guard = 0;
+                while ctx.execute_pending_job() {
+                    progressed = true;
+                    guard += 1;
+                    if guard > MAX_MICROTASKS || promise.state() != PromiseState::Pending {
+                        break;
+                    }
+                }
+                if promise.state() != PromiseState::Pending {
+                    break;
+                }
+                // fetch 的 resolve 挂在 setTimeout(0)（macrotask）——纯 microtask
+                // drain 不触发，必须补 timer drain。
+                let fired = ctx.eval::<i32, _>("__drainDueTimers()").unwrap_or(0);
+                if fired > 0 {
+                    progressed = true;
+                }
+                if !progressed {
+                    break; // 无进展可做（长定时器/外部事件）→ 放弃等待
+                }
+            }
+            match promise.state() {
+                PromiseState::Pending => Ok("[object Promise]".to_string()),
+                PromiseState::Rejected => {
+                    // result() 会把 reason 重新 throw 到 ctx，用 catch 取回。
+                    let _ = promise.result::<Value>();
+                    Err(format_pending_exception(&ctx))
+                }
+                PromiseState::Resolved => match promise.result::<Value>() {
+                    Some(Ok(v)) => Ok(display_resolved_value(&ctx, &v)),
+                    Some(Err(e)) => Err(format!("{e}")),
+                    None => Ok("[object Promise]".to_string()),
+                },
+            }
+        })
     }
 
     /// M66: 执行 ESM module 源码（支持 import/export/import.meta）。

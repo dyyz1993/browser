@@ -51,8 +51,8 @@ pub use bridge::{
     drain_captured_console_events, drain_captured_js_errors, drain_captured_network_events,
     ensure_cookie_jar, install_current, install_navigation, install_shared,
     install_shared_with_base, install_storage, is_network_idle, pending_requests, pending_timers,
-    resolve_url, CapturedConsoleEvent, CapturedJsError, CapturedNetworkEvent, SharedTree,
-    TreeGuard,
+    resolve_url, take_focus_node, CapturedConsoleEvent, CapturedJsError, CapturedNetworkEvent,
+    SharedTree, TreeGuard,
 };
 // M71.1: bridge::install 是 boa 专属（注册所有 NativeFn bridge 函数）。
 #[cfg(feature = "boa")]
@@ -64,8 +64,9 @@ pub use navigation_shim::install_navigation_globals;
 #[cfg(feature = "boa")]
 pub use runtime::JsRuntime;
 pub use scripts::{
-    eval_in_tree, eval_in_tree_engine, extract_scripts, run_scripts, run_scripts_with_base,
-    run_scripts_with_base_engine, run_scripts_with_post_exprs, script_cache_public,
+    eval_in_tree, eval_in_tree_engine, eval_in_tree_engine_await, extract_scripts, run_scripts,
+    run_scripts_with_base, run_scripts_with_base_engine, run_scripts_with_post_exprs,
+    script_cache_public,
 };
 // M71.1: execute_scripts* 是 boa 专属（吃 boa Context）。
 #[cfg(feature = "boa")]

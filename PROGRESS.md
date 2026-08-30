@@ -2346,6 +2346,19 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - **A 阶段交互矩阵 8/8 完成**：click/hover/focus/type/check/select/
   scroll/dblclick/contextmenu/drag。
 
+**M81.B1/B4 —— 批 89（定时）CDP 键盘 + awaitPromise（路线图 11/48）**：
+
+- **B1 Input.dispatchKeyEvent**：keyDown（keydown+text 插入）/char
+  （keypress+text）/keyUp 三类型；焦点桥 `__psReportFocus(nodeId)`
+  （el.focus() 上报，thread_local usize GC 安全）；目标解析
+  focused_node → body 回落；复用批 48 spawn_blocking 模式。
+- **B4 Runtime awaitPromise**：`eval_display_string_with_await`——
+  Promise 品牌检测（instanceof Promise）+ Rust 驱动循环（microtask
+  drain + timer drain，3s deadline/100 轮上限）；resolve 值 json 序列化。
+  evaluate/callFunctionOn 均透传 awaitPromise。fetch then 链端到端 ✓。
+- 902 tests 全绿（+23：cdp crate 键盘 8 + awaitPromise 9 + 其他）。
+- REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
