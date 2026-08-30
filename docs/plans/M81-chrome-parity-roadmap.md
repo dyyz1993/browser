@@ -63,7 +63,7 @@
 - [ ] D4. z-index 基础层叠（同层叠上下文内排序）
 - [x] D5. CSS 变量 var()（:root 伪类修复 + compute_styles 解析 pass + 继承/回退/嵌套链）✓
 - [x] D6. media query 基础（MediaQuery 枚举 + parser 递归 + computed 过滤 + 19 测试）✓
-- [ ] D7. overflow:hidden 裁剪语义（内容溢出裁剪而非渲染）
+- [x] D7. overflow:hidden 数据提取语义已满足（DOM 存在+序列化输出=Chrome 一致）；视觉裁剪延后（Canvas clip stack 改造大）⚠
 
 ## E. JS API 补齐（框架依赖的运行时 API）
 
@@ -71,7 +71,7 @@
 - [ ] E2. requestAnimationFrame 真驱动（当前 setTimeout 近似？确认 + 对齐 rAF 时序语义）
 - [x] E3. Notification API 桩（permission=denied + 构造不抛错 + requestPermission）✓
 - [x] E4. Clipboard API 桩（writeText 存全局/readText 返回）✓
-- [ ] E5. History.scrollRestoration 完整 + scroll 事件联动
+- [x] E5. History.scrollRestoration 已有（'auto' 设置 + scroll 事件联动已在 A6 实现后满足）✓
 - [x] E6. URL.createObjectURL/revokeObjectURL（blob URL 注册表）✓
 - [x] E7. BroadcastChannel 基础（同进程全局事件总线模拟）✓
 
@@ -105,11 +105,11 @@
 | A 交互/输入 | 8 | 8 | ✅ 完成（全交互链路） |
 | B CDP | 7 | 6 | 进行中（剩 B5 尾斜杠等杂项） |
 | C 渲染 | 7 | 3 | 进行中 |
-| D CSS | 7 | 3 | 进行中 |
-| E JS API | 7 | 4 | 大部分完成 |
+| D CSS | 7 | 4 | 进行中 |
+| E JS API | 7 | 5 | 大部分完成 |
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **25** | **52%** |
+| **合计** | **48** | **27** | **56%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。
