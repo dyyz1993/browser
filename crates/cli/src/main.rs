@@ -83,6 +83,12 @@ enum Cmd {
         /// 支持 CSS 选择器与 `text=xxx`（textContent 包含匹配）。
         #[arg(long = "click")]
         clicks: Vec<String>,
+        /// M81: 合成悬停（可多次）。含义同 --click，事件换成浏览器标准
+        /// hover 序列：mouseover → mouseenter（不冒泡）→ mousemove；
+        /// 若此前 hover 过别的元素，先对旧元素派 mouseout/mouseleave。
+        /// hover 后泵事件循环（展开菜单的异步内容需要 drain）。
+        #[arg(long = "hover")]
+        hovers: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -103,6 +109,9 @@ enum Cmd {
         /// M81: 合成点击（可多次）。含义同 render-file。
         #[arg(long = "click")]
         clicks: Vec<String>,
+        /// M81: 合成悬停（可多次）。含义同 render-file --hover。
+        #[arg(long = "hover")]
+        hovers: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -143,6 +152,10 @@ enum Cmd {
         /// 支持 CSS 选择器与 `text=xxx`。仅 QuickJS 引擎生效。
         #[arg(long = "click")]
         clicks: Vec<String>,
+        /// M81: 合成悬停（可多次）。含义同 render-file --hover。
+        /// 仅 QuickJS 引擎生效。
+        #[arg(long = "hover")]
+        hovers: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -381,11 +394,15 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             max_height,
             render_mode,
             clicks,
+            hovers,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            // M81: --click 表达式（同会话合成点击；空列表 = 原行为）。
-            let click_exprs = click_post_exprs(&clicks);
+            // M81: --click/--hover 表达式（同会话合成事件；空列表 = 原行为）。
+            let post_exprs = click_post_exprs(&clicks)
+                .into_iter()
+                .chain(hover_post_exprs(&hovers))
+                .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
             if render_mode == "pixel" {
@@ -398,18 +415,30 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                         "boa",
                         p,
                         max_height,
-                        &click_exprs,
+                        &post_exprs,
                     )?,
-                    None => {
-                        render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?
-                    }
+                    None => render_html_to_string_with_post_exprs(
+                        &html,
+                        width,
+                        true,
+                        None,
+                        "boa",
+                        &post_exprs,
+                    )?,
                 };
                 print!("{text}");
                 return Ok(());
             }
             // M37: render-file 现在执行 JS + 等待异步（setTimeout/fetch/XHR/WS）。
             // 之前 run_js=false 导致 SPA 动态内容永远不渲染。
-            let text = render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?;
+            let text = render_html_to_string_with_post_exprs(
+                &html,
+                width,
+                true,
+                None,
+                "boa",
+                &post_exprs,
+            )?;
             print!("{text}");
             if let Some(p) = screenshot {
                 let colored = render_html_to_string_colored(&html, width, true, None)?;
@@ -425,11 +454,16 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             max_height,
             render_mode,
             clicks,
+            hovers,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            let click_exprs = click_post_exprs(&clicks);
+            // M81: --click/--hover 表达式（同会话合成事件；空列表 = 原行为）。
+            let post_exprs = click_post_exprs(&clicks)
+                .into_iter()
+                .chain(hover_post_exprs(&hovers))
+                .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
                 let text = match &screenshot {
@@ -441,16 +475,27 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                         "boa",
                         p,
                         max_height,
-                        &click_exprs,
+                        &post_exprs,
                     )?,
-                    None => {
-                        render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?
-                    }
+                    None => render_html_to_string_with_post_exprs(
+                        &html,
+                        width,
+                        true,
+                        None,
+                        "boa",
+                        &post_exprs,
+                    )?,
                 };
                 print!("{text}");
             } else {
-                let text =
-                    render_html_to_string_clicks(&html, width, true, None, "boa", &click_exprs)?;
+                let text = render_html_to_string_with_post_exprs(
+                    &html,
+                    width,
+                    true,
+                    None,
+                    "boa",
+                    &post_exprs,
+                )?;
                 print!("{text}");
                 if let Some(p) = screenshot {
                     let colored = render_html_to_string_colored(&html, width, true, None)?;
@@ -484,11 +529,16 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             js_memory_limit_mb,
             js_engine,
             clicks,
+            hovers,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
             let base = if no_js { None } else { Some(url.clone()) };
-            let click_exprs = click_post_exprs(&clicks);
+            // M81: --click/--hover 表达式（同会话合成事件；空列表 = 原行为）。
+            let post_exprs = click_post_exprs(&clicks)
+                .into_iter()
+                .chain(hover_post_exprs(&hovers))
+                .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
             if render_mode == "pixel" {
@@ -501,7 +551,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                         &js_engine,
                         p,
                         max_height,
-                        &click_exprs,
+                        &post_exprs,
                     )?,
                     None => {
                         let cols = browser_render::layout_columns_for_px(width);
@@ -514,7 +564,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                             &js_engine,
                             true,
                             browser_render::pixel::cell_metrics().1,
-                            &click_exprs,
+                            &post_exprs,
                         )?;
                         render_ascii(&layout, cols)
                     }
@@ -523,11 +573,11 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             } else {
                 // M-cls.1: 网络 HTML 走子进程沙箱（RLIMIT_AS 硬上限）。
                 // M66: QuickJS 引擎内存效率高，跳过沙箱直接进程内渲染。
-                // M81: --click 需要同会话 post eval，跳过沙箱（子进程无法回传）。
+                // M81: --click/--hover 需要同会话 post eval，跳过沙箱（子进程无法回传）。
                 let (text, colored) = if !no_js
                     && js_memory_limit_mb > 0
                     && js_engine == "boa"
-                    && click_exprs.is_empty()
+                    && post_exprs.is_empty()
                 {
                     match sandbox::run_js_render_in_sandbox(&html, &url, width, js_memory_limit_mb)
                     {
@@ -562,7 +612,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                         false,
                         base.clone(),
                         &js_engine,
-                        &click_exprs,
+                        &post_exprs,
                     )?
                 };
                 print!("{text}");
@@ -1117,22 +1167,23 @@ fn render_html_to_string_inner_ex(
     render_html_to_string_inner_ex_engine(html, width, run_js, csr_fallback, base_url, "boa", &[])
 }
 
-/// M81: 带 `--click` 的渲染入口——clicks 作为 post_exprs 传入 JS 会话，
-/// 页面脚本 + 事件循环跑完后在同一会话内按序合成点击（addEventListener
-/// 监听器注册在会话内，引擎 drop 即失效），再 layout + ASCII 渲染。
+/// M81: 带 `--click`/`--hover` 的渲染入口——post_exprs（合成点击/悬停
+/// 表达式）传入 JS 会话，页面脚本 + 事件循环跑完后在同一会话内按序 eval
+/// （addEventListener 监听器注册在会话内，引擎 drop 即失效），再 layout +
+/// ASCII 渲染。
 #[allow(clippy::too_many_arguments)]
-fn render_html_to_string_clicks(
+fn render_html_to_string_with_post_exprs(
     html: &str,
     width: usize,
     run_js: bool,
     base_url: Option<String>,
     js_engine: &str,
-    clicks: &[String],
+    post_exprs: &[String],
 ) -> Result<String> {
     // 走 inner_ex_engine 完整渲染（含 [IMG]/[SVG] 占位符后处理，
     // 与无点击路径产物一致）。
     let (text, _colored) = render_html_to_string_inner_ex_engine(
-        html, width, run_js, run_js, base_url, js_engine, clicks,
+        html, width, run_js, run_js, base_url, js_engine, post_exprs,
     )?;
     Ok(text)
 }
@@ -1146,7 +1197,7 @@ fn render_html_to_string_inner_ex_engine(
     csr_fallback: bool,
     base_url: Option<String>,
     js_engine: &str,
-    clicks: &[String],
+    post_exprs: &[String],
 ) -> Result<(String, String)> {
     let (layout, _styles) = layout_tree_after_js_engine(
         html,
@@ -1157,7 +1208,7 @@ fn render_html_to_string_inner_ex_engine(
         js_engine,
         false,
         1.0,
-        clicks,
+        post_exprs,
     )?;
     let plain = render_ascii(&layout, width);
     let colored = render_ascii_colored(&layout, width);
@@ -1213,11 +1264,64 @@ fn click_post_exprs(selectors: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// M81: 把 `--hover` 选择器列表转成同会话合成悬停表达式（post_exprs）。
+/// 浏览器标准进入序列（指针落到元素上）：`mouseover`（bubbles）→
+/// `mouseenter`（不冒泡）→ `mousemove`（bubbles）；若本会话此前 hover 过
+/// 别的元素，先对旧元素派 `mouseout`（bubbles）→ `mouseleave`（不冒泡）
+/// ——out/over、enter/leave 成对，顺序对齐真实指针从旧元素移入新元素。
+/// 坐标取 getBoundingClientRect 中心（本引擎 rect 是零桩，坐标 0——合成
+/// 事件 isTrusted=false，菜单 handler 一般不校验坐标）。
+/// 上个悬停目标只存 nodeId（数字，`window.__hoverNodeId`）再经
+/// `__makeElement` 重包装——QuickJS GC 安全（禁止全局变量存 JS 对象引用）。
+/// 返回数字约定同 [`click_post_exprs`]：`-1` = 未命中；否则目标 nodeId。
+/// 选择器形式同 [`click_post_exprs`]（CSS 选择器 / `text=xxx`）。
+fn hover_post_exprs(selectors: &[String]) -> Vec<String> {
+    selectors
+        .iter()
+        .map(|sel| {
+            let find = if let Some(text) = sel.strip_prefix("text=") {
+                let esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "var els=document.querySelectorAll('*');\
+                     for(var i=0;i<els.length;i++){{\
+                     var t=(els[i].textContent||'').trim();\
+                     if(t.length>0&&t.indexOf('{esc}')>=0&&t.length<bl){{el=els[i];bl=t.length;}}}}"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("try{{el=document.querySelector('{esc}');}}catch(e){{return -1;}}")
+            };
+            format!(
+                "(function(){{var el=null,bl=Infinity;{find}\
+                 if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                 var cx=0,cy=0;try{{var r=el.getBoundingClientRect();\
+                 if(r){{cx=(r.left||0)+(r.width||0)/2;cy=(r.top||0)+(r.height||0)/2;}}}}catch(re){{}}\
+                 try{{var pid=window.__hoverNodeId;\
+                 if(typeof pid==='number'&&pid>=0&&pid!==el.__nodeId&&typeof __makeElement==='function'){{\
+                 var prev=__makeElement(pid);\
+                 if(prev){{\
+                 var oe=new MouseEvent('mouseout',{{bubbles:true,cancelable:true,view:window,\
+                 clientX:cx,clientY:cy}});try{{oe.relatedTarget=el;}}catch(o1){{}}prev.dispatchEvent(oe);\
+                 var le=new MouseEvent('mouseleave',{{bubbles:false,cancelable:false,view:window,\
+                 clientX:cx,clientY:cy}});try{{le.relatedTarget=el;}}catch(o2){{}}prev.dispatchEvent(le);}}}}}}catch(pe){{}}\
+                 window.__hoverNodeId=el.__nodeId;\
+                 var e1=new MouseEvent('mouseover',{{bubbles:true,cancelable:true,view:window,\
+                 clientX:cx,clientY:cy}});el.dispatchEvent(e1);\
+                 var e2=new MouseEvent('mouseenter',{{bubbles:false,cancelable:false,view:window,\
+                 clientX:cx,clientY:cy}});el.dispatchEvent(e2);\
+                 var e3=new MouseEvent('mousemove',{{bubbles:true,cancelable:true,view:window,\
+                 clientX:cx,clientY:cy}});el.dispatchEvent(e3);\
+                 return el.__nodeId;}})()"
+            )
+        })
+        .collect()
+}
+
 /// M80: 共用布局管线（parse → JS → style → construct → run_layout），
 /// 返回布局树 + computed styles。ASCII（爬虫契约）与 pixel（近似像素
 /// 渲染）两条渲染路径共用此前半段；JS 只执行一次。
-/// M81: `clicks` —— post_exprs（--click 合成点击），在同一 JS 会话内于
-/// 页面脚本 + 事件循环之后按序 eval（空切片 = 原行为）。
+/// M81: `post_exprs` —— --click/--hover 合成事件表达式，在同一 JS 会话内
+/// 于页面脚本 + 事件循环之后按序 eval（空切片 = 原行为）。
 #[allow(clippy::too_many_arguments)]
 fn layout_tree_after_js_engine(
     html: &str,
@@ -1228,20 +1332,21 @@ fn layout_tree_after_js_engine(
     js_engine: &str,
     pixel: bool,
     unit_scale: f32,
-    clicks: &[String],
+    post_exprs: &[String],
 ) -> Result<(browser_layout::LayoutTree, browser_render::StyleMap)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
         #[cfg(feature = "quickjs")]
-        let (shared, n) = if base_url.is_some() || !clicks.is_empty() {
-            // M81: 有 --click 时必须走 post_exprs 变体（同会话合成点击）；
-            // 无 base_url 的本地文件 QuickJS 也支持（base_url 仅影响相对 URL 解析）。
+        let (shared, n) = if base_url.is_some() || !post_exprs.is_empty() {
+            // M81: 有 --click/--hover 时必须走 post_exprs 变体（同会话合成
+            // 事件）；无 base_url 的本地文件 QuickJS 也支持（base_url 仅影响
+            // 相对 URL 解析）。
             browser_js_runtime::run_scripts_with_post_exprs(
                 tree,
                 base_url.clone(),
                 &engine_kind,
-                clicks,
+                post_exprs,
             )
         } else {
             // 无 base_url 时用 boa 默认路径（QuickJS 需要 base_url 解析 URL）
@@ -1302,7 +1407,7 @@ fn layout_tree_after_js_engine(
 /// M80: pixel 模式截图管线。`width_px` 按 CSS px 解释：先换算布局列数
 /// 喂给布局（折行按格数），再把 px 宽度交给像素光栅化。JS 只执行一次。
 /// 返回 ASCII 纯文本供 stdout（与截图解耦，方便 pipe）。
-/// M81: `clicks` —— post_exprs（--click 合成点击，同 JS 会话）。
+/// M81: `post_exprs` —— --click/--hover 合成事件表达式（同 JS 会话）。
 #[allow(clippy::too_many_arguments)]
 fn render_pixel_screenshot(
     html: &str,
@@ -1312,13 +1417,13 @@ fn render_pixel_screenshot(
     js_engine: &str,
     path: &PathBuf,
     max_height: Option<usize>,
-    clicks: &[String],
+    post_exprs: &[String],
 ) -> Result<String> {
     let cols = browser_render::layout_columns_for_px(width_px);
     let cm = browser_render::pixel::cell_metrics();
     eprintln!("[dbg-cm] cell_metrics=({:.2},{:.2})", cm.0, cm.1);
     let (layout, styles) = layout_tree_after_js_engine(
-        html, cols, run_js, false, base_url, js_engine, true, cm.1, clicks,
+        html, cols, run_js, false, base_url, js_engine, true, cm.1, post_exprs,
     )?;
     let (w, h, rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
     screenshot::render_rgba_to_png(&rgba, w, h, path, max_height)

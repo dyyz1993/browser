@@ -2286,6 +2286,19 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 定位成本已高（CDP 会话在 navigate 后断开、线上页无法注入探针），
   记录边界。本项目 CLI --click 的工作流不受影响。
 
+**M81.2 —— 批 82（定时）A2 hover 事件族（路线图 3/48）**：
+
+- **事件序列**（浏览器标准顺序）：mouseover(bubbles) → mouseenter(不冒泡)
+  → mousemove(bubbles)；双 hover 配对（#a→#b）先对旧元素派 mouseout→
+  mouseleave（旧目标存 nodeId 数字，__makeElement 重包装，GC 安全）。
+- **--hover <selector>**（可多次）：与 --click 同构（post_exprs 通道、
+  CSS/text= 双形式、同会话 eval、500ms 事件循环泵）。参数管线更名
+  post_exprs（click/hover 合并通道）。
+- **elementFromPoint/elementsFromPoint 补齐**：矩形含点测试，无命中退回
+  body（hover 命中测试依赖）。
+- 实证：MENU-OPENED / 异步子菜单 / 标准顺序断言 / 双 hover 配对 /
+  text= 形式 / render-url 全命中。885 tests 全绿（+6 hover 集成）。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

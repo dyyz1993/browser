@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head><title>Hover Target</title></head>
+<body>
+  <div id="nav" class="has-sub"
+       onmouseenter="document.getElementById('pair').textContent+=',nav-enter'"
+       onmouseleave="document.getElementById('pair').textContent+=',nav-leave'">Products
+    <ul id="sub" style="display:none"><li>Item A</li><li>Item B</li></ul>
+  </div>
+  <div id="alt" onmouseenter="document.getElementById('pair').textContent+=',alt-enter'">Alt</div>
+  <div id="panel">empty</div>
+  <div id="order">-</div>
+  <div id="pair">-</div>
+  <div id="efp">-</div>
+  <script>
+    var log = [];
+    var nav = document.getElementById('nav');
+    nav.addEventListener('mouseover', function () { log.push('mouseover'); });
+    nav.addEventListener('mouseenter', function () { log.push('mouseenter'); });
+    nav.addEventListener('mousemove', function () { log.push('mousemove'); });
+    nav.addEventListener('mouseenter', function () {
+      setTimeout(function () {
+        document.getElementById('sub').style.display = 'block';
+        document.getElementById('panel').textContent = 'SUBMENU-LOADED';
+        document.getElementById('order').textContent = log.join('>');
+      }, 30);
+    });
+    try {
+      var el = document.elementFromPoint(10, 10);
+      document.getElementById('efp').textContent = (el && el.tagName) ? 'EFP=' + el.tagName : 'EFP=null';
+    } catch (e) {
+      document.getElementById('efp').textContent = 'EFP-THREW';
+    }
+  </script>
+</body>
+</html>

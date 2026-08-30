@@ -2078,8 +2078,9 @@ fn run_scripts_quickjs(
 /// 需要时间完成；上限防挂死（对齐主循环 EL_TICK/IDLE 语义，窗口更短）。
 const CLICK_PUMP_MAX_MS: u64 = 500;
 
-/// M81: 在同一 QuickJS 会话内按序 eval 点击表达式，每次后泵一轮事件循环。
-/// 表达式约定返回数字：`-1` = 未命中（选择器没匹配到元素）；否则目标 nodeId。
+/// M81: 在同一 QuickJS 会话内按序 eval 点击/悬停表达式，每次后泵一轮事件
+/// 循环。表达式约定返回数字：`-1` = 未命中（选择器没匹配到元素）；否则
+/// 目标 nodeId。
 #[cfg(feature = "quickjs")]
 fn run_post_exprs_quickjs(
     engine: &mut crate::engine_quickjs::QuickJsEngine,
@@ -2087,9 +2088,9 @@ fn run_post_exprs_quickjs(
 ) {
     for (idx, expr) in post_exprs.iter().enumerate() {
         match engine.eval_i32(expr) {
-            Some(-1) => eprintln!("[click] #{idx} no element matched"),
-            Some(id) => eprintln!("[click] #{idx} dispatched on node {id}"),
-            None => eprintln!("[click] #{idx} eval failed (see [js] errors above)"),
+            Some(-1) => eprintln!("[synthetic] #{idx} no element matched"),
+            Some(id) => eprintln!("[synthetic] #{idx} dispatched on node {id}"),
+            None => eprintln!("[synthetic] #{idx} eval failed (see [js] errors above)"),
         }
         pump_after_click_quickjs(engine, CLICK_PUMP_MAX_MS);
     }
@@ -6251,6 +6252,39 @@ document.getElementsByTagName = function(tag) {
 document.getElementsByClassName = function(cls) {
     return document.querySelectorAll('.' + cls);
 };
+// M81: elementFromPoint/elementsFromPoint——合成 hover 的命中测试配套。
+// 本引擎 JS 会话内没有布局树（getBoundingClientRect 是零桩），真实命中
+// 测试做不了；近似：矩形含点测试（rect 未来升级为真实值后自动变准），
+// 零面积矩形（桩值）视为"无命中数据"跳过；无命中退回 body/
+// documentElement——调用方（菜单/工具提示逻辑）通常只要求返回非 null
+// 以继续执行。
+function __rectHasPoint(r, x, y) {
+    if (!r) return false;
+    var w = (r.right || 0) - (r.left || 0), h = (r.bottom || 0) - (r.top || 0);
+    if (w <= 0 || h <= 0) return false;
+    return x >= (r.left || 0) && x <= (r.right || 0) && y >= (r.top || 0) && y <= (r.bottom || 0);
+}
+document.elementsFromPoint = function(x, y) {
+    x = +x || 0; y = +y || 0;
+    var hits = [];
+    try {
+        var els = document.querySelectorAll('*') || [];
+        for (var i = 0; i < els.length; i++) {
+            var r = null;
+            try { r = els[i].getBoundingClientRect(); } catch (re) { r = null; }
+            if (__rectHasPoint(r, x, y)) hits.push(els[i]);
+        }
+    } catch (qe) {}
+    if (hits.length === 0) {
+        var fb = document.body || document.documentElement;
+        if (fb) hits.push(fb);
+    }
+    return hits;
+};
+document.elementFromPoint = function(x, y) {
+    var hits = document.elementsFromPoint(x, y);
+    return hits.length ? hits[hits.length - 1] : null;
+};
 // M78.42: live HTMLCollection——named property 语义（WebIDL legacy platform
 // object）。Proxy set 返回 false 精确复刻赋值语义：sloppy 静默 / strict
 // TypeError；named 未命中时创建 own 属性（后续 get 优先 own）。
@@ -7807,11 +7841,11 @@ pub fn run_scripts_with_base_engine(
     run_scripts_with_post_exprs(tree, base_url, engine_kind, &[])
 }
 
-/// M81: [`run_scripts_with_base_engine`] 的 `--click` 扩展版——页面脚本 +
-/// 事件循环跑完后，在**同一引擎会话**内按序 eval `post_exprs`（合成点击）。
-/// addEventListener 监听器注册在会话内 `__elCache` 缓存的元素包装上，
-/// 引擎 drop 即失效——点击必须留在本会话，不能事后开新引擎补 eval。
-/// 当前仅 QuickJS 实现；boa 引擎忽略（告警）。
+/// M81: [`run_scripts_with_base_engine`] 的 `--click`/`--hover` 扩展版——
+/// 页面脚本 + 事件循环跑完后，在**同一引擎会话**内按序 eval `post_exprs`
+/// （合成点击/悬停）。addEventListener 监听器注册在会话内 `__elCache`
+/// 缓存的元素包装上，引擎 drop 即失效——合成事件必须留在本会话，不能
+/// 事后开新引擎补 eval。当前仅 QuickJS 实现；boa 引擎忽略（告警）。
 #[must_use]
 pub fn run_scripts_with_post_exprs(
     tree: Tree,
@@ -7861,7 +7895,9 @@ pub fn run_scripts_with_post_exprs(
     #[cfg(feature = "boa")]
     {
         if !post_exprs.is_empty() {
-            eprintln!("[js-runtime] --click post evals not supported on boa engine; ignored");
+            eprintln!(
+                "[js-runtime] --click/--hover post evals not supported on boa engine; ignored"
+            );
         }
         #[allow(clippy::needless_return)]
         return run_scripts_with_base_boa(shared, base_url, engine, engine_name);
