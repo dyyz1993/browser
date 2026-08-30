@@ -5541,8 +5541,26 @@ Object.defineProperty(Element.prototype, 'offsetHeight', {
 // （不派发 textInput）。insertText 无光标语义，值写入 value（表单）或
 // 追加文本子节点（contenteditable）。
 window.__activeEl = null;
-Element.prototype.focus = function() { window.__activeEl = this; };
-Element.prototype.blur = function() { if (window.__activeEl === this) window.__activeEl = null; };
+// M81.4: focus/blur 派发真实事件——旧版只改 __activeEl 不派发事件
+//（WPT focus 事件系列 + 框架的 focus 监听依赖）。同步派发 focusin/focusout
+//（冒泡版，delegated 监听依赖）。相关事件类型用 FocusEvent。
+Element.prototype.focus = function() {
+    var prev = window.__activeEl;
+    if (prev === this) return;
+    if (prev && typeof prev.dispatchEvent === 'function') {
+        try { prev.dispatchEvent(new FocusEvent('blur', { bubbles: false })); } catch (e) {}
+        try { prev.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); } catch (e) {}
+    }
+    window.__activeEl = this;
+    try { this.dispatchEvent(new FocusEvent('focus', { bubbles: false })); } catch (e) {}
+    try { this.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); } catch (e) {}
+};
+Element.prototype.blur = function() {
+    if (window.__activeEl !== this) return;
+    try { this.dispatchEvent(new FocusEvent('blur', { bubbles: false })); } catch (e) {}
+    try { this.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); } catch (e) {}
+    window.__activeEl = null;
+};
 Object.defineProperty(document, 'activeElement', {
     get: function() { return window.__activeEl || document.body || null; },
     enumerable: true, configurable: true

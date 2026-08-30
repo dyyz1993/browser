@@ -89,6 +89,10 @@ enum Cmd {
         /// hover 后泵事件循环（展开菜单的异步内容需要 drain）。
         #[arg(long = "hover")]
         hovers: Vec<String>,
+        /// M81.4: 合成聚焦（可多次）。focus → focusin（冒泡），
+        /// 前一焦点元素派 blur → focusout。
+        #[arg(long = "focus")]
+        focuses: Vec<String>,
     },
     /// Parse, execute <script> tags, then render. JS can mutate the
     /// DOM via __setBody / __appendBody / __setTitle / __log.
@@ -112,6 +116,9 @@ enum Cmd {
         /// M81: 合成悬停（可多次）。含义同 render-file --hover。
         #[arg(long = "hover")]
         hovers: Vec<String>,
+        /// M81.4: 合成聚焦（可多次）。
+        #[arg(long = "focus")]
+        focuses: Vec<String>,
         /// M18.2: after rendering, assert network is idle.
         #[arg(long)]
         assert_network_idle: bool,
@@ -156,6 +163,9 @@ enum Cmd {
         /// 仅 QuickJS 引擎生效。
         #[arg(long = "hover")]
         hovers: Vec<String>,
+        /// M81.4: 合成聚焦（可多次）。
+        #[arg(long = "focus")]
+        focuses: Vec<String>,
     },
     /// M59: Fetch a URL, render it (SPA-aware), then extract structured content.
     /// Acts as a curl-like scraper for SPA pages. Output format is controlled
@@ -395,6 +405,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             render_mode,
             clicks,
             hovers,
+            focuses,
         } => {
             let html = std::fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
@@ -402,6 +413,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let post_exprs = click_post_exprs(&clicks)
                 .into_iter()
                 .chain(hover_post_exprs(&hovers))
+                .chain(focus_post_exprs(&focuses))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释，单次 JS，stdout 仍输出
             // ASCII 便于 pipe。无 --screenshot 时 pixel 无意义，退回 ASCII。
@@ -455,6 +467,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             render_mode,
             clicks,
             hovers,
+            focuses,
             assert_network_idle,
         } => {
             let html = std::fs::read_to_string(&file)
@@ -463,6 +476,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let post_exprs = click_post_exprs(&clicks)
                 .into_iter()
                 .chain(hover_post_exprs(&hovers))
+                .chain(focus_post_exprs(&focuses))
                 .collect::<Vec<_>>();
             // M80: pixel 模式（含义同 render-file；网络空闲断言两条路都跑）。
             if render_mode == "pixel" {
@@ -530,6 +544,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             js_engine,
             clicks,
             hovers,
+            focuses,
         } => {
             ensure_cookie_jar();
             let html = fetch_with_jar(&url).await?;
@@ -538,6 +553,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             let post_exprs = click_post_exprs(&clicks)
                 .into_iter()
                 .chain(hover_post_exprs(&hovers))
+                .chain(focus_post_exprs(&focuses))
                 .collect::<Vec<_>>();
             // M80: pixel 模式——width 按 CSS px 解释；走进程内渲染
             // （沙箱子进程只回传文本、没有布局树，无法做像素光栅化）。
@@ -1275,6 +1291,34 @@ fn click_post_exprs(selectors: &[String]) -> Vec<String> {
 /// `__makeElement` 重包装——QuickJS GC 安全（禁止全局变量存 JS 对象引用）。
 /// 返回数字约定同 [`click_post_exprs`]：`-1` = 未命中；否则目标 nodeId。
 /// 选择器形式同 [`click_post_exprs`]（CSS 选择器 / `text=xxx`）。
+/// M81.4: focus 合成表达式——同 hover 模式，事件为 focus→focusin（冒泡），
+/// 前一焦点元素派 blur→focusout（利用 Element.prototype.focus 内建逻辑）。
+fn focus_post_exprs(selectors: &[String]) -> Vec<String> {
+    selectors
+        .iter()
+        .map(|sel| {
+            let find = if let Some(text) = sel.strip_prefix("text=") {
+                let esc = text.replace('\\', "\\\\").replace('\'', "\\'");
+                format!(
+                    "var els=document.querySelectorAll('*');\
+                     for(var i=0;i<els.length;i++){{\
+                     var t=(els[i].textContent||'').trim();\
+                     if(t.length>0&&t.indexOf('{esc}')>=0&&t.length<bl){{el=els[i];bl=t.length;}}}}"
+                )
+            } else {
+                let esc = sel.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("try{{el=document.querySelector('{esc}');}}catch(e){{return -1;}}")
+            };
+            format!(
+                "(function(){{var el=null,bl=Infinity;{find}\
+                 if(!el||typeof el.__nodeId!=='number'){{return -1;}}\
+                 if(typeof el.focus==='function'){{el.focus();return el.__nodeId;}}\
+                 return -1;}})()"
+            )
+        })
+        .collect()
+}
+
 fn hover_post_exprs(selectors: &[String]) -> Vec<String> {
     selectors
         .iter()

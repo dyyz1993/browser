@@ -2299,6 +2299,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 实证：MENU-OPENED / 异步子菜单 / 标准顺序断言 / 双 hover 配对 /
   text= 形式 / render-url 全命中。885 tests 全绿（+6 hover 集成）。
 
+**M81.4 —— 批 83（定时）A3 focus/blur 事件（路线图 4/48）**：
+
+- **Element.prototype.focus/blur 升级**：旧版只改 __activeEl 不派发
+  事件——现派发完整事件族：focus（不冒泡）+ focusin（冒泡）；
+  blur + focusout；前一焦点元素自动 blur/focusout。
+- **--focus <selector>**（可多次）：与 --click/--hover 同构
+  （focus_post_exprs → el.focus() 内建逻辑，CSS/text= 双形式）。
+- 实证：FOCUSED-OK（onfocus 属性触发）。885 tests 全绿 + REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
