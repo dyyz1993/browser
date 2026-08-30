@@ -2466,6 +2466,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
   `(min-width:2000px)` 不命中（缩进 0 ✓）。
 - 973 tests 全绿（+19）+ REALITY PASS。
 
+**M81.13 —— 批 100 milestone：全量 VERDICT PASS 0.922（历史新高）**：
+
+- storage 上行至 **264/330 (0.800)**——此前批次修复的连锁效应持续兑现
+  （event 族/scrollTop/lifecycle events/焦点桥）。
+- 五类：js 0.966 / html 0.891 / css 1.000 / webapi 0.943 / storage 0.800。
+  spa_task 1.000。**VERDICT PASS**。
+- M80 收官基线 0.9162 → **0.922**（+0.006，storage 贡献）。
+- **M80 全程**：0.3334 → 0.922（**+176%**）。932 tests 全绿。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"
