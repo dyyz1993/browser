@@ -9,6 +9,9 @@
 //! - `DOM.getOuterHTML` — serialize a node (by nodeId) to HTML string.
 //! - `DOM.querySelector` — find first element matching a simple selector.
 //! - `DOM.querySelectorAll` — find all matching elements (returns nodeIds).
+//! - M81(B5): `DOM.getBoxModel` — nodeId → 布局树盒子的 CSS px 四角 quad
+//!   （content/padding/border/margin + width/height）。无布局盒返回错误
+//!   （CDP 标准行为）。
 //!
 //! ## Selector support (M46 subset)
 //!
@@ -322,6 +325,85 @@ fn query_all(tree: &Tree, root: NodeId, selector: &str) -> Vec<NodeId> {
     result
 }
 
+/// M81(B5): CDP nodeId → 内部 NodeId —— [`get_cdp_node_id`] 的 1-based
+/// 先序编号的逆映射（getDocument 也用同一编号），供 getBoxModel 等按
+/// nodeId 定位 DOM 节点的方法复用。
+pub fn internal_node_id_for_cdp(tree: &Tree, cdp_id: u32) -> Option<NodeId> {
+    fn walk(tree: &Tree, node: NodeId, target: u32, counter: &mut u32) -> Option<NodeId> {
+        if *counter == target {
+            return Some(node);
+        }
+        *counter += 1;
+        for &child in tree.children_of(node) {
+            if let Some(found) = walk(tree, child, target, counter) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    // CDP nodeId 从 1 开始（0 是 "not found" 哨兵，无节点对应）。
+    if cdp_id == 0 {
+        return None;
+    }
+    walk(tree, tree.root(), cdp_id, &mut 1)
+}
+
+/// M81(B5): 先序遍历布局树，找第一个 `element_id == element` 的盒子。
+/// 元素通常对应一个盒（Anonymous 盒 `element_id` 为 None 自动跳过）。
+fn find_layout_box(
+    root: &browser_layout::LayoutBox,
+    element: NodeId,
+) -> Option<&browser_layout::LayoutBox> {
+    if root.element_id == Some(element) {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(found) = find_layout_box(child, element) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// M81(B5): f32 格单位 → 保留 2 位小数的 f64（JSON 数字稳定，避免
+/// 浮点噪声：8.523809523809524 → 8.52）。
+fn r2(v: f32) -> f64 {
+    (f64::from(v) * 100.0).round() / 100.0
+}
+
+/// M81(B5): 用布局盒构造 CDP `BoxModel`（坐标换算 CSS px，与
+/// `Input.dispatchMouseEvent`/pixel 渲染同一映射 `cell_metrics`）。
+///
+/// quad 为四角坐标（顺时针：左上→右上→右下→左下），各 8 个数。
+/// 简化：本布局模型的内容区即盒子 dimensions（margin/padding 折算在
+/// 流式布局里），四个 quad 相同；`width`/`height` 为内容区 px 尺寸。
+fn box_model_json(bx: &browser_layout::LayoutBox) -> Json {
+    let (cell_w, cell_h) = browser_render::cell_metrics();
+    let d = &bx.dimensions;
+    let (x, y) = (d.x * cell_w, d.y * cell_h);
+    let (w, h) = (d.width * cell_w, d.height * cell_h);
+    let quad = Json::Array(vec![
+        Json::Number(r2(x)),
+        Json::Number(r2(y)),
+        Json::Number(r2(x + w)),
+        Json::Number(r2(y)),
+        Json::Number(r2(x + w)),
+        Json::Number(r2(y + h)),
+        Json::Number(r2(x)),
+        Json::Number(r2(y + h)),
+    ]);
+    let mut model = BTreeMap::new();
+    model.insert("content".to_string(), quad.clone());
+    model.insert("padding".to_string(), quad.clone());
+    model.insert("border".to_string(), quad.clone());
+    model.insert("margin".to_string(), quad);
+    model.insert("width".to_string(), Json::Number(r2(w)));
+    model.insert("height".to_string(), Json::Number(r2(h)));
+    let mut result = BTreeMap::new();
+    result.insert("model".to_string(), Json::Object(model));
+    Json::Object(result)
+}
+
 /// Dispatch a `DOM.*` CDP method.
 pub fn dispatch(
     id: i64,
@@ -391,6 +473,24 @@ pub fn dispatch(
             result.insert("nodeIds".to_string(), Json::Array(ids));
             Ok(CdpMessage::ok_response(id, Json::Object(result)))
         }
+        // M81(B5): DOM.getBoxModel — nodeId（或 backendNodeId）→ 布局盒的
+        // CSS px 四角 quad。无布局（未 navigate/未渲染）或该节点没有对应
+        // 布局盒（文本节点、display:none、越界 id）→ CDP 错误（Chrome
+        // 返回 "Could not compute box model for given node"）。
+        "DOM.getBoxModel" => {
+            let cdp_id = params
+                .and_then(|p| p.get_id("nodeId").or_else(|| p.get_id("backendNodeId")))
+                .ok_or_else(|| {
+                    CdpError::InvalidJson("missing nodeId or backendNodeId".to_string())
+                })?;
+            let no_box =
+                || CdpError::NotFound("Could not compute box model for given node".to_string());
+            let node = internal_node_id_for_cdp(&state.tree, u32::try_from(cdp_id).unwrap_or(0))
+                .ok_or_else(no_box)?;
+            let layout = state.layout.as_ref().ok_or_else(no_box)?;
+            let bx = find_layout_box(&layout.root, node).ok_or_else(no_box)?;
+            Ok(CdpMessage::ok_response(id, box_model_json(bx)))
+        }
         // M53: unknown methods → no-op ack (puppeteer sends many enable/disable)
         _ => Ok(CdpMessage::ok_empty(id)),
     }
@@ -404,6 +504,15 @@ mod tests {
         let mut st = PageState::default();
         st.render(html, "test://x", 80);
         st
+    }
+
+    /// 测试辅助：从 CDP 响应 `{"id":..,"result":{"nodeId":N}}` 里取 nodeId。
+    fn response_node_id(resp: &str) -> i64 {
+        crate::jsonrpc::parse_json(resp)
+            .unwrap()
+            .get("result")
+            .and_then(|r| r.get_id("nodeId"))
+            .unwrap_or(0)
     }
 
     #[test]
@@ -531,5 +640,133 @@ mod tests {
         // M53: unknown methods return no-op ack
         let resp = dispatch(1, "DOM.fakeMethod", None, &st).unwrap();
         assert!(resp.contains(r#""result":{}"#), "got: {resp}");
+    }
+
+    // ── M81(B5): DOM.getBoxModel ──
+
+    #[test]
+    fn internal_node_id_roundtrips_with_get_cdp_node_id() {
+        let st =
+            make_state("<html><body><p>one</p><div id=\"m\"><span>two</span></div></body></html>");
+        // 对每个元素节点：内部 id → CDP id → 内部 id 应闭合。
+        let mut stack = vec![st.tree.root()];
+        let mut checked = 0;
+        while let Some(id) = stack.pop() {
+            if matches!(st.tree.data(id), NodeData::Element { .. }) {
+                let cdp = get_cdp_node_id(&st.tree, id).expect("element gets a cdp id");
+                assert_eq!(
+                    internal_node_id_for_cdp(&st.tree, cdp),
+                    Some(id),
+                    "roundtrip failed for cdp id {cdp}"
+                );
+                checked += 1;
+            }
+            for &c in st.tree.children_of(id) {
+                stack.push(c);
+            }
+        }
+        assert!(checked >= 4, "should check several elements, got {checked}");
+        // 0 与越界 id 无对应节点。
+        assert_eq!(internal_node_id_for_cdp(&st.tree, 0), None);
+        assert_eq!(internal_node_id_for_cdp(&st.tree, 9999), None);
+    }
+
+    #[test]
+    fn find_layout_box_matches_element_and_skips_anonymous() {
+        let st = make_state("<html><body><p>FindMe</p></body></html>");
+        let p = query_first(&st.tree, st.tree.root(), "p").expect("p exists");
+        let layout = st.layout.as_ref().expect("rendered page has layout");
+        let bx = find_layout_box(&layout.root, p).expect("p has a layout box");
+        assert_eq!(bx.element_id, Some(p));
+        assert!(bx.dimensions.width > 0.0, "box must be laid out");
+    }
+
+    #[test]
+    fn dispatch_get_box_model_returns_quad_in_px() {
+        let st = make_state("<html><body><p>BoxMe</p></body></html>");
+        // 用 querySelector 拿 body 的 CDP nodeId（真实客户端流程）。
+        let mut sel = BTreeMap::new();
+        sel.insert("selector".to_string(), Json::String("body".to_string()));
+        let resp = dispatch(1, "DOM.querySelector", Some(&Json::Object(sel)), &st).unwrap();
+        let node_id = response_node_id(&resp);
+        assert!(node_id > 0, "querySelector must return a nodeId: {resp}");
+
+        let mut params = BTreeMap::new();
+        params.insert("nodeId".to_string(), Json::Number(node_id as f64));
+        let resp = dispatch(2, "DOM.getBoxModel", Some(&Json::Object(params)), &st).unwrap();
+        // 形状：result.model.content = [8 个数]，width/height > 0。
+        assert!(resp.contains("\"model\""), "got: {resp}");
+        assert!(
+            resp.contains("\"content\":[")
+                && resp.contains("\"border\":[")
+                && resp.contains("\"padding\":[")
+                && resp.contains("\"margin\":["),
+            "got: {resp}"
+        );
+        // 坐标必须是 CSS px（x = 格单位 × cell_w），且 body 盒从 (0,0) 起。
+        let (cw, lh) = browser_render::cell_metrics();
+        let layout = st.layout.as_ref().unwrap();
+        let body = query_first(&st.tree, st.tree.root(), "body").unwrap();
+        let bx = find_layout_box(&layout.root, body).unwrap();
+        let expect_x = (bx.dimensions.x * cw * 100.0).round() / 100.0;
+        let expect_y = (bx.dimensions.y * lh * 100.0).round() / 100.0;
+        let expect_w = (bx.dimensions.width * cw * 100.0).round() / 100.0;
+        let expect_h = (bx.dimensions.height * lh * 100.0).round() / 100.0;
+        let frag = format!(
+            "\"content\":[{expect_x},{expect_y},{},{},{},{},{},{}]",
+            r2(bx.dimensions.x * cw + bx.dimensions.width * cw),
+            expect_y,
+            r2(bx.dimensions.x * cw + bx.dimensions.width * cw),
+            r2(bx.dimensions.y * lh + bx.dimensions.height * lh),
+            expect_x,
+            r2(bx.dimensions.y * lh + bx.dimensions.height * lh),
+        );
+        assert!(resp.contains(&frag), "expected {frag} in: {resp}");
+        assert!(
+            resp.contains(&format!("\"width\":{expect_w}"))
+                && resp.contains(&format!("\"height\":{expect_h}")),
+            "got: {resp}"
+        );
+    }
+
+    #[test]
+    fn dispatch_get_box_model_backend_node_id_alias() {
+        // backendNodeId 与 nodeId 同义（单树模型无独立 backend store）。
+        let st = make_state("<html><body><p>hi</p></body></html>");
+        let mut sel = BTreeMap::new();
+        sel.insert("selector".to_string(), Json::String("body".to_string()));
+        let resp = dispatch(1, "DOM.querySelector", Some(&Json::Object(sel)), &st).unwrap();
+        let node_id = response_node_id(&resp);
+        let mut params = BTreeMap::new();
+        params.insert("backendNodeId".to_string(), Json::Number(node_id as f64));
+        let resp = dispatch(2, "DOM.getBoxModel", Some(&Json::Object(params)), &st).unwrap();
+        assert!(resp.contains("\"model\""), "got: {resp}");
+    }
+
+    #[test]
+    fn dispatch_get_box_model_errors_without_layout_or_node() {
+        // ① 越界 nodeId（有布局也查不到盒）→ NotFound。
+        let st = make_state("<html><body><p>x</p></body></html>");
+        let mut params = BTreeMap::new();
+        params.insert("nodeId".to_string(), Json::Number(9999.0));
+        let err = dispatch(1, "DOM.getBoxModel", Some(&Json::Object(params)), &st).unwrap_err();
+        assert!(
+            err.to_string().contains("Could not compute box model"),
+            "got: {err}"
+        );
+        // ② 未渲染（layout=None）：构造只 parse 不 layout 的状态。
+        let mut st2 = PageState::default();
+        st2.parse_only("<html><body><p>x</p></body></html>", "t://x", 80);
+        let mut params = BTreeMap::new();
+        params.insert("nodeId".to_string(), Json::Number(2.0));
+        let err = dispatch(1, "DOM.getBoxModel", Some(&Json::Object(params)), &st2).unwrap_err();
+        assert!(
+            err.to_string().contains("Could not compute box model"),
+            "got: {err}"
+        );
+        // ③ 缺 nodeId 参数 → InvalidJson。
+        let st3 = make_state("<html><body><p>x</p></body></html>");
+        let err = dispatch(1, "DOM.getBoxModel", None, &st3).unwrap_err();
+        assert!(err.to_string().contains("missing nodeId"), "got: {err}");
     }
 }

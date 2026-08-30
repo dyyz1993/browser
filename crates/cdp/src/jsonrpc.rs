@@ -127,6 +127,12 @@ pub enum CdpError {
     Handshake(String),
     #[error("method not found: {0}")]
     MethodNotFound(String),
+    /// M81(B5/B6): 目标资源不存在（DOM.getBoxModel 无布局盒 /
+    /// Network.getResponseBody 未知 requestId）。server 映射为 -32000，
+    /// 对齐 Chrome 的 "No resource with given identifier found" /
+    /// "Could not compute box model for given node"。
+    #[error("{0}")]
+    NotFound(String),
 }
 
 /// A parsed CDP request/response/event envelope.

@@ -41,9 +41,9 @@
 - [x] B2. Emulation.setDeviceMetricsOverride（viewport 真生效，跨导航持续，Puppeteer setViewportSize 实测）✓
 - [ ] B3. Page.captureScreenshot 增强（clip 区域截图、fullpage 模式）
 - [x] B4. Runtime.evaluate awaitPromise（Promise 驱动循环 + fetch then 链端到端）✓
-- [ ] B5. DOM.getBoxModel（Puppeteer click 定位依赖）
-- [ ] B6. Network.getResponseBody（爬虫直接拿接口数据）
-- [ ] B7. Page.setLifecycleEventsEnabled 完整事件（load/DFS/loadingFinished 时序）
+- [x] B5. DOM.getBoxModel（content/padding/border/margin 四 quad + 宽高，格→px 换算）✓
+- [x] B6. Network.getResponseBody（requestId 查表 + 主文档兼容 + 未知 id -32000）✓
+- [x] B7. Page.setLifecycleEventsEnabled（init→commit→DOMContentLoaded→load→networkIdle 有序派发）✓
 
 ## C. 渲染保真度（像素模式逼近 Chrome）
 
@@ -103,13 +103,13 @@
 | 阶段 | 总项 | 完成 | 状态 |
 |------|------|------|------|
 | A 交互/输入 | 8 | 8 | ✅ 完成（全交互链路） |
-| B CDP | 7 | 3 | 进行中 |
+| B CDP | 7 | 6 | 进行中（剩 B5 尾斜杠等杂项） |
 | C 渲染 | 7 | 0 | 待开始 |
 | D CSS | 7 | 0 | 待开始 |
 | E JS API | 7 | 0 | 待开始 |
 | F 稳定性 | 3 | 0 | 待开始 |
 | G 验收 | 6 | 1 | 部分完成 |
 | H 长尾 | 3 | 0 | 待开始 |
-| **合计** | **48** | **12** | **25%** |
+| **合计** | **48** | **15** | **31%** |
 
 > 48 项 × 每项 1-2 批 ≈ 50-100 批 ≈ 100 轮目标。每批约 20 分钟（定时驱动）。

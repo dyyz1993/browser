@@ -74,6 +74,17 @@ pub struct PageState {
     /// mousePressed 命中元素时设置；navigate 重建 tree 时清零（NodeId 失效）。
     /// `None` → 键事件派发到 body。
     pub focused_node: Option<NodeId>,
+    /// M81(B7): `Page.setLifecycleEventsEnabled` 的开关。Chrome 语义：
+    /// `Page.lifecycleEvent` 事件只在 enable 后派发；默认 false（Chrome
+    /// 行为——不 enable 就没有 lifecycleEvent）。Puppeteer/Playwright 初始化
+    /// 时都会下发 setLifecycleEventsEnabled(true)，不影响 goto 等待链。
+    pub lifecycle_events_enabled: bool,
+    /// M81(B6): `Network.getResponseBody` 的响应体存储（requestId → 文本体）。
+    /// navigate 填主文档（requestId "1" = `raw_html`），每次 navigate 清空重填。
+    /// JS fetch/XHR 的响应体不在捕获范围（js-runtime `CapturedNetworkEvent`
+    /// 只带 size），这类 requestId 查询返回 CDP NotFound（对齐 Chrome 的
+    /// "No resource with given identifier found"）。
+    pub network_bodies: BTreeMap<String, String>,
 }
 
 /// M70.4: A single cookie for the CDP Network domain. Owned + Send-safe
@@ -106,6 +117,8 @@ impl Default for PageState {
             last_headers: Vec::new(),
             cookies: Vec::new(),
             focused_node: None,
+            lifecycle_events_enabled: false,
+            network_bodies: BTreeMap::new(),
         }
     }
 }
@@ -437,6 +450,7 @@ pub async fn dispatch(
 
             // M68: ① parse HTML 存 tree（不 layout），给 JS 步骤留插入点。
             // M81(B2): 宽度用视口覆盖换算的列数（override 跨导航持续，Chrome 语义）。
+            // M81(B6): 同步重置响应体表并记录主文档（requestId "1"）。
             {
                 let mut st = state
                     .lock()
@@ -444,6 +458,8 @@ pub async fn dispatch(
                 let width = st.effective_width();
                 st.parse_only(&html, url, width);
                 st.raw_html = html.clone();
+                st.network_bodies.clear();
+                st.network_bodies.insert("1".to_string(), html.clone());
             }
 
             // M68: ② spawn_blocking 跑页面 <script>（对齐 CLI run_scripts 管线）。
@@ -485,12 +501,15 @@ pub async fn dispatch(
                 .map_err(|e| CdpError::Io(format!("js task join: {e}")))?;
 
             // M68: ③ JS 后 owned tree 回写 + 重新 layout+render。
+            // M81(B7): 顺带读 lifecycle 开关（锁内取值，锁外用）。
+            let lifecycle_enabled;
             {
                 let mut st = state
                     .lock()
                     .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
                 st.tree = js_tree;
                 st.render_from_tree();
+                lifecycle_enabled = st.lifecycle_events_enabled;
             }
             let mut result = BTreeMap::new();
             result.insert(
@@ -654,48 +673,20 @@ pub async fn dispatch(
                         p
                     }),
                 ),
-                // 2. lifecycleEvent: init — Chrome sends this when a new document starts loading.
-                // Puppeteer uses it to set frame._loaderId. Without this,
-                // newDocumentNavigationPromise never resolves → page.goto() hangs.
-                CdpMessage::event(
-                    "Page.lifecycleEvent",
-                    Json::Object({
-                        let mut p = BTreeMap::new();
-                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
-                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
-                        p.insert("name".to_string(), Json::String("init".to_string()));
-                        p.insert("timestamp".to_string(), Json::Number(0.0));
-                        p
-                    }),
-                ),
-                // 3. lifecycleEvent: DOMContentLoaded — LifecycleWatcher checks this
-                CdpMessage::event(
-                    "Page.lifecycleEvent",
-                    Json::Object({
-                        let mut p = BTreeMap::new();
-                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
-                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
-                        p.insert(
-                            "name".to_string(),
-                            Json::String("DOMContentLoaded".to_string()),
-                        );
-                        p.insert("timestamp".to_string(), Json::Number(0.0));
-                        p
-                    }),
-                ),
-                // 3. lifecycleEvent: load — LifecycleWatcher checks this
-                CdpMessage::event(
-                    "Page.lifecycleEvent",
-                    Json::Object({
-                        let mut p = BTreeMap::new();
-                        p.insert("frameId".to_string(), Json::String(frame_id.clone()));
-                        p.insert("loaderId".to_string(), Json::String("1".to_string()));
-                        p.insert("name".to_string(), Json::String("load".to_string()));
-                        p.insert("timestamp".to_string(), Json::Number(0.0));
-                        p
-                    }),
-                ),
-                // 4. domContentEventFired
+            ];
+            // M81(B7): `Page.lifecycleEvent` 按 Chrome 语义只在
+            // `Page.setLifecycleEventsEnabled(true)` 之后派发（enabled=false
+            // 停止派发）。Chrome 生命周期顺序：init → commit → DOMContentLoaded
+            // → load → networkIdle。Puppeteer（FrameManager.initialize）与
+            // Playwright 初始化都会下发 enable，goto 的 load/DCL 等待链不受影响。
+            if lifecycle_enabled {
+                for name in ["init", "commit", "DOMContentLoaded", "load", "networkIdle"] {
+                    page_events.push(lifecycle_event(&frame_id, name));
+                }
+            }
+            page_events.extend([
+                // domContentEventFired（Chrome 里由 Page.enable 门控；本实现
+                // Page.enable 恒开，故无条件发，保持既有 Puppeteer 兼容）。
                 CdpMessage::event(
                     "Page.domContentEventFired",
                     Json::Object({
@@ -704,7 +695,7 @@ pub async fn dispatch(
                         p
                     }),
                 ),
-                // 5. loadEventFired
+                // loadEventFired
                 CdpMessage::event(
                     "Page.loadEventFired",
                     Json::Object({
@@ -713,7 +704,7 @@ pub async fn dispatch(
                         p
                     }),
                 ),
-                // 6. frameStoppedLoading
+                // frameStoppedLoading
                 CdpMessage::event(
                     "Page.frameStoppedLoading",
                     Json::Object({
@@ -722,7 +713,7 @@ pub async fn dispatch(
                         p
                     }),
                 ),
-            ];
+            ]);
             // M70.4: Network.* 事件先于 Page.* 发出（Chrome 的顺序）。
             let mut events = network_events;
             events.append(&mut page_events);
@@ -811,6 +802,25 @@ pub async fn dispatch(
             result.insert("frameTree".to_string(), Json::Object(frame_tree));
             Ok(DispatchResult {
                 response: CdpMessage::ok_response(id, Json::Object(result)),
+                events: vec![],
+            })
+        }
+        // M81(B7): Page.setLifecycleEventsEnabled — 切换 `Page.lifecycleEvent`
+        // 事件派发开关。存 PageState 标志，navigate 时按它决定是否发
+        // lifecycle 事件（init/commit/DOMContentLoaded/load/networkIdle）。
+        // Chrome 语义：enabled=false 停止派发；params 缺失/非 bool 视为 false。
+        "Page.setLifecycleEventsEnabled" => {
+            let enabled = params
+                .and_then(|p| p.get("enabled"))
+                .is_some_and(|v| matches!(v, Json::Bool(true)));
+            {
+                let mut st = state
+                    .lock()
+                    .map_err(|e| CdpError::Io(format!("lock: {e}")))?;
+                st.lifecycle_events_enabled = enabled;
+            }
+            Ok(DispatchResult {
+                response: CdpMessage::ok_empty(id),
                 events: vec![],
             })
         }
@@ -923,6 +933,22 @@ fn parse_set_cookie(header: &str, request_url: &str) -> Option<NetworkCookie> {
         }
     }
     Some(ck)
+}
+
+/// M81(B7): 构造一条 `Page.lifecycleEvent` 事件（name: init/commit/
+/// DOMContentLoaded/load/networkIdle 等，frameId + loaderId + timestamp 0）。
+fn lifecycle_event(frame_id: &str, name: &str) -> String {
+    CdpMessage::event(
+        "Page.lifecycleEvent",
+        Json::Object({
+            let mut p = BTreeMap::new();
+            p.insert("frameId".to_string(), Json::String(frame_id.to_string()));
+            p.insert("loaderId".to_string(), Json::String("1".to_string()));
+            p.insert("name".to_string(), Json::String(name.to_string()));
+            p.insert("timestamp".to_string(), Json::Number(0.0));
+            p
+        }),
+    )
 }
 
 /// M70.4: Minimal HTTP status text lookup (for Network.responseReceived.statusText).
@@ -1208,5 +1234,108 @@ mod tests {
         assert_eq!(st.width, browser_render::layout_columns_for_px(800));
         assert!(st.rendered_text.contains("late"));
         assert_eq!(st.client_viewport_px().1, 600);
+    }
+
+    // ── M81(B7): Page.setLifecycleEventsEnabled ──
+
+    #[tokio::test]
+    async fn set_lifecycle_events_enabled_toggles_flag() {
+        let state = Arc::new(Mutex::new(PageState::default()));
+        assert!(!state.lock().unwrap().lifecycle_events_enabled);
+
+        // enable → true
+        let mut params = BTreeMap::new();
+        params.insert("enabled".to_string(), Json::Bool(true));
+        let dr = dispatch(
+            7,
+            "Page.setLifecycleEventsEnabled",
+            Some(&Json::Object(params)),
+            state.clone(),
+            EngineKind::QuickJs,
+        )
+        .await
+        .unwrap();
+        assert!(
+            dr.response.contains(r#""result":{}"#),
+            "ack only, got: {}",
+            dr.response
+        );
+        assert!(dr.events.is_empty(), "no events from the toggle itself");
+        assert!(state.lock().unwrap().lifecycle_events_enabled);
+
+        // disable → false
+        let mut params = BTreeMap::new();
+        params.insert("enabled".to_string(), Json::Bool(false));
+        dispatch(
+            8,
+            "Page.setLifecycleEventsEnabled",
+            Some(&Json::Object(params)),
+            state.clone(),
+            EngineKind::QuickJs,
+        )
+        .await
+        .unwrap();
+        assert!(!state.lock().unwrap().lifecycle_events_enabled);
+    }
+
+    #[tokio::test]
+    async fn set_lifecycle_events_enabled_missing_param_defaults_false() {
+        // Chrome 语义：params 缺失/非 bool 视为 false（不派发）。
+        let state = Arc::new(Mutex::new(PageState::default()));
+        dispatch(
+            1,
+            "Page.setLifecycleEventsEnabled",
+            None,
+            state.clone(),
+            EngineKind::QuickJs,
+        )
+        .await
+        .unwrap();
+        assert!(!state.lock().unwrap().lifecycle_events_enabled);
+
+        // enabled 非布尔（字符串 "true"）不算开启。
+        let mut params = BTreeMap::new();
+        params.insert("enabled".to_string(), Json::String("true".to_string()));
+        dispatch(
+            2,
+            "Page.setLifecycleEventsEnabled",
+            Some(&Json::Object(params)),
+            state.clone(),
+            EngineKind::QuickJs,
+        )
+        .await
+        .unwrap();
+        assert!(!state.lock().unwrap().lifecycle_events_enabled);
+    }
+
+    #[test]
+    fn lifecycle_event_json_shape() {
+        let ev = lifecycle_event("frame-1", "networkIdle");
+        assert!(
+            ev.contains(r#""method":"Page.lifecycleEvent""#),
+            "got: {ev}"
+        );
+        assert!(ev.contains(r#""name":"networkIdle""#), "got: {ev}");
+        assert!(ev.contains(r#""frameId":"frame-1""#), "got: {ev}");
+        assert!(ev.contains(r#""loaderId":"1""#), "got: {ev}");
+        assert!(ev.contains(r#""timestamp":0"#), "got: {ev}");
+    }
+
+    #[test]
+    fn network_bodies_default_empty_and_reset_between_navigates() {
+        // B6: 默认空表；navigate 的填充逻辑在 dispatch（需网络），这里固化
+        // "1" 主文档约定 + Default 无残留。
+        let st = PageState::default();
+        assert!(st.network_bodies.is_empty());
+        assert!(!st.lifecycle_events_enabled);
+        let mut st2 = PageState::default();
+        st2.network_bodies
+            .insert("1".to_string(), "<html>old</html>".to_string());
+        // parse_only 不清表（navigate 的 dispatch 块里显式 clear+insert）。
+        st2.parse_only("<html>new</html>", "test://n2", 80);
+        assert_eq!(
+            st2.network_bodies.get("1").map(String::as_str),
+            Some("<html>old</html>")
+        );
     }
 }

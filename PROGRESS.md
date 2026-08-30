@@ -2397,6 +2397,19 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 实证：vuejs.org 外部故障（curl 000，站方故障非回归，批 68 同款已证
   恢复模式）；其余站正常。919 tests 全绿（+17 B2 遗留入库）。
 
+**M81.B5/B6/B7 —— 批 92（定时）B 阶段收官（路线图 15/48）**：
+
+- **B5 DOM.getBoxModel**：layout 树按 element_id 匹配 LayoutBox，格→px
+  换算（cell_metrics 同映射），四 quad（content/padding/border/margin）
+  + 宽高；无布局/越界 → -32000（Chrome 文案）。
+- **B6 Network.getResponseBody**：PageState.network_bodies（requestId 查
+  表），navigate 清空重填主文档；未知 id -32000。已知边界：JS fetch/XHR
+  响应体不在捕获范围（CapturedNetworkEvent 只有 body_size）。
+- **B7 Page.setLifecycleEventsEnabled**：enabled 时按 Chrome 顺序发
+  init→commit→DOMContentLoaded→load→networkIdle；默认关不影响
+  Puppeteer FrameManager 流程。
+- 932 tests 全绿（+13）+ REALITY PASS。**B 阶段 CDP 能力收官**。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

@@ -521,11 +521,12 @@ impl CdpSession {
                 }
             }
             // ── M47: Network domain (getResponseBody, enable/disable) ──
+            // M81(B6): getResponseBody 需要 params.requestId 查响应体表。
             m if m.starts_with("Network.") => {
                 let Ok(st) = self.page.lock() else {
                     return Ok(());
                 };
-                match crate::network_domain::dispatch(id, m, &st) {
+                match crate::network_domain::dispatch(id, m, msg.params.as_ref(), &st) {
                     Ok(resp) => (resp, vec![]),
                     Err(crate::jsonrpc::CdpError::MethodNotFound(_)) => (
                         CdpMessage::error_response(id, -32601, "Method not found"),
