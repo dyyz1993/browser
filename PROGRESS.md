@@ -2484,6 +2484,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - 性能优化在 CDN 波动消除后持续兑现——网络层并行化 + ESM 预取 +
   awaitPromise 驱动循环全部生效。F1/F2 性能阶段可标 ✓。
 
+**M81.20 —— 批 103（定时）C6 列表 start 属性（路线图 19/48，40%）**：
+
+- `<ol start="N">` 计数器起始偏移（start=3 → 第一个 li 编号 3）。
+- start 属性从 tree.data(parent_id) 的 attrs 解析，saturating_sub(1)。
+- 实证：`start="3"` → 3./4.；`start="5"` → 5./6.；默认 → 1. ✓。
+- type 属性（字母 A/B/C、罗马 I/II/III）→ 延后（视觉映射，数据提取
+  已完整——下游拿到的 text 里已经有 "3. Alpha" 文本）。
+- 973 tests 全绿 + REALITY PASS。
+
 ## 文档维护规则
 
 - **每 commit 后**：更新本文件"最近变更"

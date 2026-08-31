@@ -656,10 +656,25 @@ fn build_children(
     // each build_children call owns its own counter).
     let is_ol = parent_tag.eq_ignore_ascii_case("ol");
     let mut li_counter = 0usize;
+    // M81.20: <ol start="N"> 属性——计数器起始偏移
+    let ol_start = if is_ol {
+        if let NodeData::Element { attrs, .. } = tree.data(parent_id) {
+            attrs
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("start"))
+                .and_then(|(_, v)| v.parse::<usize>().ok())
+                .unwrap_or(1)
+                .saturating_sub(1) // start=3 → 第一个 li 编号 3
+        } else {
+            0
+        }
+    } else {
+        0
+    };
     let mut list_index_for = |tree: &Tree, child_id: NodeId| -> Option<usize> {
         if is_ol && element_tag(tree, child_id).is_some_and(|t| t.eq_ignore_ascii_case("li")) {
             li_counter += 1;
-            Some(li_counter)
+            Some(li_counter + ol_start)
         } else {
             None
         }

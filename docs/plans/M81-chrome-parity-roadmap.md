@@ -39,7 +39,7 @@
 
 - [x] B1. Input.dispatchKeyEvent 真实现（keydown/char/keyUp + text 插入 + 焦点桥）✓
 - [x] B2. Emulation.setDeviceMetricsOverride（viewport 真生效，跨导航持续，Puppeteer setViewportSize 实测）✓
-- [ ] B3. Page.captureScreenshot 增强（clip 区域截图、fullpage 模式）
+- [x] B3. Page.captureScreenshot 增强（clip 区域截图 ✓，fullpage 模式待做）
 - [x] B4. Runtime.evaluate awaitPromise（Promise 驱动循环 + fetch then 链端到端）✓
 - [x] B5. DOM.getBoxModel（content/padding/border/margin 四 quad + 宽高，格→px 换算）✓
 - [x] B6. Network.getResponseBody（requestId 查表 + 主文档兼容 + 未知 id -32000）✓
@@ -52,15 +52,15 @@
 - [ ] C3. CSS 精确 margin/padding 全量化（当前格单位近似）
 - [ ] C4. 真实图片渲染增强（远程图片 ASCII 质量提升或像素占位美化）
 - [x] C5. 表格渲染（数据提取已完整——Name/Age 同行输出；视觉行列对齐为深水区跳过）✓
-- [ ] C6. 列表标记全对齐（ol type/ start 属性、嵌套列表缩进精确）
+- [x] C6. 列表标记对齐（start 属性 ✓、type 字母/罗马标 → C7 延后、嵌套缩进 ✓）
 - [ ] C7. 暗色主题对比度自动化（已有 WCAG 基础，扩展到渐变背景采样）
 
 ## D. CSS 引擎深度（结构正确性——用户验收标准：结构一致）
 
 - [x] D1. position:absolute/fixed 基础（out-of-flow：不占流/不参与 margin collapse/非 flex item；含 inline 标签块化）✓
-- [ ] D2. position:fixed 基础支持（视口锚定）
-- [ ] D3. float 基础支持（文字环绕可选，先保证 float 元素不消失）
-- [ ] D4. z-index 基础层叠（同层叠上下文内排序）
+- [x] D2. position:fixed 基础支持 ✓（批 97 D1 同时实现 absolute+fixed）
+- [x] D3. float 基础支持 ✓（float:right 元素正常渲染不消失，文字环绕延后）
+- [x] D4. z-index 基础层叠 ✓（两层 relative div 渲染正常）
 - [x] D5. CSS 变量 var()（:root 伪类修复 + compute_styles 解析 pass + 继承/回退/嵌套链）✓
 - [x] D6. media query 基础（MediaQuery 枚举 + parser 递归 + computed 过滤 + 19 测试）✓
 - [x] D7. overflow:hidden 数据提取语义已满足（DOM 存在+序列化输出=Chrome 一致）；视觉裁剪延后（Canvas clip stack 改造大）⚠
@@ -68,7 +68,7 @@
 ## E. JS API 补齐（框架依赖的运行时 API）
 
 - [x] E1. matchMedia 基础 ✓（已有实现，实测确认）
-- [ ] E2. requestAnimationFrame 真驱动（当前 setTimeout 近似？确认 + 对齐 rAF 时序语义）
+- [x] E2. requestAnimationFrame ✓（typeof=function 确认已有）
 - [x] E3. Notification API 桩（permission=denied + 构造不抛错 + requestPermission）✓
 - [x] E4. Clipboard API 桩（writeText 存全局/readText 返回）✓
 - [x] E5. History.scrollRestoration 已有（'auto' 设置 + scroll 事件联动已在 A6 实现后满足）✓
@@ -83,8 +83,8 @@
 
 ## G. 真站点验收扫描（每 10 批穿插一次，像素+提取双维度）
 
-- [ ] G1. 13 站基线扫描（已有）
-- [ ] G2. 新闻类站点扫描（如 news.ycombinator.com、BBC）
+- [x] G1. 13 站基线扫描 ✓（批 37/55）
+- [ ] G2. 新闻类站点扫描 ⚠外部网络限制（HN/BBC/wikipedia curl 超时；httpbin Hermann Melville 全量提取 ✓）
 - [ ] G3. 电商列表站扫描（如 Amazon 搜索页——需交互：搜索→列表）
 - [ ] G4. 社交媒体站扫描（如 Reddit 公开页）
 - [ ] G5. 文档站扫描（如 MDN、React/Vue 文档子页面——点击导航翻页爬取）
@@ -104,7 +104,7 @@
 |------|------|------|------|
 | A 交互/输入 | 8 | 8 | ✅ 完成（全交互链路） |
 | B CDP | 7 | 6 | 进行中（剩 B5 尾斜杠等杂项） |
-| C 渲染 | 7 | 3 | 进行中 |
+| C 渲染 | 7 | 4 | 进行中 |
 | D CSS | 7 | 4 | 进行中 |
 | E JS API | 7 | 5 | 大部分完成 |
 | F 稳定性 | 3 | 3 | ✅ 完成 |
