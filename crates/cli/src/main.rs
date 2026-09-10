@@ -294,8 +294,10 @@ enum Cmd {
         timeout_ms: u64,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
-    /// End-to-end browser-like experience. Requires a display server
+    /// Requires the `gui` feature (`--features gui`) and a display server
     /// (won't work in headless CI / SSH sessions without X forwarding).
+    /// Without the feature, `--check` still works; window mode errors out.
+    /// M81.E1: gui 默认不编译——容器部署零图形依赖。
     Open {
         url: String,
         #[arg(long, default_value_t = 80)]
@@ -1104,16 +1106,27 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 print!("{text}");
                 return Ok(());
             }
-            eprintln!("[browser] opening window {win_width}x{win_height}, scale={scale}");
-            let config = browser_gui::WindowConfig {
-                title: format!("browser — {url}"),
-                width: win_width,
-                height: win_height,
-                scale,
-                text,
-            };
-            browser_gui::run_window(config).map_err(|e| anyhow!("GUI error: {e}"))?;
-            Ok(())
+            #[cfg(feature = "gui")]
+            {
+                eprintln!("[browser] opening window {win_width}x{win_height}, scale={scale}");
+                let config = browser_gui::WindowConfig {
+                    title: format!("browser — {url}"),
+                    width: win_width,
+                    height: win_height,
+                    scale,
+                    text,
+                };
+                browser_gui::run_window(config).map_err(|e| anyhow!("GUI error: {e}"))?;
+                Ok(())
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                let _ = (scale, win_width, win_height);
+                anyhow::bail!(
+                    "本二进制未编译 GUI（M81.E1 起默认 headless）。\
+                     窗口模式请重新构建：cargo build --release -p browser-cli --features gui"
+                )
+            }
         }
         Cmd::Cdp { port, js_engine } => {
             // M42: start the CDP server. Blocks forever (listen loop).

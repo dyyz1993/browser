@@ -26,7 +26,10 @@ png = "0.17"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 browser-js-runtime = { path = "../js-runtime" }
 browser-cdp = { path = "../cdp" }
-browser-gui = { path = "../gui" }
+# M81.E1: GUI 改为可选 feature（默认关闭）。winit 在 Linux 上动态链接
+# X11/wayland/xkbcommon，headless 容器部署（CF Containers 等）不需要；
+# 窗口模式用 `--features gui` 重新构建。
+browser-gui = { path = "../gui", optional = true }
 # M59: fetch 命令的后置内容提取（html/text/markdown/links + 噪声过滤）。
 browser-extractor = { path = "../extractor" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
@@ -49,6 +52,8 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = ["quickjs"]
+# M81.E1: GUI 窗口（winit+softbuffer）。默认不编译——容器/服务器部署零图形依赖。
+gui = ["dep:browser-gui"]
 # M66: QuickJS JS 引擎后端（默认引擎）
 quickjs = ["browser-js-runtime/quickjs"]
 # M71.1: boa 引擎后端（备选，默认不编译）。同时转发给 cdp/js-runtime，
