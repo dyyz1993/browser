@@ -150,6 +150,56 @@ pub fn drain_captured_network_events() -> Vec<CapturedNetworkEvent> {
     CAPTURED_NETWORK.with(|slot| slot.borrow_mut().drain(..).collect())
 }
 
+// M82: 全局 JS 执行墙钟 deadline（P0-1 挂死修复）。
+//
+// 背景：`browser fetch` 对常驻事件循环站点（juejin：WebSocket + setInterval
+// + 百级外链脚本）曾挂 4 分钟+。根因不是单个 pump 无界（pump 有 2s 上限），
+// 而是「外链预取 180s + 模块图 BFS + 串行同步 fetch」各阶段叠加无全局预算。
+//
+// 设计：CLI 在 JS 阶段开始前 `set_js_deadline(Some(budget))`，管线各阶段
+// （fetch_external_script / fetch_sync_with_method / 脚本遍历 / 事件循环 /
+// QuickJS interrupt handler）协同检查。选进程级 static 而非 thread_local：
+// 预取 worker 线程也要看到同一 deadline。超时后返回"当前已渲染内容"，
+// 由 CLI 层打 warning——进程绝不因单页挂死。
+static JS_DEADLINE: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+    std::sync::OnceLock::new();
+
+fn js_deadline_slot() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
+    JS_DEADLINE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// M82: 设置全局 JS deadline（now + budget）。`None` 清除（无上限）。
+/// 零预算视为清除（测试/无限等待场景）。
+pub fn set_js_deadline(budget: Option<std::time::Duration>) {
+    let deadline = budget
+        .filter(|d| !d.is_zero())
+        .map(|d| std::time::Instant::now() + d);
+    if let Ok(mut slot) = js_deadline_slot().lock() {
+        *slot = deadline;
+    }
+}
+
+/// M82: deadline 是否已到（未设置 = false，永不说超时）。
+#[must_use]
+pub fn js_deadline_exceeded() -> bool {
+    js_deadline_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+        .is_some_and(|d| std::time::Instant::now() >= d)
+}
+
+/// M82: 距 deadline 剩余时间。未设置 = `None`（无限制）；已超 = `Some(ZERO)`。
+/// 各网络调用用它把自身 timeout 收紧到 `min(默认, 剩余)`，保证超时漂移有界。
+#[must_use]
+pub fn js_deadline_remaining() -> Option<std::time::Duration> {
+    js_deadline_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+        .map(|d| d.saturating_duration_since(std::time::Instant::now()))
+}
+
 // M81(B1): 最近一次 JS 侧 `Element.prototype.focus()` 的元素 NodeId。
 // CDP `Input.dispatchKeyEvent` 的 activeElement 同步用：focus shim 经
 // `__psReportFocus` 原生桥上报；cdp 在 `Runtime.evaluate` / `callFunctionOn`
@@ -799,6 +849,10 @@ fn fetch_sync_with_method(
         }
     }
     let _guard = RequestGuard;
+    // M82: 全局 deadline 已到 → 不再发起请求（错误冒泡给 JS 的 catch/reject）。
+    if js_deadline_exceeded() {
+        return Err("global JS deadline exceeded".to_string());
+    }
     let url = url.to_string();
     let method = method.to_string();
     let body = body.map(String::from);
@@ -827,8 +881,12 @@ fn fetch_sync_with_method(
             reply: reply_tx,
         });
     });
+    // M82: 等待上限收紧到 min(8s, 距全局 deadline 剩余)——超时漂移有界。
+    let recv_wait = js_deadline_remaining()
+        .unwrap_or(std::time::Duration::from_secs(8))
+        .min(std::time::Duration::from_secs(8));
     let (status, bytes, headers) = reply_rx
-        .recv_timeout(std::time::Duration::from_secs(8))
+        .recv_timeout(recv_wait)
         .map_err(|_| "fetch timeout (8s)".to_string())??;
     // 收集 Set-Cookie 返回给主线程写 jar。
     let set_cookies: Vec<String> = headers

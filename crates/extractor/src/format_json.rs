@@ -20,6 +20,7 @@ pub fn to_json(
     base_url: Option<&str>,
     selector: Option<&str>,
     excluded: &HashSet<NodeId>,
+    inline_images: bool,
 ) -> Result<String, String> {
     let _roots: Vec<NodeId> = match selector {
         Some(sel) => query_all(tree, sel)?,
@@ -36,7 +37,8 @@ pub fn to_json(
     let text = format_text::to_text(tree, selector, &excl).unwrap_or_default();
     let html = format_html::to_html(tree, selector, &excl).unwrap_or_default();
     let links = format_links::to_links(tree, base_url, selector, &excl).unwrap_or_default();
-    let images = format_images::to_images(tree, base_url, selector, &excl).unwrap_or_default();
+    let images = format_images::to_images(tree, base_url, selector, &excl, inline_images)
+        .unwrap_or_default();
     // 从 tree 找 title
     let title = extract_title(tree);
 
@@ -103,7 +105,7 @@ mod tests {
     #[test]
     fn to_json_contains_all_fields() {
         let tree = parse("<html><head><title>Test</title></head><body><p>hello</p></body></html>");
-        let json = to_json(&tree, None, None, &HashSet::new()).expect("json");
+        let json = to_json(&tree, None, None, &HashSet::new(), false).expect("json");
         assert!(json.contains(r#""title":"Test""#), "title");
         assert!(json.contains(r#""text""#), "text field");
         assert!(json.contains(r#""html""#), "html field");
@@ -114,14 +116,14 @@ mod tests {
     #[test]
     fn to_json_escapes_quotes() {
         let tree = parse(r#"<p>hello "world"</p>"#);
-        let json = to_json(&tree, None, None, &HashSet::new()).expect("json");
+        let json = to_json(&tree, None, None, &HashSet::new(), false).expect("json");
         assert!(json.contains(r#"\""#), "quotes escaped: {json}");
     }
 
     #[test]
     fn to_json_handles_empty() {
         let tree = Tree::new();
-        let json = to_json(&tree, None, None, &HashSet::new()).unwrap_or_default();
+        let json = to_json(&tree, None, None, &HashSet::new(), false).unwrap_or_default();
         assert!(json.contains(r#""title":"""#));
     }
 }

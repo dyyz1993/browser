@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M71.4**（boa→optional 9.4M + Web API GAP 修复 + sloppy mode） |
-| 总 commits | ~264 |
-| 测试 | 868 pass + 18 e2e, 0 clippy warnings |
+| HEAD | **M82**（fetch 工具健壮性：全局硬超时/反爬警告/data-URI 去噪等 8 项） |
+| 总 commits | ~266 |
+| 测试 | 995 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **QuickJS（默认，9.4M）**；boa 改为 `--features boa` 可选（17M，纯 CSR 站天花板，保留备用） |
@@ -28,6 +28,58 @@
 ---
 
 ## 最近变更（倒序）
+
+### M82 —— `browser fetch` 工具健壮性：真实站点扫描 8 项问题全修复
+
+**背景**：外部对 `fetch` 做多类型站点扫描（静态/SSR/CSR/反爬/错误路径），
+暴露 3×P0 + 3×P1 + 2×P2。全部实测复现、修复、真实站点回归验证。
+
+**P0-1 全局硬超时（juejin 挂 4min+ 的根因）**：
+- 根因不是 pump 无界（有 2s 上限），而是「外链预取 180s + 模块图 BFS +
+  串行同步 fetch」各阶段叠加无全局预算。
+- 修法：`bridge.rs` 新增进程级 `JS_DEADLINE`（`set_js_deadline` /
+  `js_deadline_exceeded` / `js_deadline_remaining`），CLI fetch JS 阶段前
+  设置 `--timeout-ms`（**对所有 wait 策略生效**，默认 60s），管线协同检查：
+  预取预算收紧 min(180s, 剩余)、`fetch_external_script`/
+  `fetch_sync_with_method` 提前返回 + per-request timeout 收紧、pass-1/2
+  脚本遍历 break、事件循环 break（QuickJS + boa 双路径）、模块图 BFS break。
+- **纯 JS 死循环兜底**：`engine_quickjs.rs` 注册 rquickjs
+  `set_interrupt_handler`（解释器周期回调检查 deadline）——协同检查覆盖
+  不到的 compute-only 循环也能被打断。
+- 实测：juejin 4min+ 挂死 → **60.3s 干净返回 + 部分内容 + 警告**。
+
+**P0-2 反爬/验证页静默通过**：新增 `extractor::warnings::content_warnings`
+（<4KB 内容扫描 13 个中英标记：安全检测/网络不给力/just a moment/
+cf-turnstile 等 + <200B 短内容提示）。stderr 始终 `[warn]`；`--json` 增
+`warnings` 数组。实测：百度"网络不给力"61B、36kr"正在进行安全检测"160B
+均双警告命中。只发信号不拦截（误判代价 > 漏判）。
+
+**P0-3 data: URI 图片污染 markdown**：md/images 格式默认丢弃 `data:` URI
+（百度/36kr 单条 ~4KB base64 噪声），`--inline-images` 显式保留。
+实测 GitHub trending data:image 0 条、http 图正常。
+
+**P1-4 噪声漏网**：`clean::postprocess_output`（md/text 后置）——≥40 字符
+**逐字重复**行只留第一次（GitHub flash 提示 3 遍→1 遍，实测 ✓）、整行
+精确匹配 UI 短语（翻译此页/播报等）丢弃、code fence 内豁免。
+
+**P1-5 `--selector` 无匹配静默空输出**：`run_extract` 对 0 匹配打
+`matched 0 nodes` stderr 警告（区分选择器写错 vs 页面没渲染）。
+
+**P1-6 `--json` 忽略 `--format`**：`content.format` 记录实际格式，
+`content.text` 承载该格式内容（旧消费者读 text 不受影响）。
+
+**P2-7 确定性错误盲重 3 次**：`is_retryable_net_error`（NetError downcast
+分类）——DNS/证书/4xx/URL 非法立即失败，超时/5xx/读失败仍重试。实测 404
+只打 attempt 0。
+
+**P2-8 `--json` network 恒空**：确认设计边界——只记录 **JS 发起的**
+fetch/XHR（`fetch_sync_with_method` 统一 record），外链 `<script src>` 不
+算；百度首页空是页面没发 XHR。集成测试固化：页面 JS fetch → network
+数组含 /api/data。
+
+**验证**：单元+集成 8 项新测试（`integration_fetch_hardening.rs`）全绿；
+workspace 995 passed / 0 failed / 0 clippy warning；真实站点矩阵
+（juejin/baidu/36kr/github/sspai）全部符合预期。
 
 ### M81.B2 —— CDP Emulation.setDeviceMetricsOverride 真生效（Playwright setViewportSize）
 
@@ -2492,6 +2544,15 @@ SPA 爬虫增强：解决百度等登录态反爬。主请求设的 cookie → J
 - type 属性（字母 A/B/C、罗马 I/II/III）→ 延后（视觉映射，数据提取
   已完整——下游拿到的 text 里已经有 "3. Alpha" 文本）。
 - 973 tests 全绿 + REALITY PASS。
+
+**M82 —— `browser fetch` 工具健壮性（真实站点扫描 8 项问题全修复）**：
+P0-1 全局硬超时（juejin 4min 挂死→60s 返回；协同 deadline 穿透预取/脚本
+遍历/同步 fetch/事件循环 + QuickJS interrupt handler 兜纯 JS 死循环）；
+P0-2 反爬壳页 warnings（--json 数组 + stderr）；P0-3 data: URI 图默认丢弃
+（--inline-images 保留）；P1-4 重复长行去噪（GitHub flash 3→1）；P1-5
+selector 0 匹配警告；P1-6 --json 尊重 --format；P2-7 确定性错误不盲重；
+P2-8 network 数组设计边界固化（只记 JS fetch/XHR）。995 tests 全绿。
+同 commit 前置：M81.E1 gui 改可选 feature（f9d3848）。
 
 ## 文档维护规则
 

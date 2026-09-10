@@ -179,6 +179,133 @@ fn protect_ancestors(tree: &Tree, id: NodeId, protected: &mut HashSet<NodeId>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// M82 (P1-4): 输出后置去噪
+// ---------------------------------------------------------------------------
+
+/// 整行等于这些短语的 UI 噪声（大小写不敏感）。只做**整行精确匹配**——
+/// 正文里出现"翻译此页"字样不受影响。不放站点专用词（GitHub fork/star
+/// 等）——那是站点 hack，这里只收跨站通用的 UI 短语。
+const UI_NOISE_LINES: &[&str] = &[
+    "翻译此页",
+    "translate this page",
+    "播报",
+    "暂停",
+    "举报",
+    "反馈问题",
+    "查看更多",
+    "展开全部",
+    "收起",
+];
+
+/// 完全重复行去重的最小字符数。短行（列表项/表格行）重复可能合法，
+/// 长行（≥ 40 字符的完整句子）逐字重复几乎必然是模板噪声（GitHub flash
+/// 提示 3 遍等）。代码块内的行不参与去重（重复行在代码/日志里合法）。
+const DEDUPE_MIN_CHARS: usize = 40;
+
+/// M82 (P1-4): markdown/text 输出的行级后置去噪。
+///
+/// 实测驱动（用户提供的站点扫描清单）：
+/// 1. GitHub flash 提示 "You signed in with another tab or window. Reload
+///    to refresh your session." **全文重复 3 遍**——模板渲染产物。
+/// 2. 百度搜索页残留「翻译此页」「播报/暂停」等 UI 短语整行。
+///
+/// 规则（保守，只删确定性噪声）：
+/// - 整行精确匹配 UI 噪声短语 → 删；
+/// - 非 code-fence 区域内 ≥ 40 字符的**逐字重复**行 → 只保留第一次；
+/// - 其余原样保留。
+///
+/// 不做模糊匹配/相似度去重（误删正文风险 > 收益）。
+#[must_use]
+pub fn postprocess_output(content: &str) -> String {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_code_fence = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // ``` 围栏切换（行首 ``` 即视为围栏行）。
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            out.push(line);
+            continue;
+        }
+        if !in_code_fence && is_ui_noise_line(trimmed) {
+            continue; // 整行 UI 噪声 → 丢
+        }
+        if !in_code_fence && trimmed.chars().count() >= DEDUPE_MIN_CHARS && !seen.insert(trimmed) {
+            continue; // 逐字重复的长行 → 只留第一次
+        }
+        out.push(line);
+    }
+    out.join("\n")
+}
+
+/// 整行是否为 UI 噪声短语（精确匹配，大小写不敏感）。
+fn is_ui_noise_line(trimmed: &str) -> bool {
+    UI_NOISE_LINES
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(trimmed))
+}
+
+#[cfg(test)]
+mod postprocess_tests {
+    use super::postprocess_output;
+
+    #[test]
+    fn dedupes_repeated_long_lines() {
+        // GitHub flash 实测样本：同一句提示重复 3 遍
+        let flash = "You signed in with another tab or window. Reload to refresh your session.";
+        let input = format!("Title\n{flash}\nSome paragraph.\n{flash}\n{flash}\nEnd");
+        let out = postprocess_output(&input);
+        assert_eq!(
+            out.matches(flash).count(),
+            1,
+            "repeated flash notice should appear exactly once: {out:?}"
+        );
+        assert!(out.contains("Some paragraph."), "other content kept");
+    }
+
+    #[test]
+    fn keeps_short_repeated_lines() {
+        // 短行重复可能是合法结构（列表/表格）
+        let input = "- item\n- item\n- other";
+        let out = postprocess_output(input);
+        assert_eq!(
+            out.matches("- item").count(),
+            2,
+            "short dupes kept: {out:?}"
+        );
+    }
+
+    #[test]
+    fn keeps_repeated_lines_inside_code_fence() {
+        let line = "console.log(\"this is a long repeated log line inside code\");";
+        let input = format!("```\n{line}\n{line}\n```");
+        let out = postprocess_output(&input);
+        assert_eq!(out.matches(line).count(), 2, "code fence exempt: {out:?}");
+    }
+
+    #[test]
+    fn drops_ui_noise_whole_lines() {
+        let input = "正文第一段。\n翻译此页\n播报\n正文第二段。";
+        let out = postprocess_output(input);
+        assert!(!out.contains("翻译此页"), "UI noise dropped: {out:?}");
+        assert!(!out.lines().any(|l| l.trim() == "播报"), "UI noise dropped");
+        assert!(out.contains("正文第一段。"));
+        assert!(out.contains("正文第二段。"));
+    }
+
+    #[test]
+    fn keeps_ui_words_inside_sentences() {
+        let input = "本文介绍如何实现翻译此页功能的原理。";
+        let out = postprocess_output(input);
+        assert!(
+            out.contains("翻译此页"),
+            "in-sentence mention kept: {out:?}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

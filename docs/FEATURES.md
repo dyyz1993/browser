@@ -14,8 +14,8 @@
 | `render-file <file>` | 解析 + 布局 + ASCII 渲染（**不执行 JS**） | M2 |
 | `render-script <file>` | 解析 + **执行 `<script>`** + ASCII 渲染 | M3 |
 | `render-url <url>` | fetch + parse + 执行 JS + 渲染（端到端 SPA） | M4 |
-| `fetch <url>` | **M59：curl 式 SPA 爬虫** — fetch+JS+等待策略+内容提取（markdown/html/text/links） | M59 |
-| `open <url>` | fetch + 渲染 + GUI 窗口显示 | M5 |
+| `fetch <url>` | **M59：curl 式 SPA 爬虫** — fetch+JS+等待策略+内容提取（markdown/html/text/links）。**M82 加固**：全局 60s 硬超时（不挂死）、`--json` warnings/格式尊重、data: URI 图默认丢弃（`--inline-images` 保留）、反爬壳页警告 | M59/M82 |
+| `open <url>` | fetch + 渲染 + GUI 窗口显示（M81.E1 起需 `--features gui` 编译；`--check` 无需） | M5 |
 | `image-ascii <file>` | PNG/JPG → ASCII art | M12.3 |
 | `screenshot <url>` | fetch + JS + 布局 + 网页 PNG 截图（支持 --max-height） | M12 | 
 | `cdp --port N` | 启动 Chrome DevTools Protocol server（Puppeteer/Playwright 兼容） | M42 |

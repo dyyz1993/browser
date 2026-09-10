@@ -20,6 +20,7 @@ pub mod format_links;
 pub mod format_md;
 pub mod format_text;
 pub mod selector;
+pub mod warnings;
 
 use browser_dom::Tree;
 
@@ -67,6 +68,22 @@ impl OutputFormat {
             )),
         }
     }
+
+    /// M82: 格式名（`--json` 输出的 `content.format` 字段用）。
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Html => "html",
+            Self::OriginalHtml => "original-html",
+            Self::Text => "text",
+            Self::Markdown => "markdown",
+            Self::Links => "links",
+            Self::Images => "images",
+            Self::Json => "json",
+            Self::Highlights => "highlights",
+            Self::Branding => "branding",
+        }
+    }
 }
 
 /// 提取选项（`browser fetch` 的过滤参数）。
@@ -79,6 +96,10 @@ pub struct FetchOptions {
     /// 是否做主内容噪声过滤（`--only-main-content`，默认 true）。
     /// 借鉴 Firecrawl EXCLUDE_NON_MAIN_TAGS（42 选择器）。【Step 2 加入】
     pub only_main_content: bool,
+    /// M82: 是否保留 `data:` URI 内联图片（`--inline-images`，默认 false）。
+    /// base64 data URI（单条常 4KB+）对下游 LLM 是纯噪声且挤占上下文，
+    /// markdown/images 格式默认丢弃，http(s) 图片不受影响。
+    pub inline_images: bool,
 }
 
 impl Default for FetchOptions {
@@ -87,6 +108,7 @@ impl Default for FetchOptions {
             format: OutputFormat::Markdown,
             selector: None,
             only_main_content: true,
+            inline_images: false,
         }
     }
 }
@@ -113,6 +135,19 @@ pub fn run_extract(
 ) -> Result<ExtractResult, String> {
     let title = extract_title(tree);
     let selector = opts.selector.as_deref();
+    // M82 (P1-5): selector 无匹配时显式警告——排查时区分"选择器写错/页面
+    // 没渲染出来"与"提取器坏了"，不再静默空输出。
+    if let Some(sel) = selector {
+        match selector::query_all(tree, sel) {
+            Ok(ids) if ids.is_empty() => {
+                eprintln!(
+                    "[extractor] selector '{sel}' matched 0 nodes — wrong selector, or page did not render the expected DOM"
+                );
+            }
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+    }
     let content = extract_with_clean(tree, base_url, opts, selector)?;
     // 空内容兜底（借鉴 Firecrawl）：only_main_content 过滤后输出为空 →
     // 自动回退用完整内容（only_main_content=false）重跑一次。
@@ -124,11 +159,23 @@ pub fn run_extract(
         };
         let fallback = extract_with_clean(tree, base_url, &fallback_opts, selector)?;
         return Ok(ExtractResult {
-            content: fallback,
+            content: finalize(opts.format, fallback),
             title,
         });
     }
-    Ok(ExtractResult { content, title })
+    Ok(ExtractResult {
+        content: finalize(opts.format, content),
+        title,
+    })
+}
+
+/// M82 (P1-4): markdown/text 的输出后置去噪（见 `clean::postprocess_output`）。
+/// html/links/images 是结构化输出，不做行级去重。
+fn finalize(format: OutputFormat, content: String) -> String {
+    match format {
+        OutputFormat::Markdown | OutputFormat::Text => clean::postprocess_output(&content),
+        _ => content,
+    }
 }
 
 /// 单次提取（含噪声过滤）。被 run_extract 调用，也用于空内容兜底重跑。
@@ -143,14 +190,20 @@ fn extract_with_clean(
         OutputFormat::Html => format_html::to_html(tree, selector, &excluded),
         OutputFormat::Text => format_text::to_text(tree, selector, &excluded),
         OutputFormat::Links => format_links::to_links(tree, base_url, selector, &excluded),
-        OutputFormat::Markdown => format_md::to_markdown(tree, base_url, selector, &excluded),
+        OutputFormat::Markdown => {
+            format_md::to_markdown(tree, base_url, selector, &excluded, opts.inline_images)
+        }
         OutputFormat::OriginalHtml => {
             // 不应到达这里——CLI fetch 在原始 HTML 路径会提前 return。
             // 若被调用（如测试），返回空（无意义但安全）。
             Ok(String::new())
         }
-        OutputFormat::Images => format_images::to_images(tree, base_url, selector, &excluded),
-        OutputFormat::Json => format_json::to_json(tree, base_url, selector, &excluded),
+        OutputFormat::Images => {
+            format_images::to_images(tree, base_url, selector, &excluded, opts.inline_images)
+        }
+        OutputFormat::Json => {
+            format_json::to_json(tree, base_url, selector, &excluded, opts.inline_images)
+        }
         OutputFormat::Highlights => format_highlights::to_highlights(tree, selector, &excluded),
         OutputFormat::Branding => format_branding::to_branding(tree, base_url, selector, &excluded),
     }

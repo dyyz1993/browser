@@ -868,6 +868,13 @@ fn prefetch_module_graph(entry_urls: &[String], trace: bool, t0: std::time::Inst
         if frontier.is_empty() || seen.len() >= MAX_MODULES {
             break;
         }
+        // M82: 全局 deadline 到 → 停止 BFS 预取。
+        if crate::bridge::js_deadline_exceeded() {
+            if trace {
+                eprintln!("[js-runtime] global JS deadline exceeded — stop module graph prefetch");
+            }
+            break;
+        }
         // 扫描当前层的 import 说明符，解析入 next。
         // 注意 base 用**被扫模块自身的 URL**（HttpResolver 语义：相对说明符
         // 相对导入模块所在目录解析，不是页面 URL）。
@@ -936,6 +943,10 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             return Ok(code.clone());
         }
     }
+    // M82: 全局 deadline 已到 → 跳过剩余脚本网络请求（错误只打日志，不致命）。
+    if crate::bridge::js_deadline_exceeded() {
+        return Err("global JS deadline exceeded (script fetch skipped)".to_string());
+    }
 
     // M65: 外部脚本用独立 spawn + 新 HttpClient（而非 net worker）。
     // M70.13: 改用全局 OnceLock+HttpClient，TLS 连接池跨脚本复用。
@@ -947,13 +958,13 @@ fn fetch_external_script(url: &str) -> Result<String, String> {
             .enable_all()
             .build()
             .map_err(|e| format!("tokio runtime build failed: {e}"))?;
-        // 用 tokio::time::timeout 给 fetch 加 60s 上限（GitHub rspack chunk 最大 258KB）
+        // 用 tokio::time::timeout 给 fetch 加上限（GitHub rspack chunk 最大 258KB）。
+        // M82: 上限收紧到 min(30s, 距全局 deadline 剩余)。
+        let per_fetch = crate::bridge::js_deadline_remaining()
+            .unwrap_or(std::time::Duration::from_secs(30))
+            .min(std::time::Duration::from_secs(30));
         let result = rt.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                client.get_with_headers(&url_owned, None),
-            )
-            .await
+            tokio::time::timeout(per_fetch, client.get_with_headers(&url_owned, None)).await
         });
         match result {
             Ok(Ok((bytes, headers))) => {
@@ -1524,7 +1535,12 @@ fn run_scripts_quickjs(
             if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
                 eprintln!("[js-runtime] M75+M80 pre-fetching {module_count} external scripts");
             }
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+            // M82: 预取墙钟预算 = min(180s, 全局 JS deadline 剩余)。
+            // 原来固定 180s 是 juejin 挂 4 分钟的主体之一。
+            let prefetch_budget = crate::bridge::js_deadline_remaining()
+                .unwrap_or(std::time::Duration::from_secs(180))
+                .min(std::time::Duration::from_secs(180));
+            let deadline = std::time::Instant::now() + prefetch_budget;
             let handles: Vec<_> = prefetch_urls
                 .into_iter()
                 .filter_map(|url| {
@@ -1567,6 +1583,13 @@ fn run_scripts_quickjs(
     // 但它们按 HTML 顺序在 DOMContentLoaded 前完成。inline script 依赖 module registry。
     // Pass 1: module scripts（先注册所有 rspack/Webpack chunk registry）
     for script in &scripts {
+        // M82: 全局 deadline 到 → 放弃剩余脚本（返回当前已渲染内容）。
+        if crate::bridge::js_deadline_exceeded() {
+            eprintln!(
+                "[js-runtime] global JS deadline exceeded — skipping remaining module scripts"
+            );
+            break;
+        }
         let code = match script {
             ScriptEntry::ExternalModule(src) => {
                 match resolve_script_url(src, base_url.as_deref()) {
@@ -1821,6 +1844,11 @@ fn run_scripts_quickjs(
     }
     // Pass 2: non-module scripts（inline + external，在 module registry 就绪后执行）
     for script in &scripts {
+        // M82: 全局 deadline 到 → 放弃剩余脚本（返回当前已渲染内容）。
+        if crate::bridge::js_deadline_exceeded() {
+            eprintln!("[js-runtime] global JS deadline exceeded — skipping remaining scripts");
+            break;
+        }
         let code = match script {
             ScriptEntry::Inline(code) => {
                 if has_ts_syntax(code) {
@@ -1982,6 +2010,11 @@ fn run_scripts_quickjs(
     let mut idle_rounds: u32 = 0;
     let mut idle_start: Option<std::time::Duration> = None;
     loop {
+        // M82: 全局 deadline 到 → 事件循环立即退出（返回当前已渲染内容）。
+        if crate::bridge::js_deadline_exceeded() {
+            eprintln!("[js-runtime] global JS deadline exceeded — stop event loop");
+            break;
+        }
         // M69: 每轮先 drain 动态 script（上一轮 timer 回调/onload 可能 appendChild
         // 新 chunk 入队）。eval 出的代码可能又入队，下一轮处理（支持多层链式加载）。
         dyn_executed = drain_and_eval_dynamic_scripts(engine);
@@ -7791,6 +7824,11 @@ fn pump_event_loop(ctx: &mut Context) -> usize {
                 "[js-runtime] event loop hard timeout ({}s)",
                 MAX_TOTAL.as_secs()
             );
+            break;
+        }
+        // M82: 全局 deadline 到 → 事件循环立即退出。
+        if crate::bridge::js_deadline_exceeded() {
+            eprintln!("[js-runtime] global JS deadline exceeded — stop event loop");
             break;
         }
         // M16.4: 先执行 Promise microtask（then 回调）。可能 schedule 新 timer。

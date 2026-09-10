@@ -20,6 +20,8 @@ use crate::selector::query_all;
 /// - `base_url`：相对 URL 绝对化（a/img）。
 /// - `selector`：可选，只转换匹配子树。
 /// - `excluded`：噪声过滤排除集（clean.rs 计算）。
+/// - `inline_images`：M82——`false`（默认）丢弃 `data:` URI 图片；
+///   `true` 保留（`--inline-images`）。
 ///
 /// # Errors
 /// 选择器解析失败时返回 `Err(String)`。
@@ -28,6 +30,7 @@ pub fn to_markdown(
     base_url: Option<&str>,
     selector: Option<&str>,
     excluded: &HashSet<NodeId>,
+    inline_images: bool,
 ) -> Result<String, String> {
     let base = base_url.and_then(|b| Url::parse(b).ok());
     let roots: Vec<NodeId> = match selector {
@@ -43,6 +46,7 @@ pub fn to_markdown(
         line: String::new(),
         list_stack: Vec::new(),
         in_pre: false,
+        inline_images,
     };
 
     for root in roots {
@@ -66,6 +70,8 @@ struct MdCtx<'a> {
     list_stack: Vec<(bool, usize)>,
     /// 是否在 <pre> 内（内部不转义、保留原样）。
     in_pre: bool,
+    /// M82: 是否保留 data: URI 内联图片（默认丢弃——base64 是纯噪声）。
+    inline_images: bool,
 }
 
 impl<'a> MdCtx<'a> {
@@ -183,6 +189,7 @@ fn handle_element(ctx: &mut MdCtx, id: NodeId, tag: &str, attrs: &[(String, Stri
                 line: String::new(),
                 list_stack: Vec::new(),
                 in_pre: false,
+                inline_images: ctx.inline_images,
             };
             walk_children(&mut sub, id);
             sub.flush_line();
@@ -228,7 +235,10 @@ fn handle_element(ctx: &mut MdCtx, id: NodeId, tag: &str, attrs: &[(String, Stri
                 .map(|(_, v)| v.as_str())
                 .unwrap_or("");
             if let Some(src) = src {
-                if !src.is_empty() {
+                // M82 (P0-3): data: URI（base64 内联图，单条常 4KB+）默认丢弃——
+                // 对下游 LLM 是纯噪声。`--inline-images` 显式保留。
+                let is_data_uri = src.trim_start().to_ascii_lowercase().starts_with("data:");
+                if !src.is_empty() && (!is_data_uri || ctx.inline_images) {
                     let absolute = resolve_url(src, ctx.base);
                     ctx.push_inline(&format!("![{alt}]({absolute})"));
                 }
@@ -437,12 +447,12 @@ mod tests {
 
     fn md(html: &str) -> String {
         let tree = parse(html);
-        to_markdown(&tree, None, None, &HashSet::new()).expect("md")
+        to_markdown(&tree, None, None, &HashSet::new(), false).expect("md")
     }
 
     fn md_base(html: &str, base: &str) -> String {
         let tree = parse(html);
-        to_markdown(&tree, Some(base), None, &HashSet::new()).expect("md")
+        to_markdown(&tree, Some(base), None, &HashSet::new(), false).expect("md")
     }
 
     #[test]
@@ -565,8 +575,33 @@ mod tests {
             excluded.clear();
             excluded.insert(nid);
         }
-        let m = to_markdown(&tree, None, None, &excluded).expect("md");
+        let m = to_markdown(&tree, None, None, &excluded, false).expect("md");
         assert!(m.contains("main"), "main kept: {m:?}");
         assert!(!m.contains("nav link"), "nav excluded: {m:?}");
+    }
+
+    #[test]
+    fn data_uri_img_dropped_by_default() {
+        // M82 (P0-3): base64 data URI 默认不进 markdown（百度/36kr 实测单条 4KB 噪声）
+        let html = r#"<p>text <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" alt="inline"> end</p><img src="https://x.com/real.png" alt="real">"#;
+        let tree = parse(html);
+        let m = to_markdown(&tree, None, None, &HashSet::new(), false).expect("md");
+        assert!(!m.contains("base64"), "data URI dropped: {m:?}");
+        assert!(!m.contains("data:image"), "data URI dropped: {m:?}");
+        assert!(
+            m.contains("![real](https://x.com/real.png)"),
+            "http img kept: {m:?}"
+        );
+    }
+
+    #[test]
+    fn data_uri_img_kept_with_inline_images_flag() {
+        let html = r#"<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" alt="inline">"#;
+        let tree = parse(html);
+        let m = to_markdown(&tree, None, None, &HashSet::new(), true).expect("md");
+        assert!(
+            m.contains("data:image/png;base64,"),
+            "--inline-images keeps data URI: {m:?}"
+        );
     }
 }

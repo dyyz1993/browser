@@ -285,13 +285,21 @@ enum Cmd {
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
         /// M57.6: Wait strategy for JS execution. Options: load (full event loop),
-        /// dom-ready (after initial script execution), timeout (with --timeout-ms limit).
+        /// dom-ready (after initial script execution), timeout (alias of load,
+        /// kept for compat). The strategy only affects logging now — the real
+        /// budget is --timeout-ms (global wall-clock, M82).
         #[arg(long, default_value = "load")]
         wait_strategy: String,
-        /// M57.6: Max wait duration in ms for JS execution (only effective with
-        /// --wait-strategy timeout). Default: 30000 (30s).
-        #[arg(long, default_value_t = 30000)]
+        /// M82: Global wall-clock budget (ms) for the whole JS phase
+        /// (prefetch + script eval + event loop), effective for ALL wait
+        /// strategies. On timeout the tool prints already-rendered content
+        /// plus a warning instead of hanging. Default: 60000 (60s).
+        #[arg(long, default_value_t = 60000)]
         timeout_ms: u64,
+        /// M82: Keep `data:` URI inline images (base64). Default dropped —
+        /// a single data-URI img is often 4KB+ of pure noise for LLM consumers.
+        #[arg(long)]
+        inline_images: bool,
     },
     /// Fetch a URL, render it, and display the result in a GUI window.
     /// Requires the `gui` feature (`--features gui`) and a display server
@@ -786,6 +794,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             ai_model,
             wait_strategy,
             timeout_ms,
+            inline_images,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
@@ -875,6 +884,16 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 eprintln!("[wait] strategy={wait_strategy_parsed}, timeout={timeout_ms}ms");
             }
             let js_start = std::time::Instant::now();
+            // M82 (P0-1): JS 阶段全局墙钟预算（对所有 wait 策略生效）。
+            // 挂死根因（juejin 实测 4min+）：外链预取 180s + 模块图 BFS +
+            // 串行同步 fetch 叠加无全局上限。deadline 由 js-runtime 各阶段
+            // 协同检查（fetch/脚本遍历/事件循环/QuickJS interrupt handler），
+            // 超时返回当前已渲染内容 + 警告，绝不挂死。
+            if !no_js {
+                browser_js_runtime::set_js_deadline(Some(std::time::Duration::from_millis(
+                    timeout_ms,
+                )));
+            }
             let shared: browser_js_runtime::SharedTree = if no_js {
                 use std::cell::RefCell;
                 use std::rc::Rc;
@@ -923,13 +942,15 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 eprintln!("[browser] {executed} script(s) executed");
                 shared
             };
-            // M57.6: 超时检查——若策略为 timeout 且执行超过限制，打警告不阻断。
+            // M82: JS 阶段结束，清除全局 deadline（不影响后续 CLI 网络请求）。
+            browser_js_runtime::set_js_deadline(None);
+            // M82 (P0-1): 超时警告——对所有策略生效。内容照常输出（协同
+            // deadline 已尽量带回已渲染部分），agent 调用方据此降级处理。
             let js_elapsed = js_start.elapsed();
-            if wait_strategy_parsed == "timeout" && js_elapsed.as_millis() > timeout_ms as u128 {
+            if !no_js && js_elapsed.as_millis() > timeout_ms as u128 {
                 eprintln!(
-                    "[wait] timeout exceeded: {}ms > {}ms limit, returning current content",
-                    js_elapsed.as_millis(),
-                    timeout_ms
+                    "[warn] JS phase exceeded global budget: {}ms > {timeout_ms}ms — returning current content (page may be partially rendered)",
+                    js_elapsed.as_millis()
                 );
             }
             if profile {
@@ -941,18 +962,19 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 );
             }
             let extract_start = std::time::Instant::now();
-            let out_format = if json {
-                // --json 输出自身就是结构化格式，用 Text 格式提取内容
-                // 避免 extractor JSON 在 CLI JSON 内被双重编码。
-                browser_extractor::OutputFormat::Text
-            } else {
-                browser_extractor::OutputFormat::parse(&format)
-                    .map_err(|e| anyhow!("invalid --format: {e}"))?
-            };
+            // M82 (P1-6): --json 尊重 --format——内容按请求格式提取，放进
+            // content.text + content.format 字段。仅 --format json 本身会双重
+            // 编码，降级为 text。
+            let mut out_format = browser_extractor::OutputFormat::parse(&format)
+                .map_err(|e| anyhow!("invalid --format: {e}"))?;
+            if json && out_format == browser_extractor::OutputFormat::Json {
+                out_format = browser_extractor::OutputFormat::Text;
+            }
             let opts = browser_extractor::FetchOptions {
                 format: out_format,
                 selector: selector.clone(),
                 only_main_content,
+                inline_images,
             };
             let mut result =
                 browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
@@ -1013,6 +1035,13 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     );
                 }
             }
+            // M82 (P0-2): 内容级启发式警告——反爬/验证页（HTTP 200 + 短内容
+            // 的"网络不给力"/"安全检测"壳页）与空内容。stderr 始终打印，
+            // --json 模式额外放进 warnings 数组，调用方可编程判断。
+            let warnings = browser_extractor::warnings::content_warnings(&result.content);
+            for w in &warnings {
+                eprintln!("[warn] {w}");
+            }
             if json {
                 // M74: Drain capture queues after JS execution.
                 let console_events = drain_captured_console_events();
@@ -1024,8 +1053,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     "url": url,
                     "title": result.title,
                     "content": {
+                        // M82 (P1-6): 记录实际提取格式；text 字段承载该格式的内容
+                        // （沿用旧字段名，旧消费者读 content.text 不受影响）。
+                        "format": out_format.name(),
                         "text": result.content,
                     },
+                    "warnings": warnings,
                     "console": console_events.iter().map(|e| serde_json::json!({
                         "level": e.level,
                         "text": e.text,
@@ -1218,15 +1251,49 @@ fn json_escape(s: &str) -> String {
     out
 }
 
+/// M82 (P2-7): 网络错误是否值得重试。
+///
+/// 实测问题：死域名（DNS 解析失败）和 404 这类**确定性**失败也盲重 3 次，
+/// 失败反馈被拖慢 3 倍（2 × 500ms 间隔 + 重复请求）。分类规则：
+/// - DNS 解析失败 / TLS 证书错误 / URL 非法 / 4xx → 立即失败；
+/// - 连接超时 / 5xx / 读 body 失败（可能瞬时 reset）→ 重试。
+fn is_retryable_net_error(e: &anyhow::Error) -> bool {
+    for cause in e.chain() {
+        if let Some(ne) = cause.downcast_ref::<browser_net::NetError>() {
+            return match ne {
+                browser_net::NetError::RequestFailed(msg) => {
+                    // reqwest 的 transport 错误被格式化成字符串，DNS/证书
+                    // 失败用消息特征识别（重试也救不回来）。
+                    let m = msg.to_ascii_lowercase();
+                    !(m.contains("dns")
+                        || m.contains("resolve")
+                        || m.contains("lookup")
+                        || m.contains("certificate"))
+                }
+                // 5xx 可能瞬时（网关抖动）→ 重试；4xx 确定性 → 放弃。
+                browser_net::NetError::BadStatus { code } => *code >= 500,
+                browser_net::NetError::ReadFailed(_) => true,
+                browser_net::NetError::InvalidUrl { .. }
+                | browser_net::NetError::UnsupportedScheme { .. } => false,
+            };
+        }
+    }
+    true // 未知错误类型保守重试
+}
+
 async fn fetch_with_jar(url: &str) -> Result<String> {
     // M70.14: 网络重试——最多 3 次，间隔 500ms。
-    // 底层通用方案，任何站点网络抖动都受益。
+    // M82 (P2-7): 确定性错误（DNS/4xx/URL 非法）立即返回，不浪费重试。
     let mut last_err = None;
     for attempt in 0..3u32 {
         match fetch_with_jar_once(url).await {
             Ok(html) => return Ok(html),
             Err(e) => {
                 eprintln!("[net] attempt {attempt} failed: {e}");
+                if !is_retryable_net_error(&e) {
+                    eprintln!("[net] non-retryable error — giving up immediately");
+                    return Err(e);
+                }
                 last_err = Some(e);
                 if attempt < 2 {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -2418,6 +2485,7 @@ async fn handle_request(mut stream: std::net::TcpStream) -> Result<()> {
             format: out_format,
             selector: None,
             only_main_content: false,
+            inline_images: false,
         };
         let result = match browser_extractor::run_extract(&tree, Some(&clean_url), &opts) {
             Ok(r) => r,
@@ -2515,6 +2583,7 @@ async fn serve_child() -> Result<()> {
         format: out_format,
         selector: None,
         only_main_content: false,
+        inline_images: false,
     };
     let result = browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
         .unwrap_or(browser_extractor::ExtractResult {

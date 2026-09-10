@@ -333,6 +333,11 @@ impl QuickJsEngine {
         // Unix 主线程 8MB，余量充足。
         #[cfg(not(windows))]
         rt.set_max_stack_size(2 << 20);
+        // M82: interrupt handler——纯 JS 死循环（`while(true){}`）没有网络请求/
+        // timer 可供协同 deadline 检查，靠 QuickJS 解释器周期性回调本 handler
+        // 兜底。deadline 未设置时 `js_deadline_exceeded()` 恒 false，零影响。
+        // 触发后 eval 以 "interrupted" 错误返回，eval_safe 捕获打日志。
+        rt.set_interrupt_handler(Some(Box::new(crate::bridge::js_deadline_exceeded)));
         let base = esm_origin.unwrap_or("about:blank").to_string();
         // M66: 注册 HTTP Module Loader（ESM import 支持）。
         // base 仅用于日志/loader 上下文，不存到结构体（resolver 用 trait 参数）。
