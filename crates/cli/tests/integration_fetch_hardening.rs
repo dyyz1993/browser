@@ -364,3 +364,46 @@ document.getElementById('out').textContent = ok ? 'PLUGIN_OK' : 'PLUGIN_FAIL';
         .stdout(predicate::str::contains("PLUGIN_OK"));
     let _ = std::fs::remove_file(&path);
 }
+
+/// M83 铁证：XHR 路径的请求进 `--json` network 数组——ION 侧验收标准
+/// 「network 能显示 XHR 请求」的直接对应测试。juejin network=0 的真因是
+/// bdms 风控门卫拦在 axios 拦截器层（XHR 未到 send），不是捕获缺口。
+#[tokio::test]
+async fn fetch_xhr_requests_appear_in_json_network_array() {
+    let html = r#"<!doctype html><html><head><title>XHRNet</title></head><body>
+<div id="out">PENDING</div>
+<script>
+var xhr = new XMLHttpRequest();
+xhr.open('GET', '/api/feed', true);
+xhr.onload = function () {
+  document.getElementById('out').textContent = 'FEED_' + xhr.responseText;
+};
+xhr.send();
+</script>
+</body></html>"#;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(html))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/feed"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(r#"{"list":["a","b"]}"#),
+        )
+        .mount(&server)
+        .await;
+
+    bin()
+        .args(["fetch", &server.uri(), "--format", "text", "--json"])
+        .assert()
+        .success()
+        // XHR 驱动的内容渲染出来
+        .stdout(predicate::str::contains("FEED_"))
+        // XHR 请求记录在 network 数组（method/status/url 全有）
+        .stdout(predicate::str::contains("/api/feed"))
+        .stdout(predicate::str::contains("\"method\": \"GET\""));
+}
