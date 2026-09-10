@@ -1879,10 +1879,28 @@ fn run_scripts_quickjs(
             _ => continue,
         };
         if let Some(code) = code {
+            // M83-debug: 逐脚本 trace（BROWSER_TRACE_SCRIPTS=1 时打印 eval 起点，
+            // 定位同步 spin 的脚本——错误栈的 eval_script 名不含来源）。
+            let trace_scripts = std::env::var("BROWSER_TRACE_SCRIPTS").is_ok();
+            let label = match script {
+                ScriptEntry::Inline(_) => "inline".to_string(),
+                ScriptEntry::External(src) | ScriptEntry::ExternalModule(src) => src.clone(),
+                _ => "?".to_string(),
+            };
+            if trace_scripts {
+                eprintln!("[trace] eval start: {label}");
+            }
+            let eval_start = std::time::Instant::now();
             match engine.eval_user_script(&code) {
                 Ok(_) => executed += 1,
                 Err(e) => {
-                    eprintln!("[js-runtime] QuickJS eval failed: {e}");
+                    eprintln!("[js-runtime] QuickJS eval failed ({label}): {e}");
+                }
+            }
+            if trace_scripts {
+                let ms = eval_start.elapsed().as_millis();
+                if ms > 500 {
+                    eprintln!("[trace] eval SLOW: {label} took {ms}ms");
                 }
             }
         }
@@ -2224,7 +2242,32 @@ globalThis.Event = function Event(type, opts) {
 	window.onerror = null;
 	
 	// navigator
-window.navigator = { userAgent: 'Mozilla/5.0', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
+// M83: UA 与主请求（net::client）一致——掘金风控 SDK 会比对 navigator.userAgent
+// 完整性（旧值 'Mozilla/5.0' 残缺，一眼非浏览器）。
+window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
+// M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
+// 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
+// 空 PluginArray 语义（无插件环境，真实浏览器无插件时也是空数组）。
+function Plugin(name, filename, description) {
+    this.name = name || ''; this.filename = filename || ''; this.description = description || ''; this.length = 0;
+}
+function PluginArray() { this.length = 0; }
+PluginArray.prototype.item = function() { return null; };
+PluginArray.prototype.namedItem = function() { return null; };
+PluginArray.prototype.refresh = function() {};
+function MimeType(type, suffixes, description) {
+    this.type = type || ''; this.suffixes = suffixes || ''; this.description = description || '';
+}
+function MimeTypeArray() { this.length = 0; }
+MimeTypeArray.prototype.item = function() { return null; };
+MimeTypeArray.prototype.namedItem = function() { return null; };
+window.Plugin = Plugin;
+window.PluginArray = PluginArray;
+window.MimeType = MimeType;
+window.MimeTypeArray = MimeTypeArray;
+window.navigator.plugins = new PluginArray();
+window.navigator.mimeTypes = new MimeTypeArray();
+window.navigator.pdfViewerEnabled = false;
 window.scrollTo = window.scroll = function() {};
 window.scrollX = window.scrollY = window.pageXOffset = window.pageYOffset = 0;
 window.innerWidth = 1024;
@@ -7392,7 +7435,13 @@ window.PointerEvent = PointerEvent;
     var _unused = [_ME, _KE, _FE]; // 保留旧引用防 GC 提示（未被闭包捕获则编译期裁剪）
 })();
 
-// XMLHttpRequest（同步 fetch 版——docsify 用它加载 markdown）
+// XMLHttpRequest（底层走 __fetchSyncMethod——支持任意 method + body + 真实 status）
+// M83 重写：旧版 send 忽略 method/body（永远 GET）、setRequestHeader no-op、
+// status 硬编码 200——axios（掘金等）POST feed API 全部失效且静默。
+// 新语义：POST/PUT/DELETE 带 body + Content-Type；status 用桥返回的真实值
+// （axios 2xx resolve / 非 2xx reject 依赖它）；responseType='json' 解析。
+// 同步执行真正的网络请求（__fetchSyncMethod 阻塞），异步回调经 setTimeout(1)
+// ——事件循环（scripts.rs QuickJS el loop）会 drain。
 var __xhrSeq = 0;
 function XMLHttpRequest() {
     __xhrSeq++;
@@ -7400,33 +7449,60 @@ function XMLHttpRequest() {
     this.__async = true;
     this.readyState = 0;
     this.status = 0;
+    this.statusText = '';
     this.responseText = '';
     this.response = '';
+    this.responseType = '';
     this.__listeners = {};
+    this.__headers = {};
 }
 XMLHttpRequest.prototype.open = function(method, url, async) {
     this.__url = url;
-    this.__method = method || 'GET';
+    this.__method = (method || 'GET').toUpperCase();
     this.__async = (async !== false);
     this.readyState = 1;
 };
-XMLHttpRequest.prototype.setRequestHeader = function(key, val) {};
+XMLHttpRequest.prototype.setRequestHeader = function(key, val) {
+    this.__headers[key] = val;
+};
 XMLHttpRequest.prototype.send = function(body) {
     var self = this;
     var url = this.__url;
     var method = this.__method || 'GET';
-    // 同步（open 传 false）立即完成；异步（true 或省略）setTimeout 触发
     var sync = (this.__async === false);
     function doSend() {
-        var raw = (typeof __fetchSync === 'function') ? __fetchSync(url) : null;
-        if (typeof __log === 'function') __log('[xhr] send ' + url + ' → ' + (raw ? raw.length + ' bytes' : 'null'));
-        if (raw) {
-            self.responseText = raw;
-            self.response = raw;
-            self.status = 200;
-        } else {
-            self.status = 0;
+        var raw = null;
+        var status = 0;
+        if (typeof __fetchSyncMethod === 'function') {
+            var ct = self.__headers['Content-Type'] || self.__headers['content-type'] || null;
+            var bodyStr = (body === undefined || body === null) ? null : String(body);
+            var r = __fetchSyncMethod(url, method, bodyStr, ct);
+            if (typeof r === 'string' && r.length > 0) {
+                var nl = r.indexOf('\n');
+                if (nl > 0) {
+                    status = parseInt(r.substring(0, nl), 10) || 0;
+                    raw = r.substring(nl + 1);
+                } else {
+                    raw = r;
+                    status = 200;
+                }
+            }
+        } else if (method === 'GET' && typeof __fetchSync === 'function') {
+            // 桥降级：只有 GET 同步 fetch 可用
+            raw = __fetchSync(url);
+            status = (raw !== null && raw !== undefined) ? 200 : 0;
         }
+        if (typeof __log === 'function') {
+            __log('[xhr] ' + method + ' ' + url + ' → ' + status + ' (' + (raw ? raw.length : 0) + ' bytes)');
+        }
+        if (raw !== null && raw !== undefined) {
+            self.responseText = raw;
+            self.response = (self.responseType === 'json')
+                ? (function() { try { return JSON.parse(raw); } catch (e) { return null; } })()
+                : raw;
+        }
+        self.status = status;
+        self.statusText = (status >= 200 && status < 300) ? 'OK' : String(status);
         self.readyState = 4;
         if (typeof self.onreadystatechange === 'function') {
             try { self.onreadystatechange.call(self); } catch(e) {
@@ -7777,7 +7853,8 @@ window.fetch = function(input, options) {
         'XMLHttpRequest', 'FormData', 'Headers', 'Request', 'Response', 'FetchController',
         'StorageEvent', 'PopStateEvent', 'HashChangeEvent', 'ProgressEvent', 'ErrorEvent',
         'HTMLElement', 'Image', 'Option', 'WebSocket', 'MessageChannel', 'MessagePort',
-        'TextEvent', 'File', 'Blob', 'URL', 'URLSearchParams', 'DOMParser'];
+        'TextEvent', 'File', 'Blob', 'URL', 'URLSearchParams', 'DOMParser',
+        'Plugin', 'PluginArray', 'MimeType', 'MimeTypeArray'];
     for (var i = 0; i < ifaces.length; i++) {
         var n = ifaces[i], v;
         try { v = window[n]; } catch (e) { continue; }

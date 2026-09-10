@@ -804,7 +804,11 @@ where
                 // 后续请求复用 TLS 连接（省 ~1.5s/次握手）。
                 let client = browser_net::HttpClient::new();
                 for req in rx {
-                    let result = rt.block_on(client.request_full_str(
+                    // M83: request_full_raw（浏览器语义）——非 2xx 也返回
+                    // status+body（XHR/fetch 规范：404 正常 onload/resolve，
+                    // 只有网络错误才失败）。旧 request_full_str 对 4xx/5xx
+                    // 抛 BadStatus 丢 body → XHR status=0 / fetch 假 reject。
+                    let result = rt.block_on(client.request_full_raw(
                         &req.url,
                         &req.method,
                         req.body.as_deref(),

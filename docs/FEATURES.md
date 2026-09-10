@@ -198,4 +198,5 @@
 3. **GUI 需要显示器**：`open` 子命令在 headless/SSH 无 X 转发时会失败。用 `screenshot` 代替或使用 CDP server 模式。
 4. **真实图像渲染**：GUI 只显示 `[IMG: src]` 占位符（CLI 用 image-ascii），CDP captureScreenshot 生成 PNG base64（M44）。
 5. **JS 对象属性**：`length`/`state`/`href` 是方法形式（`localStorage.length()`），因为 boa getter API 复杂。爬虫 JS 兼容时需注意。
-6. **JS 引擎兼容性**：boa 0.21 支持 ES6+（async/await/Proxy/Map/Set/Symbol 等全部入库测试通过）。已知局限：①某些站点 JS 触发 boa 内部 panic（fetch 命令有 catch_unwind 兜底）；②纯 CSR 无 SSR 兜底的站点需真 Chrome。详见 [JS-COVERAGE.md](./JS-COVERAGE.md)。
+6. **风控门卫站点（juejin 等，M83 实测标注）**：掘金首页 feed 是纯 CSR，且所有 feed API 套在字节 bdms 风控 SDK 后面（请求需风控签名/环境检测）。引擎侧已补齐 XHR POST body/真实 status、Plugin/MimeType 接口、完整 UA（M83），管线不挂死（M82 硬超时），但**不逆向风控签名**（宪法 G4：反爬不重点处理）——此类站返回导航骨架 + 超时警告，属已知边界，需真浏览器或官方 API。
+7. **JS 引擎兼容性**：boa 0.21 支持 ES6+（async/await/Proxy/Map/Set/Symbol 等全部入库测试通过）。已知局限：①某些站点 JS 触发 boa 内部 panic（fetch 命令有 catch_unwind 兜底）；②纯 CSR 无 SSR 兜底的站点需真 Chrome。详见 [JS-COVERAGE.md](./JS-COVERAGE.md)。

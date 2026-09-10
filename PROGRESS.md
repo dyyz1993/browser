@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M82**（fetch 工具健壮性：全局硬超时/反爬警告/data-URI 去噪等 8 项） |
+| HEAD | **M83**（CSR 靶点攻坚：XHR POST 全链路/Plugin 接口/juejin 根因确诊） |
 | 总 commits | ~266 |
-| 测试 | 995 pass + 18 e2e, 0 clippy warnings |
+| 测试 | 996 pass + 18 e2e, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **QuickJS（默认，9.4M）**；boa 改为 `--features boa` 可选（17M，纯 CSR 站天花板，保留备用） |
@@ -28,6 +28,40 @@
 ---
 
 ## 最近变更（倒序）
+
+### M83 —— CSR 靶点攻坚：XHR 全链路修复 + juejin 根因确诊
+
+**背景**：ION 集成侧 CSR 覆盖验证——react.dev ✅（17KB 完整），juejin ❌
+（只有导航骨架 404B，feed 列表缺失，且 network=0 无法定位）。本轮确诊+修复。
+
+**juejin 根因三连（全部实锤，证据链完整）**：
+1. **`PluginArray is not defined`**：掘金风控 SDK（rc-client-security sdk-glue）
+   / core-js DOM collections 表环境检测裸引用断链 → 已补
+   Plugin/PluginArray/MimeType/MimeTypeArray 构造器 + navigator.plugins/
+   mimeTypes（空数组语义）+ **完整 Chrome UA**（旧值 'Mozilla/5.0' 一眼假）。
+   修复后 14→15 个脚本执行。
+2. **spin 44.9s**：sdk-glue × inline 配置 × f955c74 业务入口的最小三脚本组合
+   （本地复现）——glue 拦截 feed API（interceptPathList 含
+   /recommend_api/v1/article/recommend_cate_feed）等 bdms.js 动态加载，
+   regenerator 重试链在 QuickJS 同步死循环烧满预算。sample 实锤：热点全在
+   QuickJS `_CallInternal`（JS 层死循环，非 Rust）。M82 deadline 到即 interrupt
+   短时冒泡退出（scripts:44987ms ≈ 45000ms 预算）——**硬超时兜底行为正确**。
+3. **bdms 风控门卫**：feed API 需风控签名——宪法 G4 排除项，标注已知局限
+   （FEATURES.md 第 6 条），不逆向。掘金 SSR 无 feed 数据（可见文本仅 370B），
+   此站终态=骨架+警告。
+
+**引擎实修（普适价值，大量 axios 站受益）**：
+- **XHR shim 重写**：send 透传 method/body/setRequestHeader（旧版永远 GET
+  无 body）；status 用真实值（旧版硬编码 200，axios 对 404 假成功）；
+  responseType='json' 解析；统一走 `__fetchSyncMethod`。
+- **net worker 换 `request_full_raw`**（浏览器语义）：非 2xx 也返回
+  status+body——XHR/fetch 规范：404 正常 onload/resolve（fetch 假 reject
+  一并修复）。
+- **逐脚本 trace**：BROWSER_TRACE_SCRIPTS=1 时打印 eval 起点 + SLOW>500ms
+  警告 + 失败带 URL（诊断基建，juejin 定位就靠它）。
+
+**验证**：react.dev 回归 17KB ✓；新增 3 入库测试（XHR POST 全链路 / 404
+status 透传 / PluginArray 接口）全绿；workspace 996 passed / 0 failed。
 
 ### M82 —— `browser fetch` 工具健壮性：真实站点扫描 8 项问题全修复
 
@@ -2553,6 +2587,12 @@ P0-2 反爬壳页 warnings（--json 数组 + stderr）；P0-3 data: URI 图默�
 selector 0 匹配警告；P1-6 --json 尊重 --format；P2-7 确定性错误不盲重；
 P2-8 network 数组设计边界固化（只记 JS fetch/XHR）。995 tests 全绿。
 同 commit 前置：M81.E1 gui 改可选 feature（f9d3848）。
+
+**M83 —— CSR 靶点攻坚**：juejin 根因三连确诊（PluginArray 断链→已补；
+glue×入口 spin 44.9s→M82 兜底正确；bdms 风控签名→宪法排除，标已知局限）。
+引擎实修：XHR POST 全链路（method/body/headers/真实 status）+ net worker
+request_full_raw（非 2xx 带 body，fetch 假 reject 一并修）+ 逐脚本 trace。
+react.dev 回归 17KB ✓，996 tests 全绿。
 
 ## 文档维护规则
 

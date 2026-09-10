@@ -260,3 +260,107 @@ fetch('/api/data').then(function (r) { return r.text(); }).then(function (t) {
         .stdout(predicate::str::contains("/api/data"))
         .stdout(predicate::str::contains("\"network\""));
 }
+
+/// M83: XHR POST 全链路——method/body/setRequestHeader 透传 + 真实 status。
+/// 背景：掘金（axios/XHR）feed 全挂——旧 XHR shim 忽略 body（永远 GET）、
+/// status 硬编码 200，POST API 全部静默失败。
+#[tokio::test]
+async fn fetch_xhr_post_method_body_and_real_status() {
+    let html = r#"<!doctype html><html><head><title>XHR</title></head><body>
+<div id="out">PENDING</div>
+<script>
+var xhr = new XMLHttpRequest();
+xhr.open('POST', '/api/echo', true);
+xhr.setRequestHeader('Content-Type', 'application/json');
+xhr.onreadystatechange = function () {
+  if (xhr.readyState === 4) {
+    document.getElementById('out').textContent =
+      'XHR_' + xhr.status + '_' + xhr.responseText;
+  }
+};
+xhr.send(JSON.stringify({name: 'juejin'}));
+</script>
+</body></html>"#;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(html))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/echo"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(r#"{"ok":true,"got":"juejin"}"#),
+        )
+        .mount(&server)
+        .await;
+
+    bin()
+        .args(["fetch", &server.uri(), "--format", "text"])
+        .assert()
+        .success()
+        // 真实 status（非硬编码）+ 响应体经 XHR 返回
+        .stdout(predicate::str::contains("XHR_200_"))
+        .stdout(predicate::str::contains("juejin"));
+}
+
+/// M83: XHR 非 2xx 的 status 必须透传（axios 依赖它 reject——旧 shim 永远 200）。
+#[tokio::test]
+async fn fetch_xhr_404_status_passthrough() {
+    let html = r#"<!doctype html><html><head><title>XHR404</title></head><body>
+<div id="out">PENDING</div>
+<script>
+var xhr = new XMLHttpRequest();
+xhr.open('GET', '/api/missing', true);
+xhr.onload = function () {
+  document.getElementById('out').textContent = 'STATUS_' + xhr.status;
+};
+xhr.send();
+</script>
+</body></html>"#;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(html))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/missing"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("nope"))
+        .mount(&server)
+        .await;
+
+    bin()
+        .args(["fetch", &server.uri(), "--format", "text"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("STATUS_404"));
+}
+
+/// M83: Plugin/MimeType 标准接口 + navigator.plugins——掘金风控 SDK / core-js
+/// DOM collections 表裸引用 PluginArray 曾 ReferenceError 断链（juejin 根因①）。
+#[test]
+fn render_script_plugin_array_interfaces() {
+    let html = r#"<!DOCTYPE html><html><body>
+<div id="out">FAIL</div>
+<script>
+var ok = typeof PluginArray === 'function'
+  && typeof Plugin === 'function'
+  && typeof MimeTypeArray === 'function'
+  && typeof MimeType === 'function'
+  && navigator.plugins instanceof PluginArray
+  && navigator.plugins.length === 0
+  && navigator.mimeTypes instanceof MimeTypeArray;
+document.getElementById('out').textContent = ok ? 'PLUGIN_OK' : 'PLUGIN_FAIL';
+</script></body></html>"#;
+    let path = std::env::temp_dir().join("browser_test_plugin_array.html");
+    std::fs::write(&path, html).expect("write fixture");
+    bin()
+        .args(["render-script", path.to_str().unwrap(), "--width", "120"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PLUGIN_OK"));
+    let _ = std::fs::remove_file(&path);
+}
