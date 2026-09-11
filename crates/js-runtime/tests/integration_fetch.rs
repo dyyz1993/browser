@@ -112,22 +112,26 @@ fetch('{base}/api/json').then(function(res) {{
 async fn fetch_error_url_rejects_promise() {
     let server = MockServer::start().await;
     let base = server.uri();
-    // 不注册任何 mock → __fetchSync 返回 ""（连接失败）→ fetch reject
+    // 连接失败（保留端口未监听）→ fetch 规范：网络错误 reject TypeError。
+    // 注意不能用 wiremock 未匹配路径——那是 404 响应，M83 起按浏览器语义
+    // 正常 resolve（res.ok=false），reject 的只有网络层错误。
+    let dead = "http://127.0.0.1:1/nonexistent";
 
     let html = format!(
         r#"<html><body><p>init</p>
 <script>
-fetch('{base}/nonexistent').then(function(res) {{
+fetch('{dead}').then(function(res) {{
     __setBody('SHOULD_NOT_RESOLVE');
 }}).catch(function(err) {{
     __setBody('CAUGHT:' + (err instanceof TypeError ? 'TypeError' : 'Other'));
 }});
 </script>
 </body></html>"#,
-        base = base
+        dead = dead
     );
 
     let tree = parse_html(&html);
+    let _ = base;
     let (shared, _) = run_scripts_with_base(tree, Some(base));
     let body = body_text_content(&shared.borrow());
     assert!(

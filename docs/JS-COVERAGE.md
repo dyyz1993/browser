@@ -142,6 +142,7 @@
 | XMLHttpRequest.getResponseHeader | ✅ M62（返回 null，docsify 读 last-modified 做 cache） | bark.day.app | QUICKJS_XHR_SHIM |
 | XMLHttpRequest.getAllResponseHeaders | ✅ M62（返回 ''） | bark.day.app | QUICKJS_XHR_SHIM |
 | WebSocket | ✅ | integration_ws | bridge.rs ws_* + engine_quickjs event loop |
+| **Web Worker** | ✅ M93（同步子 Context：postMessage → 独立 Runtime 执行 worker 源码 → drain microtask → outbox JSON 回投 onmessage；Anubis PoW 实测通过。限制：无并行/JSON 近似克隆/无 importScripts） | integration_worker_nav | QUICKJS_WORKER_SHIM + engine_quickjs worker_run |
 | setRequestHeader(XHR) | ⚠️ no-op | 爬虫场景 headers 不关键 | QUICKJS_XHR_SHIM |
 
 ### 全局函数/构造器
@@ -164,6 +165,8 @@
 | **history 栈 + state 恢复** | ✅ M78.17（条目存 {url,state}，back/forward/go 恢复 state；⚠️ popstate 事件尚缺 .state 属性——M78.131 待修） | WPT combination_history | QUICKJS_GLOBAL_SHIM |
 | **document.createHTMLDocument** | ✅ M78.126（子文档 createElement/createTextNode/createComment 全游离语义 + 挂 __ownerDoc；旧版元素误挂主文档 body） | WPT Node-removeChild synthetic | QUICKJS_DOCUMENT_SHIM |
 | location.* | ✅ | | QUICKJS_GLOBAL_SHIM |
+| **location.href/assign/replace 文档导航** | ✅ M93（非 hash 变化且非 pushState → PENDING_NAVIGATION 队列 → JS 阶段结束逐跳 fetch（3xx 手动跟随+每跳 Set-Cookie 进 jar）→ 换树+全新引擎重跑，≤5 跳。Anubis pass-challenge 链实测） | integration_worker_nav | scripts.rs run_scripts_quickjs 导航循环 + bridge.rs fetch_navigation_document |
+| **navigator.cookieEnabled** | ✅ M93（QuickJS shim 此前缺失，Anubis 功能门禁拒绝） | integration_worker_nav | QUICKJS_GLOBAL_SHIM |
 | **location.protocol setter 校验** | ✅ M78.135（scheme 语法 `^[a-zA-Z][a-zA-Z0-9+.-]*$`，非法抛 SyntaxError DOMException） | WPT location-protocol-setter 48 断言 | QUICKJS_GLOBAL_SHIM |
 | **location unforgeable own 属性** | ✅ M78.132（valueOf / Symbol.toPrimitive 为 own {writable:false, configurable:false}）；assign/replace 空 host 抛 SyntaxError | WPT Location valueOf/toPrimitive | QUICKJS_GLOBAL_SHIM |
 | setTimeout/clearTimeout | ✅ | integration_settimeout (6) | QUICKJS_GLOBAL_SHIM + bridge.rs TIMER_WHEEL |
@@ -197,6 +200,7 @@
 | API | 状态 | 备注 |
 |------|------|------|
 | URL/URLSearchParams | ✅ | compat_shim |
+| **URL.searchParams 回写** | ✅ M93（set/append/delete/sort 后同步 URL.search/href（WHATWG update steps 近似）——此前构造时快照，query 全丢，Anubis v() 构造 pass-challenge URL 直接无效） | integration_worker_nav | QUICKJS_GLOBAL_SHIM __uspSyncOwner |
 | structuredClone | ✅ | integration_js_features | |
 | performance.now | ✅ | |
 | requestAnimationFrame | ✅ | compat_shim | |

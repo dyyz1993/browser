@@ -779,6 +779,8 @@ struct NetRequest {
     body: Option<String>,
     content_type: Option<String>,
     cookie_header: Option<String>,
+    /// M93: true = 用 no-redirect 客户端（JS 导航闭环逐跳跟 3xx 用）。
+    no_redirect: bool,
     reply: std::sync::mpsc::Sender<NetResult>,
 }
 
@@ -803,12 +805,15 @@ where
                 // M65: HttpClient 复用——reqwest 内部有连接池，同 host 的
                 // 后续请求复用 TLS 连接（省 ~1.5s/次握手）。
                 let client = browser_net::HttpClient::new();
+                // M93: 导航闭环专用——不自动跟 redirect（cookie 逐跳进 jar）。
+                let client_nr = browser_net::HttpClient::new_no_redirect();
                 for req in rx {
                     // M83: request_full_raw（浏览器语义）——非 2xx 也返回
                     // status+body（XHR/fetch 规范：404 正常 onload/resolve，
                     // 只有网络错误才失败）。旧 request_full_str 对 4xx/5xx
                     // 抛 BadStatus 丢 body → XHR status=0 / fetch 假 reject。
-                    let result = rt.block_on(client.request_full_raw(
+                    let picked = if req.no_redirect { &client_nr } else { &client };
+                    let result = rt.block_on(picked.request_full_raw(
                         &req.url,
                         &req.method,
                         req.body.as_deref(),
@@ -844,6 +849,20 @@ fn fetch_sync_with_method(
     body: Option<&str>,
     content_type: Option<&str>,
 ) -> Result<(u16, String), String> {
+    fetch_sync_with_method_opts(url, method, body, content_type, false)
+        .map(|(status, body, _headers)| (status, body))
+}
+
+/// M93: [`fetch_sync_with_method`] 的完整版——返回响应 headers，可选
+/// no-redirect（JS 导航闭环逐跳跟 3xx，每跳 Set-Cookie 写 jar）。
+#[allow(clippy::type_complexity)]
+fn fetch_sync_with_method_opts(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+    content_type: Option<&str>,
+    no_redirect: bool,
+) -> Result<(u16, String, Vec<(String, String)>), String> {
     // M18.1: 标记网络请求进行中（networkidle 信号源）。
     inc_pending_requests();
     struct RequestGuard;
@@ -875,6 +894,13 @@ fn fetch_sync_with_method(
     });
     // M65: 通过持久化网络线程复用 HttpClient 连接池（省 TLS 握手）。
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let trace_nav = std::env::var("BROWSER_TRACE_NAV").is_ok();
+    if trace_nav {
+        eprintln!(
+            "[nav-trace] >> {method} {url} cookie=[{}]",
+            cookie_header.as_deref().unwrap_or("-")
+        );
+    }
     with_net_worker(|tx| {
         let _ = tx.send(NetRequest {
             url: url.clone(),
@@ -882,6 +908,7 @@ fn fetch_sync_with_method(
             body: body.clone(),
             content_type: content_type.clone(),
             cookie_header: cookie_header.clone(),
+            no_redirect,
             reply: reply_tx,
         });
     });
@@ -913,7 +940,64 @@ fn fetch_sync_with_method(
             }
         });
     }
-    Ok((status, body))
+    Ok((status, body, headers))
+}
+
+/// M93: JS 触发的文档导航（`location.href = X` / `assign` / `replace`）后，
+/// 重新 fetch 目标文档。**必须在 TreeGuard 存活期间调用**（cookie slot
+/// 在 guard drop 后被清空，Set-Cookie 会无处可写）。逐跳手动跟 3xx：
+/// 每跳的 Set-Cookie 先进 jar，再请求下一跳（Anubis pass-challenge 链：
+/// Set-Cookie + 302 回原页，自动跟跳会把 cookie 丢在中间跳）。
+pub(crate) fn fetch_navigation_document(url: &str) -> Result<String, String> {
+    let trace = std::env::var("BROWSER_TRACE_NAV").is_ok();
+    let mut current = url.to_string();
+    for _hop in 0..10 {
+        let (status, body, headers) =
+            fetch_sync_with_method_opts(&current, "GET", None, None, true)?;
+        if trace {
+            let setc = headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            let loc = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("-");
+            eprintln!(
+                "[nav-trace] GET {current} -> {status} loc={loc} set-cookie=[{setc}] body_len={}",
+                body.len()
+            );
+        }
+        if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            let location = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+                .map(|(_, v)| v.clone());
+            if let Some(loc) = location {
+                if !loc.is_empty() {
+                    // Location 可能是相对路径（/foo）——相对当前 URL 解析。
+                    let next = if url::Url::parse(&loc).is_ok() {
+                        loc
+                    } else {
+                        url::Url::parse(&current)
+                            .and_then(|base| base.join(&loc))
+                            .map(|u| u.to_string())
+                            .map_err(|e| format!("bad redirect Location {loc:?}: {e}"))?
+                    };
+                    current = next;
+                    continue;
+                }
+            }
+            // 3xx 无 Location → 按浏览器语义渲染当前 body。
+            return Ok(body);
+        }
+        // 2xx / 4xx / 5xx：返回 body 让上层像浏览器一样渲染（含错误页）。
+        return Ok(body);
+    }
+    Err("navigation: too many redirects (>10)".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -2035,6 +2119,48 @@ pub fn drain_dynamic_scripts() -> Vec<String> {
     PENDING_DYNAMIC_SCRIPTS.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
+// ===== M93: JS 文档导航队列 =====
+//
+// `location.href = X` / `location.assign(X)` / `location.replace(X)` 是
+// **文档级导航**（浏览器会整个重新加载文档），区别于 pushState/replaceState
+// （只改 JS 路由状态，不重新请求）。QuickJS shim 的 `__setLocHref` 在检测到
+// 非 hash 变化且非 history API 驱动（`__histApiNav` 旗标）时，把目标 URL 记到
+// 这里。JS 阶段（脚本 + event loop）结束后，`run_scripts_quickjs` 的导航循环
+// 取出它，用 [`fetch_navigation_document`] 重新 fetch（cookie jar 逐跳传递），
+// 换掉 DOM 树，重建引擎跑下一页。真实场景：Anubis PoW 挑战解完
+// `location.replace(pass-challenge?...)` → Set-Cookie + 302 → 原页面真身。
+//
+// 放顶层（非 qjs_bridge mod 内），不受 quickjs feature 门控。TreeGuard 不清理
+// 它——由 `reset_pending_navigation()`（每页开始时）和 `take_pending_navigation()`
+// （JS 阶段结束时）显式管理生命周期。
+thread_local! {
+    static PENDING_NAVIGATION: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 记录一次待处理的文档导航（`__navRecord` bridge 调用；仅 http/https）。
+/// 多次导航以最后一次为准（浏览器语义：后导航覆盖前导航）。
+pub fn record_pending_navigation(url: &str) {
+    // 仅记录可 fetch 的 scheme——javascript:/about:/blob: 导航无文档可取。
+    match url::Url::parse(url) {
+        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {
+            PENDING_NAVIGATION.with(|slot| *slot.borrow_mut() = Some(url.to_string()));
+        }
+        _ => {}
+    }
+}
+
+/// 每页 JS 阶段开始前清空（防止上一页/上一次 run 的残留导航串页）。
+pub fn reset_pending_navigation() {
+    PENDING_NAVIGATION.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// 取出待处理的文档导航 URL（取出即清空）。
+#[must_use]
+pub fn take_pending_navigation() -> Option<String> {
+    PENDING_NAVIGATION.with(|slot| slot.borrow_mut().take())
+}
+
 fn inc_pending_requests() {
     PENDING_REQUESTS.with(|slot| slot.set(slot.get().saturating_add(1)));
 }
@@ -3036,29 +3162,45 @@ pub mod qjs_bridge {
         with_tree(|t| append_body_text(t, &html));
     }
 
+    /// M93-fix: 状态感知的 GET——Ok((status, body))，网络错误 None。
+    /// 供 fetch_set_body/fetch_append_body 区分 2xx（写 body）与非 2xx（打日志）。
+    fn fetch_status_body(url: &str) -> Option<(u16, String)> {
+        super::fetch_sync_with_method(url, "GET", None, None).ok()
+    }
+
     /// fetchSetBody(url) —— 同步 fetch url，成功后替换 `<body>` 内容。
     /// 镜像 boa 的 `__fetchSetBody`（bridge.rs fetch_set_body）。
+    /// M93-fix: 恢复非 2xx 的 `[js-fetch]` 日志——M83 的 request_full_raw
+    /// 把 4xx/5xx 变成 Ok(status,body) 后，这里静默成功不再打日志，
+    /// integration_spa 的 partial-failure 断言（500 要被记录）丢失。
     pub fn fetch_set_body(url: String) {
         if url.is_empty() {
             return;
         }
         let resolved = resolve_url(&url);
-        match super::fetch_sync(&resolved) {
-            Ok(text) => with_tree(|t| set_body_inner_html(t, &text)),
-            Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+        match fetch_status_body(&resolved) {
+            Some((status, text)) if (200..300).contains(&status) => {
+                with_tree(|t| set_body_inner_html(t, &text));
+            }
+            Some((status, _)) => eprintln!("[js-fetch] {url} failed: HTTP {status}"),
+            None => eprintln!("[js-fetch] {url} failed: network error"),
         }
     }
 
     /// fetchAppendBody(url) —— 同步 fetch url，成功后把文本追加到 `<body>`。
     /// 镜像 boa 的 `__fetchAppendBody`（bridge.rs fetch_append_body）。
+    /// M93-fix: 同 fetch_set_body——非 2xx 打日志且不追加（partial-success 语义）。
     pub fn fetch_append_body(url: String) {
         if url.is_empty() {
             return;
         }
         let resolved = resolve_url(&url);
-        match super::fetch_sync(&resolved) {
-            Ok(text) => with_tree(|t| append_body_text(t, &text)),
-            Err(e) => eprintln!("[js-fetch] {url} failed: {e}"),
+        match fetch_status_body(&resolved) {
+            Some((status, text)) if (200..300).contains(&status) => {
+                with_tree(|t| append_body_text(t, &text));
+            }
+            Some((status, _)) => eprintln!("[js-fetch] {url} failed: HTTP {status}"),
+            None => eprintln!("[js-fetch] {url} failed: network error"),
         }
     }
 

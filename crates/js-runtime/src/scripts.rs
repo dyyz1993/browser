@@ -1394,18 +1394,92 @@ fn fire_dyn_pending(engine: &mut crate::engine_quickjs::QuickJsEngine, raw_src: 
     let _ = engine.eval_safe(&js);
 }
 
-/// M66-B: QuickJS 专用执行路径。
+/// M93: QuickJS 主入口 = **文档导航循环**。
+///
+/// 每跳流程：创建独立引擎（每页全新 JS 全局空间——导航即销毁旧文档 JS
+/// 环境，`window.__anubisBooted` 之类的全局不得泄漏到下一页）→ 单页执行
+/// （[`run_page_quickjs`]）→ 检查文档导航。若 JS 触发了 `location.href = X`
+/// / `assign` / `replace`（非 hash、非 pushState），单页执行已经用
+/// [`bridge::fetch_navigation_document`] 把目标文档取回（cookie jar 逐跳
+/// 传递），这里换 DOM 树、更新 base_url，进入下一跳。上限 [`MAX_NAV_HOPS`]
+/// 跳防导航环。
+///
+/// 真实场景：Anubis PoW 挑战页解完 `location.replace(pass-challenge?...)`
+/// → Set-Cookie + 302 回原页 → 真身文档（Nitter SSR 时间线）。
+#[cfg(feature = "quickjs")]
+fn run_scripts_quickjs(
+    shared: crate::bridge::SharedTree,
+    mut base_url: Option<String>,
+    engine_kind: &crate::engine::EngineKind,
+    post_exprs: &[String],
+) -> (crate::bridge::SharedTree, usize) {
+    let mut executed_total = 0usize;
+    for hop in 0..=MAX_NAV_HOPS {
+        // M64/M93: 每页预扫描 ESM module 脚本（决定引擎是否带 HttpModuleLoader）。
+        let has_module = {
+            let borrowed = shared.borrow();
+            extract_script_entries(&borrowed).iter().any(|e| {
+                matches!(
+                    e,
+                    ScriptEntry::ExternalModule(_) | ScriptEntry::InlineModule(_)
+                )
+            })
+        };
+        let origin = base_url
+            .as_deref()
+            .map(url_origin)
+            .unwrap_or_else(|| "about:blank".to_string());
+        let esm_origin = if has_module {
+            Some(origin.as_str())
+        } else {
+            None
+        };
+        let engine = engine_kind.create(esm_origin);
+        let (executed, next) =
+            run_page_quickjs(shared.clone(), base_url.clone(), engine, post_exprs);
+        executed_total += executed;
+        match next {
+            Some((url, html)) if hop < MAX_NAV_HOPS => {
+                eprintln!(
+                    "[nav] M93 document navigation hop {}/{}: {url}",
+                    hop + 1,
+                    MAX_NAV_HOPS
+                );
+                *shared.borrow_mut() = browser_html_parser::parse(&html);
+                base_url = Some(url);
+            }
+            Some((url, _)) => {
+                eprintln!(
+                    "[nav] M93 max navigation hops ({MAX_NAV_HOPS}) reached, staying on {url}"
+                );
+                break;
+            }
+            None => break,
+        }
+    }
+    (shared, executed_total)
+}
+
+/// M93: 文档导航循环跳数上限。5 跳足够覆盖 挑战页→pass-challenge→真身
+/// 以及一层短跳转链；超出按导航环处理（保留当前 DOM 返回）。
+#[cfg(feature = "quickjs")]
+const MAX_NAV_HOPS: usize = 5;
+
+/// M93: 单页 QuickJS 执行（[`run_scripts_quickjs`] 导航循环的一跳）。
 /// 安装 bridge（已在 engine 内部完成）+ JS shim + eval 脚本 + event loop。
 /// M81: `post_exprs` —— 页面脚本 + 事件循环跑完后在同一会话内按序 eval 的
 /// 表达式（`--click` 合成点击用；addEventListener 监听器注册在会话内
 /// `__elCache` 缓存的元素包装上，引擎 drop 即失效，点击必须留在本会话）。
+/// 返回 (executed 数, 待跟进的文档导航 (url, html))——None = 本页无导航。
 #[cfg(feature = "quickjs")]
-fn run_scripts_quickjs(
+fn run_page_quickjs(
     shared: crate::bridge::SharedTree,
     base_url: Option<String>,
     mut engine_box: Box<dyn crate::engine::JsEngine>,
     post_exprs: &[String],
-) -> (crate::bridge::SharedTree, usize) {
+) -> (usize, Option<(String, String)>) {
+    // M93: 每页开始清空导航队列（防上一页/上一次 run 的残留串页）。
+    crate::bridge::reset_pending_navigation();
     // downcast 到 QuickJsEngineWrapper（需要 &mut）
     let wrapper: &mut crate::engine_quickjs::QuickJsEngineWrapper = (*engine_box)
         .as_any_mut()
@@ -1487,6 +1561,7 @@ fn run_scripts_quickjs(
         var btoa = globalThis.btoa;
         var crypto = globalThis.crypto;
         var self = globalThis;
+        var Worker = globalThis.Worker;
         "#,
     );
 
@@ -2122,7 +2197,19 @@ fn run_scripts_quickjs(
     engine.run_jobs();
     engine.gc();
     eprintln!("[serve] event_loop: {}ms", el_start.elapsed().as_millis());
-    (shared, executed)
+    // M93: JS 阶段结束——在 TreeGuard 存活期间（cookie slot 可写）取出文档
+    // 导航并 fetch 新文档（逐跳跟 3xx，每跳 Set-Cookie 先进 jar 再请求下一跳）。
+    // 返回 (url, html) 给上层导航循环换树重跑。
+    let next = crate::bridge::take_pending_navigation().and_then(|url| {
+        match crate::bridge::fetch_navigation_document(&url) {
+            Ok(html) => Some((url, html)),
+            Err(e) => {
+                eprintln!("[nav] fetch navigation target failed: {e} — keeping current DOM");
+                None
+            }
+        }
+    });
+    (executed, next)
 }
 
 /// M81: 单次合成点击后的事件循环泵上限（ms）。点击回调排 setTimeout/fetch
@@ -2199,6 +2286,9 @@ fn get_all_shim_js(_base_url: &Option<String>) -> Vec<(&'static str, String)> {
         ("element", QUICKJS_ELEMENT_SHIM.to_string()),
         ("document", QUICKJS_DOCUMENT_SHIM.to_string()),
         ("xhr", QUICKJS_XHR_SHIM.to_string()),
+        // M93: Web Worker（同步子 Context）——Anubis PoW 等依赖 Worker 的
+        // 挑战/计算才能闭环。放最后：依赖 globals 段的 JSON/全局设施。
+        ("worker", QUICKJS_WORKER_SHIM.to_string()),
     ]
 }
 
@@ -2244,7 +2334,7 @@ globalThis.Event = function Event(type, opts) {
 	// navigator
 // M83: UA 与主请求（net::client）一致——掘金风控 SDK 会比对 navigator.userAgent
 // 完整性（旧值 'Mozilla/5.0' 残缺，一眼非浏览器）。
-window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'] };
+window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'], cookieEnabled: true };
 // M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
 // 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
 // 空 PluginArray 语义（无插件环境，真实浏览器无插件时也是空数组）。
@@ -2584,6 +2674,15 @@ function __setLocHref(u) {
     var oldHash = '';
     try { oldHash = window.location ? (window.location.hash || '') : ''; } catch (e) {}
     var oldNoHash = __locHref.split('#')[0];
+    // M93: 文档级导航记录——非 hash 变化 && 非 history API 驱动（pushState/
+    // replaceState/back/forward 都设 __histApiNav 旗标）= 浏览器会重新加载
+    // 文档的导航（href 赋值 / assign / replace）。记到 Rust 侧队列，JS 阶段
+    // 结束后由导航循环重新 fetch + 换树 + 重跑脚本（Anubis pass-challenge：
+    // 解完 PoW 后 location.replace(Set-Cookie + 302 → 原页面真身)）。
+    if (window.__histApiNav !== true && resolved.split('#')[0] !== oldNoHash
+        && typeof __navRecord === 'function') {
+        try { __navRecord(resolved); } catch (eNav) {}
+    }
     __locHref = resolved;
     window.location = __parseLoc(resolved);
     var newHash = window.location.hash || '';
@@ -3421,6 +3520,11 @@ window.URL = function(input, base) {
         this.href = input.split('?')[0] + this.search + (input.indexOf('#') >= 0 ? '#' + input.split('#')[1] : '');
     }
     this.searchParams = new URLSearchParams(q || '');
+    // M93: searchParams 变更回写锚点——set/append/delete/sort 后同步
+    // URL.search/href（WHATWG 语义）。此前是构造时快照：Anubis 用
+    // `v()` = new URL(...) + searchParams.set(...) 构造 pass-challenge
+    // GET URL，query 全丢 → 服务端当无效请求打回挑战页。
+    this.searchParams.__owner = this;
     this.hash = input.indexOf('#') >= 0 ? '#' + input.split('#')[1] : '';
     this.origin = this.protocol + '//' + this.host;
     this.toString = function() { return this.href; };
@@ -3443,6 +3547,20 @@ window.URL.createObjectURL = function(obj) {
 };
 window.URL.revokeObjectURL = function(url) { delete __blobUrls[url]; };
 
+// M93: searchParams 变更回写所属 URL（WHATWG update steps 近似）——
+// set/append/delete/sort 后同步 owner.search/href。仅当该 URLSearchParams
+// 被 URL 构造器挂了 __owner 时生效（独立使用的实例不受影响）。
+function __uspSyncOwner(sp) {
+    var o = sp.__owner;
+    if (!o) return;
+    var qs;
+    try { qs = sp.toString(); } catch (e) { return; }
+    o.search = qs ? '?' + qs : '';
+    var h = String(o.href || '');
+    var noQ = h.split('?')[0].split('#')[0];
+    var hash = (h.indexOf('#') >= 0) ? '#' + h.split('#')[1] : '';
+    o.href = noQ + o.search + hash;
+}
 window.URLSearchParams = function(init) {
     this.__entries = [];
     var self = this;
@@ -3485,6 +3603,7 @@ window.URLSearchParams = function(init) {
 };
 window.URLSearchParams.prototype.append = function(k, v) {
     this.__entries.push([String(k), String(v)]);
+    __uspSyncOwner(this);
 };
 window.URLSearchParams.prototype['delete'] = function(k) {
     k = String(k);
@@ -3493,6 +3612,7 @@ window.URLSearchParams.prototype['delete'] = function(k) {
         if (this.__entries[i][0] !== k) out.push(this.__entries[i]);
     }
     this.__entries = out;
+    __uspSyncOwner(this);
 };
 window.URLSearchParams.prototype.get = function(k) {
     k = String(k);
@@ -3529,11 +3649,13 @@ window.URLSearchParams.prototype.set = function(k, v) {
     }
     if (!found) out.push([k, v]);
     this.__entries = out;
+    __uspSyncOwner(this);
 };
 window.URLSearchParams.prototype.sort = function() {
     this.__entries.sort(function(a, b) {
         return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
     });
+    __uspSyncOwner(this);
 };
 window.URLSearchParams.prototype.forEach = function(cb, thisArg) {
     for (var i = 0; i < this.__entries.length; i++) {
@@ -7871,6 +7993,79 @@ window.fetch = function(input, options) {
 undefined;
 "#;
 
+/// M93: Web Worker shim（爬虫够用子集）。
+///
+/// 真实 Worker 是独立线程 + 结构化克隆消息。爬虫场景实现为**同步子
+/// Context**：`postMessage(msg)` 调用即触发 `__workerRun(url, json)`——
+/// Rust 侧创建独立 QuickJS Runtime 执行 worker 源码、分发消息、drain
+/// microtask，返回 outbox（JSON 文本数组）；本 shim 把每条消息
+/// `JSON.parse` 后同步投递给 `onmessage({data})`。
+///
+/// 覆盖的真实场景：Anubis PoW（fast 算法在 worker 里跑纯 JS sha256，
+/// difficulty=4 ≈ 6.5 万次哈希，解完 postMessage 结果回主线程 →
+/// location.replace(pass-challenge)）。主线程侧只用到 `new Worker(url)` +
+/// `onmessage` 属性 + `postMessage` + `terminate`（Anubis main.mjs 的
+/// 消费方式），addEventListener 形式也一并提供。
+///
+/// 限制（爬虫够用原则）：无并行性（同步阻塞计算）、消息是 JSON 近似而非
+/// 结构化克隆、无 importScripts/SharedWorker/ServiceWorker。
+#[cfg(feature = "quickjs")]
+const QUICKJS_WORKER_SHIM: &str = r#"
+(function() {
+    function Worker(url) {
+        this.__src = String(url);
+        this.onmessage = null;
+        this.onerror = null;
+        this.onmessageerror = null;
+        this.__terminated = false;
+    }
+    Worker.prototype.postMessage = function(msg) {
+        if (this.__terminated) return;
+        if (typeof __workerRun !== 'function') {
+            if (this.onerror) { try { this.onerror({ message: 'Worker bridge unavailable' }); } catch (e) {} }
+            return;
+        }
+        var payload;
+        try { payload = JSON.stringify(msg); } catch (e1) { payload = 'null'; }
+        var raw;
+        try { raw = __workerRun(this.__src, payload); } catch (e2) {
+            if (this.onerror) { try { this.onerror({ message: String((e2 && e2.message) || e2) }); } catch (e3) {} }
+            return;
+        }
+        var res;
+        try { res = JSON.parse(raw); } catch (e4) {
+            if (this.onerror) { try { this.onerror({ message: 'worker result parse error' }); } catch (e5) {} }
+            return;
+        }
+        if (!res || res.ok !== true) {
+            if (this.onerror) { try { this.onerror({ message: (res && res.error) || 'worker failed' }); } catch (e6) {} }
+            return;
+        }
+        if (typeof this.onmessage !== 'function') return;
+        var msgs = res.messages || [];
+        for (var i = 0; i < msgs.length; i++) {
+            var d;
+            try { d = JSON.parse(msgs[i]); } catch (e7) { d = msgs[i]; }
+            try { this.onmessage({ data: d }); }
+            catch (e8) {
+                if (this.onerror) { try { this.onerror({ message: String((e8 && e8.message) || e8) }); } catch (e9) {} }
+            }
+        }
+    };
+    Worker.prototype.terminate = function() { this.__terminated = true; };
+    Worker.prototype.addEventListener = function(type, fn) {
+        if (type === 'message') { this.onmessage = fn; }
+        else if (type === 'error') { this.onerror = fn; }
+    };
+    Worker.prototype.removeEventListener = function(type) {
+        if (type === 'message') { this.onmessage = null; }
+        else if (type === 'error') { this.onerror = null; }
+    };
+    globalThis.Worker = Worker;
+})();
+undefined;
+"#;
+
 /// safety cap is hit. Returns the number of callbacks invoked.
 /// M16.4: 每轮 tick 先 `ctx.run_jobs()`（执行 Promise then 回调 microtask），
 /// 再 drain 到期 timer。两者交叉驱动，直到都 idle。
@@ -8063,37 +8258,15 @@ pub fn run_scripts_with_post_exprs(
     use std::cell::RefCell;
     use std::rc::Rc;
     let shared: crate::bridge::SharedTree = Rc::new(RefCell::new(tree));
-    // M64: 预扫描是否有 ESM module 脚本。如果有，用 HttpModuleLoader 创建 Context。
-    let has_module = {
-        let borrowed = shared.borrow();
-        extract_script_entries(&borrowed).iter().any(|e| {
-            matches!(
-                e,
-                ScriptEntry::ExternalModule(_) | ScriptEntry::InlineModule(_)
-            )
-        })
-    };
-    let origin = base_url
-        .as_deref()
-        .map(url_origin)
-        .unwrap_or_else(|| "about:blank".to_string());
-    // M66: 通过 EngineKind 创建引擎（trait 抽象层）。
-    let esm_origin = if has_module {
-        Some(origin.as_str())
-    } else {
-        None
-    };
-    #[allow(unused_mut)]
-    let mut engine = engine_kind.create(esm_origin);
-    let engine_name = engine.name();
 
-    // M66-B: QuickJS 走独立执行路径（不经过 boa Context）。
+    // M66-B/M93: QuickJS 走独立执行路径 + 文档导航循环。引擎创建移入循环
+    // 内部（每页一个新引擎——导航 = 全新 JS 全局空间），不在此预建。
     #[cfg(feature = "quickjs")]
-    if engine_name == "quickjs" {
-        return run_scripts_quickjs(shared, base_url, engine, post_exprs);
+    if matches!(engine_kind, crate::engine::EngineKind::QuickJs) {
+        return run_scripts_quickjs(shared, base_url, engine_kind, post_exprs);
     }
     #[cfg(not(feature = "quickjs"))]
-    if engine_name == "quickjs" {
+    if matches!(engine_kind, crate::engine::EngineKind::QuickJs) {
         eprintln!("[js-runtime] QuickJS requested but feature not enabled, using boa");
     }
 
@@ -8101,18 +8274,38 @@ pub fn run_scripts_with_post_exprs(
     //（QuickJS 分支已 return，或 EngineKind 只有 QuickJs）。
     #[cfg(feature = "boa")]
     {
+        // M64: 预扫描是否有 ESM module 脚本。如果有，用 HttpModuleLoader 创建 Context。
+        let has_module = {
+            let borrowed = shared.borrow();
+            extract_script_entries(&borrowed).iter().any(|e| {
+                matches!(
+                    e,
+                    ScriptEntry::ExternalModule(_) | ScriptEntry::InlineModule(_)
+                )
+            })
+        };
+        let origin = base_url
+            .as_deref()
+            .map(url_origin)
+            .unwrap_or_else(|| "about:blank".to_string());
+        let esm_origin = if has_module {
+            Some(origin.as_str())
+        } else {
+            None
+        };
+        let mut engine = engine_kind.create(esm_origin);
+        let engine_name = engine.name();
         if !post_exprs.is_empty() {
             eprintln!(
                 "[js-runtime] --click/--hover post evals not supported on boa engine; ignored"
             );
         }
         #[allow(clippy::needless_return)]
-        return run_scripts_with_base_boa(shared, base_url, engine, engine_name);
+        return run_scripts_with_base_boa(shared, base_url, engine, &engine_name);
     }
     #[cfg(not(feature = "boa"))]
     {
-        let _ = engine;
-        let _ = engine_name;
+        let _ = engine_kind;
         let _ = post_exprs;
         // 不可能到达：engine_kind 只能是 QuickJs，上面已 return。
         (shared, 0)

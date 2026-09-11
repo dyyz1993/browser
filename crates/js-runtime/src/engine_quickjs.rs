@@ -33,6 +33,148 @@ pub(crate) fn format_pending_exception(ctx: &Ctx) -> String {
     }
 }
 
+/// M93: Web Worker 的 worker 全局环境（独立子 Context 里的 eval 前置 shim）。
+///
+/// 爬虫够用子集：`self` / `postMessage`（捕获到 outbox）/ `addEventListener` /
+/// `TextEncoder`（纯 JS utf8，QuickJS 无原生实现）/ `navigator.userAgent` /
+/// `console`（吞掉）。`isSecureContext = false` 让 Anubis 这类"WebCrypto 可用
+/// 则用、否则纯 JS"的 worker 走纯 JS 路径（我们没有 crypto.subtle，且纯 JS
+/// 循环比每哈希一次 JS→Rust 异步桥更快）。
+fn worker_env_js(msg_json: &str, ua: &str) -> String {
+    let mut env = String::with_capacity(4096);
+    env.push_str(
+        r#"var __outbox = [];
+var __handlers = {};
+function postMessage(d) { try { __outbox.push(JSON.stringify(d)); } catch (e) {} }
+function addEventListener(t, h) { __handlers[t] = h; }
+function removeEventListener(t) { delete __handlers[t]; }
+globalThis.self = globalThis;
+globalThis.isSecureContext = false;
+globalThis.navigator = { userAgent: "#,
+    );
+    // UA 转义（字面量内只可能出现引号/反斜杠，走通用转义保守处理）
+    let mut ua_esc = String::new();
+    for c in ua.chars() {
+        match c {
+            '"' => ua_esc.push_str("\\\""),
+            '\\' => ua_esc.push_str("\\\\"),
+            '\n' => ua_esc.push_str("\\n"),
+            c => ua_esc.push(c),
+        }
+    }
+    env.push_str(&format!("\"{ua_esc}\""));
+    env.push_str(
+        r#" };
+globalThis.console = { log: function(){}, warn: function(){}, error: function(){}, debug: function(){}, info: function(){}, trace: function(){} };
+function TextEncoder() {}
+TextEncoder.prototype.encode = function(s) {
+    s = String(s);
+    var out = [], i = 0;
+    while (i < s.length) {
+        var c = s.charCodeAt(i++);
+        if (c >= 0xD800 && c <= 0xDBFF && i < s.length) {
+            var c2 = s.charCodeAt(i++);
+            if (c2 >= 0xDC00 && c2 <= 0xDFFF) { c = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00); }
+            else { i--; c = 0xFFFD; }
+        }
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+        else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+        else out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return new Uint8Array(out);
+};
+globalThis.TextEncoder = TextEncoder;
+"#,
+    );
+    // 注入消息（main 侧已 JSON.stringify，是合法 JS 字面量）
+    env.push_str(&format!("var __msgData = {msg_json};\n"));
+    env.push_str("var __done = false, __err = null;\n");
+    env
+}
+
+/// M93: 在独立 QuickJS Runtime+Context 里同步执行一个 Web Worker 消息。
+///
+/// 设计要点（AGENTS.md GC 纪律 + M69 队列模式对齐）：
+/// 1. **独立 Runtime**——worker 全局空间与主页面完全隔离（浏览器语义），
+///    计算结束后整个 Runtime drop，没有任何对象泄漏到主 Context。
+/// 2. **同步执行**——`postMessage()` 调用即触发：加载 worker 源码 → 分发
+///    消息 → drain microtask → 收集 outbox。真实 Worker 的并行性对"等结果"
+///    的爬取无价值；Anubis PoW difficulty=4 纯 JS sha256 约 1-2s。
+/// 3. **消息 JSON 往返**——worker `postMessage(obj)` JSON.stringify 进
+///    outbox，主侧 `onmessage({data: JSON.parse(...)})`。结构化克隆的
+///    爬虫近似（不支持循环引用/Transferable）。
+/// 4. **interrupt handler**——30s 硬上限 + 全局 JS deadline 双保险，防
+///    单个 worker 吃满预算或死循环。
+///
+/// 返回 JSON：`{"ok":true,"messages":[...]}`（outbox 原始 JSON 文本数组）
+/// 或 `{"ok":false,"error":"..."}`（主侧 Worker shim 转调 onerror）。
+fn worker_run(url: &str, msg_json: &str) -> String {
+    use rquickjs::context::EvalOptions;
+    use rquickjs::CatchResultExt;
+
+    // 1. 解析相对 URL + 取 worker 源码（走既有缓存/net worker/cookie 管线）。
+    let resolved = bridge::resolve_url(url);
+    let source = match bridge::fetch_sync(&resolved) {
+        Ok(s) => s,
+        Err(e) => return format!("{{\"ok\":false,\"error\":\"fetch worker source failed: {e}\"}}"),
+    };
+
+    // 2. 独立 Runtime + Context（中断双保险：30s 硬上限 + 全局 deadline）。
+    let rt = Runtime::new().expect("worker QuickJS runtime");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    rt.set_interrupt_handler(Some(Box::new(move || {
+        std::time::Instant::now() >= deadline || bridge::js_deadline_exceeded()
+    })));
+    let ctx = Context::full(&rt).expect("worker QuickJS context");
+
+    // 3. env → worker 源码 → 消息分发 → drain → 收集。
+    ctx.with(|ctx: Ctx| {
+        let env = worker_env_js(msg_json, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+        if let Err(e) = ctx.eval::<(), _>(env.as_str()).catch(&ctx) {
+            return format!("{{\"ok\":false,\"error\":\"worker env install failed: {e}\"}}");
+        }
+        // worker 源码按用户脚本语义（sloppy mode——真实 Worker 非 strict）
+        let mut opts = EvalOptions::default();
+        opts.strict = false;
+        if let Err(e) = ctx
+            .eval_with_options::<(), _>(source.as_str(), opts)
+            .catch(&ctx)
+        {
+            return format!("{{\"ok\":false,\"error\":\"worker script eval failed: {e}\"}}");
+        }
+        const DISPATCH: &str = r#"(function(){
+    var h = __handlers['message'];
+    if (typeof h !== 'function') { __err = 'worker registered no message handler'; __done = true; return; }
+    Promise.resolve().then(function(){ return h({ data: __msgData }); })
+        .then(function(){ __done = true; },
+              function(e){ __err = String((e && e.message) || e); __done = true; });
+})();"#;
+        if let Err(e) = ctx.eval::<(), _>(DISPATCH).catch(&ctx) {
+            return format!("{{\"ok\":false,\"error\":\"worker dispatch failed: {e}\"}}");
+        }
+        // drain microtask 直至 worker 的 async handler 结束（时间由
+        // interrupt handler 兜底；次数上限防御）。
+        let mut guard: u64 = 0;
+        while ctx.execute_pending_job() {
+            guard += 1;
+            if guard > 5_000_000 {
+                break;
+            }
+        }
+        const COLLECT: &str = r#"(function(){
+    if (!__done) return '{"ok":false,"error":"worker computation did not complete (interrupted or long-running)"}';
+    if (__err) return JSON.stringify({ ok: false, error: __err });
+    return JSON.stringify({ ok: true, messages: __outbox });
+})()"#;
+        match ctx.eval::<String, _>(COLLECT).catch(&ctx) {
+            Ok(s) => s,
+            Err(e) => format!("{{\"ok\":false,\"error\":\"worker collect failed: {e}\"}}"),
+        }
+    })
+    // ctx / rt 在此整体 drop——worker 的全部 JS 对象随 Runtime 消失（GC 安全）。
+}
+
 /// M81(B4): JSON 转义 JS 源码（引号/反斜杠/控制字符/U+2028/U+2029），
 /// 供塞进字符串字面量后 `(0, eval)`。与 `eval_display_string` 的内联转义
 /// 同规则（提取复用仅限新增函数，不动旧实现）。
@@ -461,6 +603,10 @@ impl QuickJsEngine {
                 let _ = g.set("__fetchSyncMethod", Function::new(ctx.clone(), |url: String, method: String, body: Option<String>, ct: Option<String>| {
                     bridge::qjs_bridge::fetch_sync_method(url, method, body, ct)
                 }).unwrap());
+
+                // === M93: Web Worker（同步子 Context）+ 文档导航记录 ===
+                let _ = g.set("__workerRun", Function::new(ctx.clone(), |url: String, msg: String| worker_run(&url, &msg)).unwrap());
+                let _ = g.set("__navRecord", Function::new(ctx.clone(), |url: String| bridge::record_pending_navigation(&url)).unwrap());
 
                 // === WebSocket（复用 boa 的后台线程 WsManager）===
                 let _ = g.set("__wsCreate", Function::new(ctx.clone(), |url: String| bridge::ws_create(url) as f64).unwrap());

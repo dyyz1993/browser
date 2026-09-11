@@ -648,6 +648,27 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
     - ✅ 引擎升级走“跟进 rquickjs 版本 / Bellard 上游提速”，不走换引擎。
     - ✅ boa 从强制依赖降为 **optional feature**（M71），不传 `--features boa` 不编译，省 ~5MB。
     - ✅ boa 跑不动纯 CSR 站是引擎天花板，走 `--no-js` 兜底或标注，不硬刚（详见第十条）。
+22. **Web Worker 与文档导航的实现纪律**（M93，Anubis PoW 实测沉淀）：
+    - ✅ Worker 走**同步子 Context**：`postMessage` → Rust 创建独立 QuickJS
+      Runtime（env shim：self/postMessage 捕获/addEventListener/TextEncoder/
+      navigator.userAgent/isSecureContext=false）→ eval worker 源码（sloppy mode）→
+      Promise.resolve().then(handler) 分发 → drain microtask → outbox JSON 回投
+      主侧 `onmessage({data})`。30s 硬中断 + 全局 deadline 双保险。
+    - ❌ 禁止把 worker 做成真线程共享主 Context——`SharedTree` 是 `!Send`，
+      且跨 Context 传 JS 对象违反 GC 纪律（消息只走 JSON 字符串）。
+    - ✅ worker env 不设 `isSecureContext`（false）——Anubis 这类
+      “WebCrypto 可用则用”的 worker 会走纯 JS sha256 fallback（我们没有
+      crypto.subtle，且纯 JS 循环比每哈希一次 JS→Rust 异步桥快）。
+    - ✅ 文档导航三要素缺一不可（`run_scripts_quickjs` 导航循环）：
+      (1) `__setLocHref` 里用 `__histApiNav !== true && 非 hash 变化` 区分
+      文档导航（href/assign/replace）与 SPA 路由（pushState）；(2) 导航 fetch
+      必须在 **TreeGuard 存活期间**执行（cookie slot 可写）；(3) 3xx 逐跳手动
+      跟随（`new_no_redirect` 客户端），每跳 Set-Cookie 先进 jar 再请求下一跳
+      ——reqwest 自动跟跳会把 cookie 丢在中间跳。
+    - ✅ 每页全新引擎（导航 = 销毁旧 JS 全局空间）+ 上限 5 跳防导航环 +
+      每页开始 `reset_pending_navigation()` 防残留串页。
+    - 🔍 调试工具：`BROWSER_TRACE_NAV=1` 逐跳打印请求 cookie/响应 status/
+      Location/Set-Cookie。
 
 ---
 

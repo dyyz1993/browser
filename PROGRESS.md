@@ -11,14 +11,16 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M83**（CSR 靶点攻坚：XHR POST 全链路/Plugin 接口/juejin 根因确诊） |
-| 总 commits | ~266 |
-| 测试 | 996 pass + 18 e2e, 0 clippy warnings |
+| HEAD | **M93**（Anubis PoW 闭环：Web Worker + 文档导航 + cookie 逐跳传递） |
+| 总 commits | ~267 |
+| 测试 | 1004 pass, 0 failed, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **QuickJS（默认，9.4M）**；boa 改为 `--features boa` 可选（17M，纯 CSR 站天花板，保留备用） |
 | CDP navigate | ✅ M68 执行页面 `<script>`（spawn_blocking + catch_unwind） |
 | 动态 script | ✅ M69 appendChild(script) 触发 fetch+eval+onload（webpack/vite 兼容） |
+| Web Worker | ✅ M93 同步子 Context（Anubis PoW 实测通过） |
+| 文档导航 | ✅ M93 location.href/assign/replace → 重新 fetch + 换树 + 重跑（≤5 跳） |
 | HTTP API | ✅ M70.12 `browser serve` 命令 + Cloudflare Worker 前端 |
 | 性能 | ✅ M70.13 DOM 稳定检测 + 连接复用 + idle 优化（react.dev 17s→4s） |
 | 核心目标 G1（SPA 爬虫）| ✅ |
@@ -28,6 +30,55 @@
 ---
 
 ## 最近变更（倒序）
+
+### M93 —— Anubis PoW 挑战闭环：Web Worker + 文档导航 + cookie 逐跳传递
+
+**背景**：用户要求爬 `xcancel.com/nim_lang`。实测结论：xcancel 自研 antibot
+需要 WASM+WebCrypto 且明确拒绝无头自动化（真 Chrome headless 也报
+"Automated verification failed"），按宪法原则 4 不对抗。但换源实测发现活着的
+Nitter 实例（tiekoetter/privacyredirect）全跑 **Anubis PoW**——它的设计哲学
+是"愿意解题就放行，不检测自动化"，需要的是**标准 Web API**而非指纹伪造：
+`Worker` + `location.replace` + cookie。补齐后我们成为能过 Anubis 的爬虫。
+
+**新增能力（全部 QuickJS 引擎，boa 路径不受影响）**：
+1. **Web Worker shim（同步子 Context）**：`new Worker(url)` +
+   `postMessage` → Rust 创建独立 QuickJS Runtime 执行 worker 源码 → 分发消息
+   → drain microtask → outbox JSON 回投 `onmessage({data})`。GC 安全：独立
+   Runtime 整体 drop，零对象泄漏（AGENTS 铁律 13）。30s 硬中断 + 全局 deadline
+   双保险。爬虫够用子集：无并行、JSON 近似结构化克隆、无 importScripts。
+2. **文档导航循环**：`location.href=X`/`assign`/`replace`（非 hash、非
+   pushState——`__histApiNav` 旗标区分）记入 `PENDING_NAVIGATION` 队列；
+   JS 阶段结束在 TreeGuard 存活期内逐跳 fetch 新文档（3xx 手动跟随，每跳
+   Set-Cookie 先进 jar 再请求下一跳——reqwest 自动跟跳会把 cookie 丢在中间跳），
+   换 DOM 树 + 全新引擎跑下一页（导航=全新 JS 全局空间，`__anubisBooted`
+   不得泄漏）。上限 5 跳防导航环。
+3. **net crate `new_no_redirect()`**：Policy::none 客户端，net worker 双客户端
+   按 `NetRequest.no_redirect` 选择。
+4. **URL polyfill searchParams 回写**：`new URL(x).searchParams.set(k,v)` 后
+   href 必须带 query（WHATWG update steps 近似）。此前是构造时快照——
+   Anubis 的 `v()` 构造 pass-challenge URL query 全丢。**通用 bug**，所有用
+   URL 构造 GET 请求的站点受益。
+5. **navigator.cookieEnabled: true**（QuickJS shim 此前缺失，Anubis 功能
+   门禁直接拒绝）。
+6. **顺手修 2 个 M83 存量回归**（HEAD 上就红，非本轮引入）：
+   `__fetchSetBody/__fetchAppendBody` 非 2xx 恢复 `[js-fetch]` 日志且不写
+   body；`fetch_error_url_rejects_promise` 测试改用真连不上的端口
+   （wiremock 未匹配=404，M83 起 404 按浏览器语义 resolve，reject 的只有
+   网络层错误）。
+
+**实测证据（nitter.tiekoetter.com/nim_lang）**：
+- Worker PoW 解开：difficulty=4 纯 JS sha256，release 1-13s（运气波动）
+- `[nav] hop 1/5: pass-challenge?id=...&response=0000e7e6...&nonce=80479...`
+- `-> 302 loc=/nim_lang set-cookie=[tiekoetter.com-auth-...=eyJ...]`（7 天 JWT）
+- 下一跳请求头实测携带 auth cookie ✅（`BROWSER_TRACE_NAV=1` 逐跳日志）
+- 最终页 429 = 代理共享出口 IP 长窗口限流（curl 带 cookie 同样 429，
+  与实现无关；DNS 双重污染 31.13.x/108.160.x 直连无门）
+
+**测试**：`integration_worker_nav.rs` 5 项入库（Worker 往返/换树重渲染/
+302+cookie 链/searchParams 回写/pushState 不误触发）。全量 1004 passed 0 failed。
+
+**局限**：Worker 无并行性（同步阻塞）；localStorage 跨导航跳不保留（每页新
+storage，Anubis 不依赖）；高 difficulty（>8）实例纯 JS 可能超 30s 上限。
 
 ### M83 —— CSR 靶点攻坚：XHR 全链路修复 + juejin 根因确诊
 

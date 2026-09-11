@@ -129,6 +129,27 @@ impl HttpClient {
         }
     }
 
+    /// M93: 不跟随 redirect 的客户端——JS 导航闭环（`location.replace` 后
+    /// 重新 fetch 文档）需要逐跳手动跟 3xx：每跳的 `Set-Cookie` 必须写回
+    /// cookie jar 后才能用于下一跳（Anubis pass-challenge 就是
+    /// Set-Cookie + 302 回原页）。reqwest 内部自动跟跳不经过我们的 jar，
+    /// 中间跳的 cookie 会丢。
+    #[must_use]
+    #[allow(clippy::new_without_default)]
+    pub fn new_no_redirect() -> Self {
+        let inner = reqwest::Client::builder()
+            .user_agent(UA)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self {
+            inner,
+            interceptor: Arc::new(NoopInterceptor),
+        }
+    }
+
     /// Issue a GET request and return the response body.
     ///
     /// # Errors
