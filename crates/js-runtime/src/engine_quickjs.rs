@@ -120,9 +120,12 @@ fn worker_run(url: &str, msg_json: &str) -> String {
         Err(e) => return format!("{{\"ok\":false,\"error\":\"fetch worker source failed: {e}\"}}"),
     };
 
-    // 2. 独立 Runtime + Context（中断双保险：30s 硬上限 + 全局 deadline）。
+    // 2. 独立 Runtime + Context（中断双保险：120s 硬上限 + 全局 deadline）。
+    //    硬上限放宽到 120s（实测 anubis.techaro.lol difficulty 4/5 的运气
+    //    方差可达 30s+，此前 30s 会掐死 unlucky draw）；全局 JS deadline
+    //    （CLI --timeout-ms，默认 60s）通常是更紧的实际约束。
     let rt = Runtime::new().expect("worker QuickJS runtime");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     rt.set_interrupt_handler(Some(Box::new(move || {
         std::time::Instant::now() >= deadline || bridge::js_deadline_exceeded()
     })));

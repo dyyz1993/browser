@@ -1,9 +1,10 @@
 # M93 评估：Anubis PoW 挑战闭环（xcancel.com/nim_lang 换源实测）
 
 > 日期：2026-09-12 · 引擎：QuickJS（release） · 网络：Clash 代理 127.0.0.1:7890
-> 结论：**链路全通**——Worker PoW 解开、pass-challenge 302+Set-Cookie、
-> auth cookie 逐跳传递，全部有逐跳铁证。最终正文被代理共享出口 IP 的
-> 429 长窗口限流挡住（curl 带 cookie 同样 429，与实现无关）。
+> 结论：**端到端全通**——`anubis.techaro.lol`（Anubis 官方演示站）PoW 解开
+> 并渲染出真实内容；cookie 复用二跑 **1.9s、0 次 pass-challenge** 免挑战
+> 直达。tiekoetter 链路同样全通（PoW/302/cookie 铁证），仅最终正文被
+> 代理共享出口 IP 的 429 长窗口限流挡住（curl 带 cookie 同样 429）。
 
 ## 1. 任务与换源决策
 
@@ -100,6 +101,31 @@ location.replace(302 URL) ─► __setLocHref 检测文档导航
 全链路铁证**。429 与实现无关：curl 携带同 cookie 也 429；两个域名
 DNS 双重污染（xcancel→Meta 段、tiekoetter→Dropbox 段）无直连退路；
 代理出口为共享 IP，此前多轮测试触发长窗口限流。
+
+## 4b. 端到端收官：anubis.techaro.lol（Anubis 官方演示站，真实内容）
+
+tiekoetter 被 429 挡住后，换 Anubis **官方演示站**验证端到端（独立服务器，
+对我们的 IP 无限流前科）：
+
+```bash
+# 第 1 次：解题 + 存 cookie
+$ browser fetch https://anubis.techaro.lol/ --format text --proxy ... \
+    --timeout-ms 150000 --cookie-file /tmp/anubis_cookies.txt
+# 13.2s（PoW ~12s）→ 500B 真实内容：
+#   "Easy to Use / Anubis sits in the background and weighs the risk..."
+#   "Lightweight / Block the scrapers ..."
+
+# 第 2 次：cookie 复用
+$ 同命令
+# 1.95s，pass-challenge 次数 = 0（完全没碰 PoW），内容直达 ✅
+```
+
+运营语义：**首次付 PoW 成本，cookie 有效期（7 天）内免挑战直达**——
+这正是真实爬虫对 Anubis 站点的可持续姿势。
+
+**M93.1 修复**：PoW 有运气方差（difficulty 4/5 的 unlucky draw 可达 30s+，
+实测一次 35.5s 触发 "all workers failed"）。worker 中断硬上限 30s→120s，
+让 CLI `--timeout-ms`（全局 deadline）成为实际约束。
 
 ## 5. 测试与门禁
 
