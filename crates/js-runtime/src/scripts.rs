@@ -2026,9 +2026,12 @@ fn run_page_quickjs(
     let __t_dcl_start = std::time::Instant::now();
     let _ = engine.eval(
         r#"try {
+            // M93.8: DCL 前 readyState → 'interactive'，load 派发后 → 'complete'。
+            if (typeof globalThis.__docReadyState !== 'undefined') { globalThis.__docReadyState = 'interactive'; }
             if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
                 var ev1 = new Event('DOMContentLoaded');
                 document.dispatchEvent(ev1);
+                if (typeof globalThis.__docReadyState !== 'undefined') { globalThis.__docReadyState = 'complete'; }
                 var ev2 = new Event('load');
                 document.dispatchEvent(ev2);
                 if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
@@ -6900,8 +6903,14 @@ Object.defineProperty(document, 'cookie', {
     },
     enumerable: true, configurable: true
 });
+// M93.8: readyState 真语义（spec：loading → interactive（DCL）→ complete（load））。
+// 旧版硬编码 'complete'——xcancel antibot 的编排器（混淆 VM）在模块加载时检查
+// `document.readyState` 决定"等 DOMContentLoaded"还是"立即执行 main"：旧值让它
+// 在 Pass 1（cap.min.js 等经典脚本尚未执行）直跑 main，依赖缺失 → 静默死锁，
+// 挑战永不启动。真语义下 main 等 DCL（所有脚本后派发）→ 依赖就绪。
+var __docReadyState = 'loading';
 Object.defineProperty(document, 'readyState', {
-    get: function() { return 'complete'; },
+    get: function() { return __docReadyState; },
     enumerable: true, configurable: true
 });
 document.addEventListener = function(type, cb, opt) {

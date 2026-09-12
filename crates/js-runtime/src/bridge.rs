@@ -3347,7 +3347,19 @@ pub mod qjs_bridge {
     /// fetchSync(url) -> Option<String> —— 同步 HTTP fetch。
     pub fn fetch_sync(url: String) -> Option<String> {
         let resolved = resolve_url(&url);
-        super::fetch_sync(&resolved).ok()
+        // M93.7-diag: GET 路径追踪（fetch shim 的 GET 走这里而非 fetchSyncMethod）。
+        let trace_fetch = std::env::var("BROWSER_TRACE_FETCH").is_ok();
+        if trace_fetch {
+            eprintln!("[fetch-trace] CALL GET {resolved}");
+        }
+        let out = super::fetch_sync(&resolved).ok();
+        if trace_fetch {
+            match &out {
+                Some(b) => eprintln!("[fetch-trace] DONE GET {resolved} ({}B)", b.len()),
+                None => eprintln!("[fetch-trace] FAIL GET {resolved}"),
+            }
+        }
+        out
     }
 
     /// fetchSyncMethod(url, method, body, contentType) -> Option<String>。
@@ -3358,9 +3370,27 @@ pub mod qjs_bridge {
         ct: Option<String>,
     ) -> Option<String> {
         let resolved = resolve_url(&url);
-        super::fetch_sync_with_method(&resolved, &method, body.as_deref(), ct.as_deref())
+        // M93.7-diag: VM 不可见的 fetch 生命周期追踪（JS 层包装会被混淆 VM 的
+        // 防篡改自检探测——toString 含非 [native code] 即可能触发死等）。
+        let trace_fetch = std::env::var("BROWSER_TRACE_FETCH").is_ok();
+        if trace_fetch {
+            eprintln!("[fetch-trace] CALL {method} {resolved}");
+        }
+        let out = super::fetch_sync_with_method(&resolved, &method, body.as_deref(), ct.as_deref())
             .ok()
-            .map(|(status, b)| format!("{status}\n{b}"))
+            .map(|(status, b)| {
+                if trace_fetch {
+                    eprintln!(
+                        "[fetch-trace] DONE {method} {resolved} -> {status} ({}B)",
+                        b.len()
+                    );
+                }
+                format!("{status}\n{b}")
+            });
+        if trace_fetch && out.is_none() {
+            eprintln!("[fetch-trace] FAIL {method} {resolved}");
+        }
+        out
     }
 
     /// cacheAsset(url, body) —— 静态资产形状判断 + 写 SCRIPT_CACHE。
