@@ -414,3 +414,28 @@ CDP 同样被 antibot 判死**（自动化检测不区分宿主）。
   项目宪法原则 4 明确排除的反爬对抗（指纹伪造），依法不越。
 - xcancel.com 数据获取的合规路径：裸 Chrome 人工访问（已验证可行），
   或等价公开镜像（如 nitter.netbub.com——无挑战实例，非绕过）。
+
+## 17. M93.18：fp 字段全量对齐——83→28 diff 的系统攻坚
+
+### 方法论升级
+fp 明文捕获（shim 级 encrypt 包装 + 8K 上限）× Chrome oracle（CDP 提取的
+4105B 标准 fp）= **逐字段 diff 驱动开发**。83 项缺口分五批修（详见
+c6ab44b commit message），同时建立 BROWSER_TRACE_SCRIPTS esm-trace/dyn-trace
+诊断。回归事故三起（regex 误吃 {{}} 括号 → dyn script onerror / astro
+模块链 / IIFE 试验 148 红）全部定位修复。
+
+### 当前状态（诚实记录）
+- 本地重放：challenge→PoW→fp 加密→verify 全链通（stub 200）
+- **实弹：verify 提交成功、服务端答 403 unauthorized**（fp 评分线未过）
+- fp 与 Chrome oracle 剩 28 diff，主要是：canvas 指纹哈希（像素级渲染
+  路线 B）、TypeError 消息格式（QuickJS 引擎层 C 文案）、etsl、
+  AI summarizer、codecs 哈希族、webWorker 上下文 7 字段 ERROR
+  （VM 内部采集路径未定位）、cdp:true（检测向量仍未定位——
+  console 探针/dunder 清扫/devtools gap 均排除后仍在）
+
+### 下一阶段候选（按预期收益排序）
+1. webWorker ERROR ×7：VM 的 worker fp 采集在某个我们覆盖不到的上下文
+   （需 VM 内部断点级追踪）
+2. cdp:true：穷举自动化检测库的已知向量逐一排除
+3. TypeError 消息格式：QuickJS C 层消息——需改 eval 错误出口或 fork
+   quickjs 补丁（成本高）
