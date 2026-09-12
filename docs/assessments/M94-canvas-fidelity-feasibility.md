@@ -189,3 +189,20 @@ rtcVideo（序列化）、pluginOverflow（语义未定位）。
   then dump）零命中：探测行为在解释器内部，API 经字节码分发。
 - 逆向成本：需静态反编译状态机字节码（操作码表 XJ26qG + 状态转移表），
   数天起步且不保证穷尽（解释器可多层）。
+
+## 九、M94.6 附录：fromCharCode C 层码点流——字符串表全量破译
+
+**方法**（ADR-0005 补充）：quickjs.c `js_string_fromCharCode` 加码点流
+dump（`BROWSER_DUMP_FCC` 门控，/tmp/qjs_fcc.log）。VM 三族解码器
+（hik8ew/Hi_Bodu/TzgaPDB）输出必经 fromCharCode 逐字符构造——**C 层截获
+不改 JS 源码，不触发函数链校验**（JS 层钩 TzgaPDB 实测触发 VM 自检
+失败全停，已排除该路径）。
+
+**破译产出**：canvas 探测全字符串表（见 PROGRESS M94.6）；'ERROR' 机制
+终审——A5sPdo 常量 + 方法 A 零异常（catch-dump 0 捕获）+ hash 成功
+（charCodeAt ×dataURL长度 轮）→ **'ERROR' 是编排器对方法 A undefined
+返回的填充**。方法 A 为 CFF 平坦化函数（XJ26qG = charCode 求和调度器，
+M94.5 的「状态机 VM」定性修正为控制流平坦化）。
+
+**剩余**：方法 A 返回值语义需 CFF 完整反编译（数天级——裁决选项 2 的
+实测成本依据）。

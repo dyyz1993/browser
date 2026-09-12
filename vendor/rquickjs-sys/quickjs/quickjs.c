@@ -45780,6 +45780,19 @@ static JSValue js_string_fromCharCode(JSContext *ctx, JSValueConst this_val,
     int i;
     StringBuffer b_s, *b = &b_s;
 
+    /* BROWSER PATCH (M94.6): dump fromCharCode arg streams — VM string
+       decoders emit plaintext through char-by-char fromCharCode calls.
+       Gated by env BROWSER_DUMP_FCC. */
+    if (getenv("BROWSER_DUMP_FCC") != NULL && argc <= 2) {
+        static FILE *fcc_log = NULL;
+        if (!fcc_log) fcc_log = fopen("/tmp/qjs_fcc.log", "a");
+        if (fcc_log) {
+            int32_t c0 = 0;
+            if (argc >= 1) JS_ToInt32(ctx, &c0, argv[0]);
+            fprintf(fcc_log, "%d\n", c0 & 0xffff);
+        }
+    }
+
     // shortcut for single argument common case
     if (argc == 1 && JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT) {
         uint16_t c16 = JS_VALUE_GET_INT(argv[0]);

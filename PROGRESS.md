@@ -1,3 +1,21 @@
+## M94.6 fromCharCode C 层码点流 dump——VM 字符串表全量破译
+- quickjs.c js_string_fromCharCode 加码点流 dump（BROWSER_DUMP_FCC 门控，
+  ADR-0005 补充）——9800 万码点流捕获；VM 全部解码器（hik8ew/Hi_Bodu/
+  TzgaPDB 三族）输出必经 fromCharCode，不触 JS 源码校验链
+- canvas 探测全字符串表重组（fromCharCode 流码点序列定位）：getContext/
+  width=400/height=200/style/textBaseline=alphabetic/fillStyle #f60/#069/
+  font 11pt no-real-font-123/fillText/'Cwm fjordbank…😃'/rgba(102,204,0,.2)/
+  18pt Arial/multiply/beginPath/arc/Math/fill/evenodd/toDataURL/length/
+  charCodeAt(hash 循环)
+- **'ERROR' 机制终审**：A5sPdo='ERROR' 字符串常量；方法 A（canvas 探测，
+  CFF 平坦化——XJ26qG=charCode 求和调度，非字节码 VM）catch 统一返回它；
+  但 serve 侧 catch-dump 实验 0 捕获——**方法 A 零异常正常完成**，hash 成功
+  （charCodeAt×13K 轮）——'ERROR' 是**编排器对方法 A undefined 返回的填充**
+- 修复最后缺口 = CFF 完整反编译（方法 A 返回值的准确语义）——静态精读
+  已到极限，逆向工程量级数天（裁决选项 2 的实测成本）
+- TzgaPDB JS 层钩子确认不可行（在校验链上，钩子触发 VM 自检失败全停）
+- 门禁 1024/0
+
 ## M94.5 勘误：死循环假说证伪 + 终局结构（hasModifiedCanvas=状态机 VM）
 - 实验证伪 M94.4 因果链：26 处 while(true){} 全替换为 throw 后运行时
   0 抛出——**全部防篡改壳校验在 QuickJS 通过**（具名函数 toString 是
