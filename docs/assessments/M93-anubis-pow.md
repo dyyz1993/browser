@@ -318,3 +318,41 @@ fp 经 AES-256-GCM 加密上报（/antibot/api/dx 或 client-report），opjs �
 ```
 即 ECIES 变体：ECDH → HKDF-SHA256 → AES-256-GCM 加密指纹信号上报。
 智能体并行实现中（纯 JS P-256 + HKDF + AES-GCM，NIST/RFC 向量验证）。
+
+## 13. M93.15/16 终局：引擎层收官 + 服务端指纹判定墙（终版定性）
+
+### 最后两轮修复（全部提交 5329105，1019 测试全绿）
+- **M93.15 环境补全**（fp 明文捕获 + 探针驱动）：screen（此前 undefined →
+  采集直接 ERROR）、window.chrome、plugins/mimeTypes（Chrome 126 公开
+  常量表 5 条）、outerWidth/Height、devicePixelRatio、CacheStorage
+- **M93.16 Fetch 上下文头**：双引擎请求头对比发现 Chrome 恒带
+  Origin/Referer/Sec-Fetch-* 而我们全缺——bridge 层自动计算附加
+
+### 终版证据链（live verify 403 "unauthorized" 三重定位）
+1. 协议排除：verify 实测 proto=HTTP/2.0 仍 403
+2. 头排除：满头组（Origin/Referer/Sec-Fetch/cookie/token）仍 403
+3. **内容判定**：curl 垃圾 fp 同签名 403——"unauthorized" 是 fp 内容/
+   解密失败的通用拒绝
+4. TLS 白名单旁证：Python urllib（OpenSSL 指纹）连 challenge 都 403；
+  curl(LibreSSL)/我们(rustls) 放行——WAF 按 TLS 指纹分层
+
+### 剩余差异面（全部宪法原则 4 边界内不越）
+| 信号 | 性质 | 处置 |
+|------|------|------|
+| cdp:true（检测向量未定位） | 反自动化判定核心 | 不攻 |
+| Error.stack 格式（eval_script） | 深度引擎工程（脚本命名体系） | 记录待议 |
+| native 函数 toString 暴露 JS 源码 | toString 伪装=经典伪造原语 | 禁区 |
+| navigatorPropertyDescriptors | WebIDL 原型 getter 结构 | 大重构，收益存疑 |
+
+**最终状态**：`browser fetch xcancel.com/nim_lang --proxy` 完整跑通
+挑战全流程（h2 + 30 题 PoW + ECDH/HKDF/AES-GCM 指纹加密 + 全头组提交），
+与真 headless Chrome 到达同一判定线被拒。数据获取路径：用户 Chrome 会话
+cookie 复用（M93.6 机制铁证）或 netbub 实例（已交付 /tmp/nim_lang.md）。
+
+### M93 全系列战果总账（22 commits）
+Worker/文档导航/cookie 逐跳/429 退避/浏览器头组/storage 持久化/资产缓存/
+crypto.subtle SHA-256/readyState 真语义/Page Visibility/sendBeacon/
+canPlayType 编解码表/HTTP2 双栈/fetch headers 透传/hardwareConcurrency/
+customElements 真实现/Shadow DOM/私有字段真构造/收养机制/worker onmessage
+双通道/P-256 ECDH+HKDF+AES-GCM 纯 JS（NIST 向量）/screen/chrome/plugins/
+Fetch 上下文头——每一项都是全 Web 受益的 spec 正确性，非单站 hack。
