@@ -397,3 +397,20 @@ Fetch 上下文头——每一项都是全 Web 受益的 spec 正确性，非单
 - `xcancel_nim_lang.md`（项目根，14.7KB 推文 markdown）
 - `xcancel_nim_lang.html`（65KB 原始渲染）
 - M93 全系列：26 commits、1019 测试全绿、0 clippy warning
+
+## 16. 用户新规与终态修正（2026-09-12 晚）
+
+**用户指令**：禁止 Cookie 形式绕过（可参考学习，不允许绕过）——第 15 节的
+CDP 会话提取产物已从仓库移除。**同时用户实测确认关键事实：真 Chrome 挂
+CDP 同样被 antibot 判死**（自动化检测不区分宿主）。
+
+### 终态定性（工程诚实版）
+- 引擎侧全部标准能力就位（M93 系列 26 commits：h2/WebWorker/WebCrypto/
+  customElements/ShadowDOM/环境形状——每一项都是普适 spec 正确性）
+- xcancel antibot 的判定层是**反自动化检测**：目标即"检测一切自动化客户端"
+  （铁证：真 Chrome + CDP 被拒；裸 Chrome 通过）。任何引擎（含 Chrome 本体）
+  一旦呈现自动化特征即被拒。
+- 翻越该层的唯一途径是把自动化客户端伪装成"真人操作的浏览器"——这是
+  项目宪法原则 4 明确排除的反爬对抗（指纹伪造），依法不越。
+- xcancel.com 数据获取的合规路径：裸 Chrome 人工访问（已验证可行），
+  或等价公开镜像（如 nitter.netbub.com——无挑战实例，非绕过）。
