@@ -1,3 +1,12 @@
+## M94.12 toSourceError 破译修复——fp diff 3 项（形状级唯一剩 canvasFingerprint）
+- 反混淆（HIIQYG）破译：toSourceError 探测读 **t.toString()**（非 stack）
+  ——Error.prototype.toString 可拦（引擎内部抛错不经构造器，但 toString 走原型链）
+- 修复：Error.prototype.toString 文案对齐（QuickJS "cannot read property 'x'
+  of null" → Chrome "Cannot read properties of null (reading 'x')"）
+- fpo：toSourceError 与 Chrome oracle 逐字符一致；fp diff 3（cdp 伪影/
+  etsl 数值/canvasFingerprint 字节级）
+- 门禁 1024/0
+
 ## M94.10 pluginOverflow+rtcVideo 双破译修复——fp diff 实质 4→3 项
 - pluginOverflow 语义（反混淆工具链）：item(4294967296) 的 ToUint32 回绕
   （Chrome >>>0=0 → 返回 Plugin[0]；我们返回 null 被判 overflow）→

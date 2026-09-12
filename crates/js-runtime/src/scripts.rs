@@ -4254,6 +4254,25 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
 // 铁证）：new Image()+src=data:1x1 透明 PNG → onload → ctx.drawImage →
 // getImageData 4 字节全 0 检查。此前 Image 未定义 → new throw → 探测
 // catch → fp 恒 'ERROR'。onload 以微任务近似 Chrome 的异步解码完成。
+// M94.12: Error.prototype.toString 文案对齐——VM 的 toSourceError 探测
+// （HIIQYG，反混淆铁证）读 t.toString()（非 stack）：QuickJS 文案
+// "cannot read property 'x' of null" → Chrome "Cannot read properties of
+// null (reading 'x')"。引擎内部抛错不经构造器，但 toString 可拦。
+try {
+    var __origErrToString = Error.prototype.toString;
+    Object.defineProperty(Error.prototype, 'toString', {
+        value: function() {
+            var name = this.name || 'Error';
+            var m = String(this.message === undefined ? '' : this.message);
+            m = m.replace(/cannot read property '([^']*)' of (null|undefined)/g, "Cannot read properties of $2 (reading '$1')")
+                 .replace(/cannot convert \w+ .*/g, function(x) { return x.charAt(0).toUpperCase() + x.slice(1); })
+                 .replace(/^'([^']*)' is not defined$/, '$1 is not defined');
+            return name + ': ' + m;
+        },
+        writable: true, configurable: true
+    });
+} catch (eETSm) {}
+
 // M94.10: eval.toString() 形状——VM 的 etsl = eval.toString().length
 // （Chrome=33 'function eval() { [native code] }'；QuickJS 返回 226 字符
 // 真实源码）。own toString 覆盖（eval 是函数对象可加 own 属性）。
