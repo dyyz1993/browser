@@ -2364,6 +2364,37 @@ globalThis.Event = function Event(type, opts) {
 	// navigator
 // M83: UA 与主请求（net::client）一致——掘金风控 SDK 会比对 navigator.userAgent
 // 完整性（旧值 'Mozilla/5.0' 残缺，一眼非浏览器）。
+// M93.15: screen——此前完全未定义，站点指纹采集 screen.width 直接
+// ReferenceError（xcancel fp 报 screenResolution:"ERROR"）。spec 常规形状
+// + macOS 主流值（与 UA/platform 的 MacIntel 声明一致——环境一致性）。
+window.screen = {
+    width: 1512, height: 982,
+    availWidth: 1512, availHeight: 930,
+    colorDepth: 24, pixelDepth: 24,
+    isExtended: false,
+    availLeft: 0, availTop: 25,
+    orientation: { type: 'landscape-primary', angle: 0, onchange: null }
+};
+try { window.screen.orientation.type = 'landscape-primary'; } catch (eScr) {}
+
+// M93.15: window.chrome——UA 声明 Chrome 而 window.chrome 缺失是环境
+// 不一致信号（fp 检查 window.chrome 存在性）。现代 Chrome 的最小形状。
+window.chrome = {
+    app: { isInstalled: false, getDetails: function() { return null; }, getIsInstalled: function() { return false; }, installState: function() { return {installState:'disabled'}; }, runningState: function() { return 'cannot_run'; } },
+    runtime: { OnInstalledReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {} },
+    csi: function() { return { startE: Date.now(), onloadT: Date.now(), pageT: 0, tran: 15 }; },
+    loadTimes: function() { return { requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000, commitLoadTime: Date.now() / 1000, finishDocumentLoadTime: Date.now() / 1000, finishLoadTime: Date.now() / 1000, firstPaintTime: Date.now() / 1000, firstPaintAfterLoadTime: 0, navigationType: 'Other', wasFetchedViaSpdy: true, wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false, connectionInfo: 'h2' }; }
+};
+
+// M93.15: CacheStorage（caches）——spec 桩：空缓存语义。
+window.caches = {
+    open: function() { return Promise.reject(new Error('caches unavailable')); },
+    keys: function() { return Promise.resolve([]); },
+    has: function() { return Promise.resolve(false); },
+    match: function() { return Promise.resolve(undefined); },
+    delete: function() { return Promise.resolve(false); }
+};
+
 window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'], cookieEnabled: true, hardwareConcurrency: __hwConcurrency(), deviceMemory: 8, maxTouchPoints: 0 };
 // M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
 // 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
@@ -2385,13 +2416,54 @@ window.Plugin = Plugin;
 window.PluginArray = PluginArray;
 window.MimeType = MimeType;
 window.MimeTypeArray = MimeTypeArray;
-window.navigator.plugins = new PluginArray();
-window.navigator.mimeTypes = new MimeTypeArray();
-window.navigator.pdfViewerEnabled = false;
+// M93.15: navigator.plugins/mimeTypes——Chrome 126 的公开常量默认表（5 个
+// PDF 相关条目，所有正常 Chrome 一致；环境一致性而非个体身份）。此前空表
+// 是无头特征（正常 Chrome 从不空表）。
+(function() {
+    var mt = function(t, s) { var m = new MimeType(); m.type = t; m.suffixes = s; m.description = ''; return m; };
+    var mkPlugin = function(name, fn, desc, file, mimes) {
+        var pl = new Plugin();
+        pl.name = name; pl.filename = fn; pl.description = desc;
+        pl.length = mimes.length;
+        for (var i = 0; i < mimes.length; i++) {
+            pl[i] = mimes[i]; pl[mimes[i].type] = mimes[i];
+            mimes[i].enabledPlugin = pl;
+        }
+        return pl;
+    };
+    var pdfMime = mt('application/pdf', 'pdf');
+    var textPdf = mt('text/pdf', 'pdf');
+    var pPdf = mkPlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', 'internal-pdf-viewer', [pdfMime, textPdf]);
+    var chromePdf = mkPlugin('Chrome PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
+    var chPdf = mkPlugin('Chromium PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
+    var msPdf = mkPlugin('Microsoft Edge PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
+    var wkPdf = mkPlugin('WebKit built-in PDF', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
+    var arr = new PluginArray();
+    var list = [pPdf, chromePdf, chPdf, msPdf, wkPdf];
+    arr.length = list.length;
+    for (var k = 0; k < list.length; k++) { arr[k] = list[k]; arr[list[k].name] = list[k]; }
+    window.navigator.plugins = arr;
+    var marr = new MimeTypeArray();
+    marr.length = 2;
+    marr[0] = pdfMime; marr['application/pdf'] = pdfMime;
+    marr[1] = textPdf; marr['text/pdf'] = textPdf;
+    window.navigator.mimeTypes = marr;
+    window.navigator.pdfViewerEnabled = true;
+})();
 window.scrollTo = window.scroll = function() {};
 window.scrollX = window.scrollY = window.pageXOffset = window.pageYOffset = 0;
 window.innerWidth = 1024;
 window.innerHeight = 768;
+// M93.15: 窗口几何——outerWidth/outerHeight undefined 是非浏览器特征
+//（真窗口必有值；headless 的 0 也被检测——取视口同尺寸的"有窗口"值）。
+window.outerWidth = 1512;
+window.outerHeight = 982;
+window.screenX = 0;
+window.screenY = 0;
+window.screenLeft = 0;
+window.screenTop = 25;
+window.devicePixelRatio = 2;
+window.visualViewport = { width: 1024, height: 768, offsetTop: 0, offsetLeft: 0, scale: 1 };
 // Promise.allSettled（ES2020，QuickJS 原生支持但 shim 可能覆盖）
 if (!Promise.allSettled) {
     Promise.allSettled = function(promises) {
@@ -5665,6 +5737,15 @@ const QUICKJS_WEBCRYPTO_SHIM: &str = r#"
                     var p = gcmParams(algo);
                     var g = gcmCtx(key.__material.raw, p.iv);
                     var plain = toU8(data);
+                    // M93.14-diag: fp 明文捕获（区分 spec 缺口 vs 身份信号——
+                    // VM 不可见的 shim 源码级）
+                    if (plain.length > 0 && plain.length < 4096 && typeof __ctrace === 'function') {
+                        try {
+                            var __txt = '';
+                            for (var ti = 0; ti < plain.length; ti++) __txt += String.fromCharCode(plain[ti]);
+                            __ctrace('FP-PLAIN ' + __txt.slice(0, 1200));
+                        } catch (eFp) {}
+                    }
                     var ct = gcmKeystream(g, plain);
                     var tag = gcmTag(g, p.aad, ct, p.tagLenBytes);
                     trace('encrypt AES-GCM ' + plain.length + 'B iv=' + p.iv.length + 'B');

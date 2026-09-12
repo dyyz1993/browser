@@ -1022,6 +1022,64 @@ fn fetch_sync_with_method_full(
             }
         })
     });
+    // M93.16: Fetch 标准的请求上下文头——浏览器对每个 fetch() 请求恒定附加
+    //（Origin/Referer/Sec-Fetch-*，spec 要求；xcancel verify 的 "unauthorized"
+    // 即缺 Origin——curl A/B + 双引擎头对比铁证）。调用方已显式设置的不覆盖。
+    let extra_headers = {
+        let mut hdrs = extra_headers.to_vec();
+        macro_rules! has {
+            ($k:expr) => {
+                extra_headers
+                    .iter()
+                    .any(|(n, _)| n.eq_ignore_ascii_case($k))
+            };
+        }
+        let base = BASE_URL.with(|slot| slot.borrow().clone());
+        let (page_url, origin) = match base {
+            Some(b) => {
+                let o = url::Url::parse(&b)
+                    .map(|u| u.origin().ascii_serialization())
+                    .unwrap_or_default();
+                (b, o)
+            }
+            None => (String::new(), String::new()),
+        };
+        // 请求目标 origin vs 页面 origin → Sec-Fetch-Site
+        let req_origin = url::Url::parse(url.as_str())
+            .ok()
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_default();
+        let site = if origin.is_empty() || req_origin.is_empty() {
+            "none"
+        } else if req_origin == origin {
+            "same-origin"
+        } else if req_origin.rsplit('.').take(2).collect::<Vec<_>>()
+            == origin.rsplit('.').take(2).collect::<Vec<_>>()
+        {
+            "same-site"
+        } else {
+            "cross-site"
+        };
+        if !origin.is_empty() && !has!("origin") && method != "GET" {
+            hdrs.push(("Origin".into(), origin.clone()));
+        }
+        if !origin.is_empty() && !has!("origin") && method == "GET" && site != "same-origin" {
+            hdrs.push(("Origin".into(), origin.clone()));
+        }
+        if !page_url.is_empty() && !has!("referer") {
+            hdrs.push(("Referer".into(), page_url.clone()));
+        }
+        if !has!("sec-fetch-site") {
+            hdrs.push(("Sec-Fetch-Site".into(), site.into()));
+        }
+        if !has!("sec-fetch-mode") {
+            hdrs.push(("Sec-Fetch-Mode".into(), "cors".into()));
+        }
+        if !has!("sec-fetch-dest") {
+            hdrs.push(("Sec-Fetch-Dest".into(), "empty".into()));
+        }
+        hdrs
+    };
     // M65: 通过持久化网络线程复用 HttpClient 连接池（省 TLS 握手）。
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let trace_nav = std::env::var("BROWSER_TRACE_NAV").is_ok();
@@ -1039,7 +1097,7 @@ fn fetch_sync_with_method_full(
             content_type: content_type.clone(),
             cookie_header: cookie_header.clone(),
             no_redirect,
-            extra_headers: extra_headers.to_vec(),
+            extra_headers,
             reply: reply_tx,
         });
     });

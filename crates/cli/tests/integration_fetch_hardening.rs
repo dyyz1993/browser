@@ -351,8 +351,10 @@ var ok = typeof PluginArray === 'function'
   && typeof MimeTypeArray === 'function'
   && typeof MimeType === 'function'
   && navigator.plugins instanceof PluginArray
-  && navigator.plugins.length === 0
-  && navigator.mimeTypes instanceof MimeTypeArray;
+  && navigator.plugins.length === 5
+  && navigator.plugins[0] instanceof Plugin
+  && navigator.mimeTypes instanceof MimeTypeArray
+  && navigator.pdfViewerEnabled === true;
 document.getElementById('out').textContent = ok ? 'PLUGIN_OK' : 'PLUGIN_FAIL';
 </script></body></html>"#;
     let path = std::env::temp_dir().join("browser_test_plugin_array.html");
