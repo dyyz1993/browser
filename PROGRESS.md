@@ -1,3 +1,11 @@
+## M94 可行性评估：canvas 真像素渲染（路线 B 超集）
+- 五层差距全实测量化：字体回退(-apple-system=SF Pro)/AA 算法族差(布局对齐后
+  exact 仅 3.8%、mean|diff| 93/255、AA 分布定性相反)/sbix emoji(零支持)/
+  解析几何 AA+multiply/Skia PNG 编码器字节
+- 判决：阶段 1 真像素 canvas(2-4 周，建议立项) / 阶段 2 字节级对齐(数月+业界
+  零先例+Firefox 论证服务端不可能硬性要求 Chrome hash，不立项)
+- 详见 docs/assessments/M94-canvas-fidelity-feasibility.md
+
 ## M93.19 双引擎探针攻坚：fp diff 28→6，实弹 verify 403（评分线）
 - 双引擎探针页 + 页面望远镜 + 真Chrome CDP 三武器：12+ 根因铁证定位
 - fp worker 自启动模式修复（WCTOR→OSET→AUTO→WERR 四级日志链）→ webWorker×7 全绿
