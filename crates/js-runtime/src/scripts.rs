@@ -7987,6 +7987,14 @@ window.fetch = function(input, options) {
         if (raw === null || raw === undefined) {
             reject(new TypeError('Failed to fetch ' + url));
         } else {
+            // M93.5: 静态资产形状的 GET 成功响应写 SCRIPT_CACHE——同 URL 的
+            // Worker 源码加载（worker_run → fetch_sync 读 SCRIPT_CACHE）直接
+            // 命中缓存，去重 Anubis main.mjs 预取 sha256.mjs + Worker 再取的
+            // 双倍请求（限流站点双倍配额）。形状判断在 Rust 侧 __cacheAsset
+            // 内：仅 js/mjs/css/版本参数 URL；API JSON/HTML 不进缓存（M80 纪律）。
+            if (method === 'GET' && typeof __cacheAsset === 'function') {
+                __cacheAsset(url, raw);
+            }
             var resp = new Response(raw, { status: statusCode, statusText: statusCode === 200 ? 'OK' : String(statusCode) });
             resp.url = url;
             resolve(resp);

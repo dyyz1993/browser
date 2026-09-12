@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M93**（Anubis PoW 闭环：Web Worker + 文档导航 + cookie 逐跳传递） |
-| 总 commits | ~267 |
-| 测试 | 1004 pass, 0 failed, 0 clippy warnings |
+| HEAD | **M93.6**（M93.4/5/6 worktree 智能体并行合并：导航 storage 持久化 / 资产缓存去重 / cookie 铁证测试） |
+| 总 commits | ~268 |
+| 测试 | 1010 pass, 0 failed, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **QuickJS（默认，9.4M）**；boa 改为 `--features boa` 可选（17M，纯 CSR 站天花板，保留备用） |
@@ -30,6 +30,40 @@
 ---
 
 ## 最近变更（倒序）
+
+### M93.5 —— fetch() 静态资产 GET 缓存去重（Worker 源码双取修复）
+
+**背景**：Anubis 挑战页的 main.mjs 用页面 `fetch()` 预取 worker 源码
+（sha256.mjs），随后我们的 Worker 实现（`worker_run` → `bridge::fetch_sync`）
+再次发网络请求取同一 URL——同一个 URL 每页两次请求，在有限流配额的站点
+（nitter.tiekoetter.com 突发限流）直接消耗双倍配额。
+
+**改动**：
+1. **`bridge::is_static_asset_url`（形状判断，Rust 侧单一事实来源）**：
+   硬排除 `.json`/`.html`/`.htm`/`.xml`/`.txt`（M80 纪律：动态响应无
+   validator 语义，写回缓存会破坏期望新鲜响应的用例）；路径以
+   `.js`/`.mjs`/`.css` 结尾或 query 含 `v`/`version`/`cacheBuster`
+   版本参数（key 大小写不敏感）→ 允许缓存；其余不缓存。
+2. **`bridge::cache_asset` + `__cacheAsset` bridge**（engine_quickjs.rs
+   照 `__fetchSync` 模式注册）：fetch shim 成功路径对静态资产形状的 GET
+   响应调用，写入 SCRIPT_CACHE（key = resolve 后的绝对 URL，与
+   worker_run / 外链 script 查询 key 一致）。空 body 不写。
+3. **`worker_run` 零改动**：其 `fetch_sync` 的 SCRIPT_CACHE 只读查询
+   （PERF-M80 既有语义）天然命中预取写入的 worker 源码。
+4. boa 路径无需同步：Worker shim 是 QuickJS 专属（boa 无 Worker 实现，
+   不存在双取问题）。
+
+**测试**（`crates/cli/tests/integration_asset_cache.rs`，wiremock 铁证）：
+- `worker_source_prefetched_by_page_fetch_hits_cache`——页面 fetch 预取
+  `/worker.js` + Worker 加载同 URL，`Mock::expect(1)` 固化请求次数=1，
+  输出含 `got:42`。反向验证：临时禁用缓存写入后该测试红
+  （/worker.js 被请求两次，expect(1) 校验 panic），恢复后绿。
+- `api_json_responses_are_never_cached`——`/api/data.json` 预取后同 URL
+  再取必须仍走网络（`expect(2)` 固化 M80 动态响应不进缓存）。
+- `versioned_query_worker_source_hits_cache`——`/worker?v=42`（无扩展名
+  但带版本参数）按静态资产去重（expect(1)）。
+- 单元测试 `bridge::asset_cache_tests::static_asset_url_shape_rules`
+  （不门控 boa feature，默认 workspace gate 必跑）固化形状规则全集。
 
 ### M93.4 —— 文档导航跨页 storage 持久化（同源保留/跨源隔离）
 
@@ -64,6 +98,19 @@ storage。真实浏览器语义是**同源导航后 localStorage/sessionStorage 
 **验证**：两测试全绿；`cargo test -p browser-js-runtime`（72 pass）+
 `cargo test -p browser-cli` 全绿 + workspace `--no-fail-fast` 全绿；
 fmt/clippy(-D warnings) 0 diff 0 warning。
+
+### M93.6 —— CLI 首跳 fetch 携带 cookie jar 的铁证测试
+
+**背景**：实测悬案——带有效 auth JWT 运行 fetch 仍收到挑战页，无法区分
+"服务端不认"还是"首跳没带 cookie"。需要铁证测试钉死机制。
+
+**结论**：**机制无 bug，首跳确实带 jar cookie**。`integration_cookie_attach.rs`
+两个测试（round-trip：进程 1 拿 Set-Cookie 存盘 → 进程 2 带 cookie 文件访问
+只对携带 cookie 响应的 /protected 拿到 SECRET-BODY；负向对照：不带文件 404）。
+悬案定性：服务端不认旧 JWT（挑战绑定票据），客户端无责。附带核实
+`to_cookie_header` 对 IP host（127.0.0.1 无端口）匹配符合 RFC 6265。
+
+（M93.4/M93.5/M93.6 由三个隔离 worktree 智能体并行开发，主线 cherry-pick 合并。）
 
 ### M93 —— Anubis PoW 挑战闭环：Web Worker + 文档导航 + cookie 逐跳传递
 

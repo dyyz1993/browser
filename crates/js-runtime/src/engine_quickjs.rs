@@ -606,6 +606,14 @@ impl QuickJsEngine {
                 let _ = g.set("__fetchSyncMethod", Function::new(ctx.clone(), |url: String, method: String, body: Option<String>, ct: Option<String>| {
                     bridge::qjs_bridge::fetch_sync_method(url, method, body, ct)
                 }).unwrap());
+                // M93.5: __cacheAsset(url, body) —— 页面 fetch() 成功的静态资产
+                // GET 响应写 SCRIPT_CACHE（形状判断在 Rust 侧 is_static_asset_url，
+                // API JSON/HTML 不进缓存）。同 URL 的 Worker 源码加载
+                // （worker_run → fetch_sync 读 SCRIPT_CACHE）零网络命中——
+                // 去重 Anubis main.mjs 预取 sha256.mjs + Worker 再取的双倍请求。
+                let _ = g.set("__cacheAsset", Function::new(ctx.clone(), |url: String, body: String| {
+                    bridge::qjs_bridge::cache_asset(url, body)
+                }).unwrap());
 
                 // === M93: Web Worker（同步子 Context）+ 文档导航记录 ===
                 let _ = g.set("__workerRun", Function::new(ctx.clone(), |url: String, msg: String| worker_run(&url, &msg)).unwrap());

@@ -699,6 +699,62 @@ pub(crate) fn fetch_sync(url: &str) -> Result<String, String> {
     fetch_sync_with_method(url, "GET", None, None).map(|(_status, body)| body)
 }
 
+/// M93.5: 静态资产形状判断——只有这类 URL 的 GET 响应才允许写 SCRIPT_CACHE。
+///
+/// 最终规则（保守子集，宁可漏缓存不可错缓存）：
+/// 1. **硬排除**（M80 纪律：动态 API 响应无 validator 语义，写回缓存会破坏
+///    期望新鲜响应的用例）：路径以 `.json` / `.html` / `.htm` / `.xml` /
+///    `.txt` 结尾 → 永不缓存，即使 query 带版本参数；
+/// 2. 路径以 `.js` / `.mjs` / `.css` 结尾（大小写不敏感）→ 缓存；
+/// 3. query 含版本参数 `v` / `version` / `cacheBuster`（key 大小写不敏感）
+///    → 缓存（构建工具的 `app.js?v=abc123` hash 指纹语义 = 不可变资产）；
+/// 4. 其余（无扩展名 API 路由、HTML 文档等）→ 不缓存。
+///
+/// 只接受绝对 URL（相对 URL 解析失败 → false）；调用方先 `resolve_url`。
+pub(crate) fn is_static_asset_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let path = parsed.path().to_ascii_lowercase();
+    // 规则 1：动态响应硬排除。
+    if path.ends_with(".json")
+        || path.ends_with(".html")
+        || path.ends_with(".htm")
+        || path.ends_with(".xml")
+        || path.ends_with(".txt")
+    {
+        return false;
+    }
+    // 规则 2：静态脚本/样式扩展名。
+    if path.ends_with(".js") || path.ends_with(".mjs") || path.ends_with(".css") {
+        return true;
+    }
+    // 规则 3：query 版本参数。
+    parsed.query_pairs().any(|(k, _)| {
+        let key = k.to_ascii_lowercase();
+        key == "v" || key == "version" || key == "cachebuster"
+    })
+}
+
+/// M93.5: 把页面 `fetch()` 成功取得的静态资产 GET 响应写入 SCRIPT_CACHE
+/// （key = resolve 后的绝对 URL，与 worker_run / 外链 script 的查询 key 一致）。
+///
+/// 背景：Anubis 挑战页的 main.mjs 用页面 `fetch()` 预取 worker 源码
+/// （sha256.mjs），随后 Worker 实现（`worker_run` → `fetch_sync`）再次发
+/// 网络请求取同一 URL——同 URL 每页两次请求，在限流站点
+/// （nitter.tiekoetter.com 突发限流）直接消耗双倍配额。写入后
+/// `fetch_sync` 的 SCRIPT_CACHE 只读查询（PERF-M80）天然命中。
+/// 非"静态资产形状"的响应静默忽略（不写缓存）；空 body 也不写。
+pub(crate) fn cache_asset(url: &str, body: &str) {
+    let resolved = resolve_url(url);
+    if !is_static_asset_url(&resolved) || body.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = crate::scripts::script_cache_public().lock() {
+        cache.insert(resolved, body.to_string());
+    }
+}
+
 // M65: 预取缓存——URL → 响应体。fetch_sync 命中后移除（一次性）。
 thread_local! {
     static FETCH_CACHE: std::cell::RefCell<std::collections::HashMap<String, String>> =
@@ -2669,6 +2725,37 @@ mod tests {
     }
 }
 
+/// M93.5: 静态资产形状判断的单元测试。独立模块（不门控 boa feature）——
+/// 形状规则本身与引擎无关，默认 `cargo test --workspace`（无 boa）也必须跑。
+#[cfg(test)]
+mod asset_cache_tests {
+    use super::*;
+
+    /// js/mjs/css 与版本参数命中；API JSON / HTML 文档 / 相对 URL 永不命中。
+    #[test]
+    fn static_asset_url_shape_rules() {
+        // 规则 2：路径扩展名（大小写不敏感）。
+        assert!(is_static_asset_url("https://x.test/worker.js"));
+        assert!(is_static_asset_url("https://x.test/a/sha256.mjs"));
+        assert!(is_static_asset_url("https://x.test/assets/style.CSS"));
+        // 规则 3：query 版本参数（key 大小写不敏感，路径无扩展名）。
+        assert!(is_static_asset_url("https://x.test/chunk?cacheBuster=abc"));
+        assert!(is_static_asset_url("https://x.test/bundle?v=42"));
+        assert!(is_static_asset_url("https://x.app/asset?VERSION=2"));
+        assert!(is_static_asset_url("https://x.app/app?deploy=1&v=7"));
+        // 规则 1：动态响应硬排除——即使带版本参数也不缓存。
+        assert!(!is_static_asset_url("https://x.test/api/data.json?v=2"));
+        assert!(!is_static_asset_url("https://x.test/page.html?v=2"));
+        assert!(!is_static_asset_url("https://x.test/feed.xml?version=9"));
+        // 规则 4：无扩展名 API 路由 / 文档 / 无版本参数查询。
+        assert!(!is_static_asset_url("https://x.test/api/data"));
+        assert!(!is_static_asset_url("https://x.test/page.html"));
+        assert!(!is_static_asset_url("https://x.test/timeline?a=1&b=2"));
+        // 相对 URL 不是绝对形状（bridge 只在 resolve_url 之后调用）。
+        assert!(!is_static_asset_url("/worker.js"));
+    }
+}
+
 // M16.2 (done): setTimeout / clearTimeout 已实现，见上面的
 // set_timeout_bridge / clear_timeout_bridge + drain_due_timer_callbacks。
 // 决策见 docs/decisions/0002-boa-settimeout-vs-deno-core.md（推翻了
@@ -3274,6 +3361,13 @@ pub mod qjs_bridge {
         super::fetch_sync_with_method(&resolved, &method, body.as_deref(), ct.as_deref())
             .ok()
             .map(|(status, b)| format!("{status}\n{b}"))
+    }
+
+    /// cacheAsset(url, body) —— 静态资产形状判断 + 写 SCRIPT_CACHE。
+    /// M93.5: QuickJS fetch shim 成功路径调用；非资产形状静默忽略
+    /// （形状判断在 [`super::is_static_asset_url`]，API JSON/HTML 不进缓存）。
+    pub fn cache_asset(url: String, body: String) {
+        super::cache_asset(&url, &body);
     }
 
     /// storageGet(key) -> Option<String>。
