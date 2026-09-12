@@ -1,3 +1,14 @@
+## M96.1 V8 真实 pipeline 跑通——同源消解实证
+- engine_v8.rs：ensure_v8_initialized（OnceLock 进程级 platform）+
+  V8Engine{OwnedIsolate} + eval_string/eval_install（API 适配
+  OwnedIsolate/Option 语义——rusty_v8 0.32 与 v8eval 的差异）
+- **单测三断言全绿**：①eval 求值；②etsl 语义（eval.toString() 单行
+  native——QuickJS 上 226 的天花板在 V8 原生消失）；③toSourceError
+  语义（TypeError 文案逐字符与 Chrome 一致——无需 M94.12 的 hack）
+- **真实链接体积实测**：--features v8 全链接 11.9MB（vs 默认 10.3MB，
+  **增量仅 +1.6MB**——LTO 死代码消除远优于预估 17.6MB）
+- 双门禁：默认 1024/0 + v8 feature clippy 0
+
 ## M96.0 ADR-0006 落地——V8 可选后端 feature 骨架（G3 修订）
 - ADR-0006：G3「不引入 V8」→「默认构建不引入 V8」；rusty_v8 入白名单
   （optional）；--features v8 + --js-engine v8 第三引擎选项
