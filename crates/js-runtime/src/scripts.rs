@@ -2536,7 +2536,16 @@ window.RTCRtpSender.getCapabilities = function(kind) {
     return window.__rtcCaps[kind] || null;
 };
 window.RTCRtpReceiver = window.RTCRtpReceiver || {};
-window.RTCRtpReceiver.getCapabilities = window.RTCRtpSender.getCapabilities;
+// M94.10: Receiver 独立表（Chrome 实测 senderSameAsReceiver=false——VM 的
+// rtcVideo/AudioCapabilitiesHash 用 RTCRtpReceiver.getCapabilities+JSON.stringify
+// 原序哈希，此前错用 Sender 表导致 video hash 必差）
+window.__rtcRecvCaps = {
+    audio: {"codecs": [{"channels": 2, "clockRate": 48000, "mimeType": "audio/opus", "sdpFmtpLine": "minptime=10;useinbandfec=1"}, {"channels": 2, "clockRate": 48000, "mimeType": "audio/red"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/G722"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/PCMU"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/PCMA"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/CN"}, {"channels": 1, "clockRate": 48000, "mimeType": "audio/telephone-event"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/telephone-event"}], "headerExtensions": [{"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"}, {"direction": "sendrecv", "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:mid"}]},
+    video: {"codecs": [{"clockRate": 90000, "mimeType": "video/VP8"}, {"clockRate": 90000, "mimeType": "video/rtx"}, {"clockRate": 90000, "mimeType": "video/VP9", "sdpFmtpLine": "profile-id=0"}, {"clockRate": 90000, "mimeType": "video/VP9", "sdpFmtpLine": "profile-id=2"}, {"clockRate": 90000, "mimeType": "video/VP9", "sdpFmtpLine": "profile-id=1"}, {"clockRate": 90000, "mimeType": "video/VP9", "sdpFmtpLine": "profile-id=3"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=4d001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=f4001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=f4001f"}, {"clockRate": 90000, "mimeType": "video/AV1", "sdpFmtpLine": "level-idx=5;profile=0;tier=0"}, {"clockRate": 90000, "mimeType": "video/AV1", "sdpFmtpLine": "level-idx=5;profile=1;tier=0"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=64001f"}, {"clockRate": 90000, "mimeType": "video/H265", "sdpFmtpLine": "level-id=180;profile-id=1;tier-flag=0;tx-mode=SRST"}, {"clockRate": 90000, "mimeType": "video/H265", "sdpFmtpLine": "level-id=180;profile-id=2;tier-flag=0;tx-mode=SRST"}, {"clockRate": 90000, "mimeType": "video/red"}, {"clockRate": 90000, "mimeType": "video/ulpfec"}, {"clockRate": 90000, "mimeType": "video/flexfec-03", "sdpFmtpLine": "repair-window=10000000"}], "headerExtensions": [{"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:toffset"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"}, {"direction": "sendrecv", "uri": "urn:3gpp:video-orientation"}, {"direction": "sendrecv", "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/video-content-type"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/video-timing"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/color-space"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:mid"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id"}]}
+};
+window.RTCRtpReceiver.getCapabilities = function(kind) {
+    return window.__rtcRecvCaps[kind] || null;
+};
 
 // M93.18: WebAssembly 形状（仅存在性——fp bitmask 检测 typeof WebAssembly。
 // 不真执行 WASM：instantiate/compile reject → 使用方自动降级 JS 路径，
@@ -2885,12 +2894,14 @@ try { Object.defineProperty(PluginArray.prototype, Symbol.toStringTag, { value: 
 try { Object.defineProperty(MimeTypeArray.prototype, Symbol.toStringTag, { value: 'MimeTypeArray', configurable: true }); } catch (eMA) {}
 try { Object.defineProperty(Plugin.prototype, Symbol.toStringTag, { value: 'Plugin', configurable: true }); } catch (eP) {}
 try { Object.defineProperty(MimeType.prototype, Symbol.toStringTag, { value: 'MimeType', configurable: true }); } catch (eM) {}
-PluginArray.prototype.item = function(i) { return this[i] || null; };
+// M94.10: item() 参数 ToUint32 回绕（Chrome 实测 item(4294967296) 返回
+// Plugin[0] 而非 null——VM 的 pluginOverflow 探测：4294967296>>>0===0）
+PluginArray.prototype.item = function(i) { return this[Number(i) >>> 0] || null; };
 PluginArray.prototype.namedItem = function(n) { return this[n] || null; };
 PluginArray.prototype.refresh = function() {};
-Plugin.prototype.item = function(i) { return this[i] || null; };
+Plugin.prototype.item = function(i) { return this[Number(i) >>> 0] || null; };
 Plugin.prototype.namedItem = function(n) { return this[n] || null; };
-MimeTypeArray.prototype.item = function(i) { return this[i] || null; };
+MimeTypeArray.prototype.item = function(i) { return this[Number(i) >>> 0] || null; };
 MimeTypeArray.prototype.namedItem = function(n) { return this[n] || null; };
 // M93.19: 可迭代接口标记——Chrome 实测 typeof navigator.plugins[Symbol.iterator]
 // === 'function'（数组式迭代）。Array.prototype.values 对 length+索引访问是
@@ -2954,7 +2965,7 @@ try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3)
      'drawImage','putImageData','fillText','strokeText','measureText','save','restore','scale',
      'rotate','translate','transform','setTransform','resetTransform','setLineDash','getLineDash',
      'createLinearGradient','createRadialGradient','createConicGradient','createPattern',
-     'createImageData','getImageData','isPointInPath','isPointInStroke','getContextAttributes',
+     'createImageData','getImageData','isPointInPath','isPointInStroke','getContextAttributes','eval',
      'getContext','toDataURL','toBlob','captureStream','transferControlToOffscreen'].forEach(function(n) { __nativeFns[n] = 1; });
     try {
         Object.defineProperty(Function.prototype, 'toString', {
@@ -4243,6 +4254,11 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
 // 铁证）：new Image()+src=data:1x1 透明 PNG → onload → ctx.drawImage →
 // getImageData 4 字节全 0 检查。此前 Image 未定义 → new throw → 探测
 // catch → fp 恒 'ERROR'。onload 以微任务近似 Chrome 的异步解码完成。
+// M94.10: eval.toString() 形状——VM 的 etsl = eval.toString().length
+// （Chrome=33 'function eval() { [native code] }'；QuickJS 返回 226 字符
+// 真实源码）。own toString 覆盖（eval 是函数对象可加 own 属性）。
+try { Object.defineProperty(window.eval, 'toString', { value: function() { return 'function eval() { [native code] }'; }, writable: true, configurable: true }); } catch (eETS) {}
+
 window.Image = window.Image || function Image(w, h) {
     this.width = w || 0;
     this.height = h || 0;

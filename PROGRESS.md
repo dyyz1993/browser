@@ -1,3 +1,17 @@
+## M94.10 pluginOverflow+rtcVideo 双破译修复——fp diff 实质 4→3 项
+- pluginOverflow 语义（反混淆工具链）：item(4294967296) 的 ToUint32 回绕
+  （Chrome >>>0=0 → 返回 Plugin[0]；我们返回 null 被判 overflow）→
+  item() 参数 Number(i)>>>0 修复（Plugin/PluginArray/MimeTypeArray 三处）
+- rtcVideo 语义：VM 用 RTCRtpReceiver.getCapabilities（非 Sender！）+
+  JSON.stringify 原序哈希；Chrome 实测 senderSameAsReceiver=false——
+  Receiver 独立表（真 Chrome CDP 采集）替换错用的 Sender 表
+- etsl 破译=eval.toString().length（own toString 覆盖 33 ✓ 页面验证），
+  但 VM 内仍 226——实为时序敏感数值类（Image 微任务改变测量），
+  非形状差异，接受
+- fpo：fp diff 4（cdp 伪影/etsl 数值类/toSource C 层/canvasFingerprint
+  字节级）——形状级差异实质只剩 canvasFingerprint（M94 评估判不可行）
+- 门禁 1024/0
+
 ## M94.9 脚本化反混淆终局——hasModifiedCanvas 破译并修复（false ✓）
 - 解码器复现工程：Mjx3k2E 表 + rHYohf 单表 + 5 实例（各 92 字符字母表，
   字符串感知括号平衡提取——字符串内 } 误截函数体是关键坑）；实参保
