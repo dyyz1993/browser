@@ -1,3 +1,8 @@
+## M94.15 裁决补充：Skia 级期望收益进一步降低
+- Chrome headless（canvas hash 与有头完全相同）也被 xcancel 拒——证明
+  服务端按浏览器族群聚类评分，非单字段判定；Skia 级投入后仍可能不过线
+ （VM fp 外还有 TLS/H2/时序等族群信号）——选项 1 论据增强，归档
+
 ## M94.14 etsl 多修法终审——确证引擎级，收口
 - 三修法均无效：① toString 白名单按 name（QuickJS 原生 eval.name 为空不
   中）②白名单按引用（VM 环境不中——机制未明）③own toString
