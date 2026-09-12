@@ -126,3 +126,24 @@ Skia 内部 linearized 合成路径，macOS Chrome 的实现特定）。
 - Chrome 逐字符 advance：/tmp/chrome_advances.json
 - 字体宽度指纹：Helvetica=206.14 / -apple-system=217.54 / 未知 family=217.54
 - VM 序列望远镜：/tmp/ours_fp14.out（ctxset.* 记录）
+
+## 六、M94.1 附录：hasModifiedCanvas 向量追猎记录（未破）
+
+四层观测网络全部零命中（详见 PROGRESS M94.1）：方法调用链无异常、
+C2D.prototype Proxy 零访问、canvas 元素 Proxy 仅读 4 个属性、Error 构造
+日志证明 probe 异常不经 JS Error 构造器（QuickJS 引擎内部抛错）。
+
+hik8ew 解码 dump（replay serve 侧钩子，393 词表 + 4000 序列归档）：
+canvas 探测簇位于 webgpu 探测之后（序列 2185-2206），键名以碎片拼接
+（'hasMod'+'ifiedC'+'anvas'）；fillText/getContext/toDataURL 等 API 名
+**既不在 hik8ew 表也不在源码明文**——VM 用 charCode 拼名（词表含
+fromCodePoint/charCodeAt），静态 dump 不可达。
+
+已排除的假说（8 个）：prototype spy（零访问）、构造器 toString、
+方法族 toString、toBlob null、convertToBlob 空 Blob、createImageBitmap
+缺失、width/height 反射脱节、font 读回未规范化。其中 6 个假说对应的
+**修复本身是正确的 Chrome 语义对齐**，已入库（门禁 1024/0）。
+
+下轮候选路径：(a) rquickjs eval 命名支持（EvalOptions 无 name 字段，
+需上游或 wrapper 层方案）→ stack 行号映射回 js-challenge.js 源码行 →
+直接读探测函数混淆源码；(b) 源码级 charCode 拼名静态重构（AST 反混淆）。

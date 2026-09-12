@@ -2971,6 +2971,7 @@ try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3)
     }
     function __mkW(Native, name) {
         function __wErrCtor(message) {
+            if (typeof __ctrace === 'function') { try { __ctrace('ERRCTOR ' + name + ': ' + String(message).slice(0, 120)); } catch (eEC) {} }
             var e = new Native(message);
             try {
                 var cm = __chromeMsg(message);
@@ -3988,7 +3989,24 @@ Element.prototype.toDataURL = function() {
     }
     return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 };
-Element.prototype.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
+Element.prototype.toBlob = function(cb, type) {
+    // M94.1: Chrome 语义 cb(Blob) 永非 null；tamper 检测（hasModifiedCanvas
+    // 候选向量）常 await toBlob().arrayBuffer() 与 toDataURL 字节比对——
+    // cb(null) → null.arrayBuffer → throw → fp 记 ERROR。
+    var blob = null;
+    try {
+        var url = (this.__ctx2d && this.__ctx2d.__cvid && typeof __cvToDataURL === 'function')
+            ? __cvToDataURL(this.__ctx2d.__cvid) : '';
+        var b64 = url.indexOf(',') >= 0 ? url.slice(url.indexOf(',') + 1) : '';
+        var bin = (typeof atob === 'function') ? atob(b64) : '';
+        var u8 = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i) & 255;
+        blob = new Blob([u8], { type: type || 'image/png' });
+    } catch (eTB) {
+        try { blob = new Blob([], { type: 'image/png' }); } catch (eTB2) {}
+    }
+    if (typeof cb === 'function') cb(blob);
+};
 Element.prototype.captureStream = function() { return {}; };
 // M93.19b: OffscreenCanvas 桥（hasModifiedCanvas 检测链路可能走
 // transferControlToOffscreen；缺失则 TypeError → fp 记 ERROR）
@@ -4001,15 +4019,59 @@ Element.prototype.transferControlToOffscreen = function() {
 Element.prototype.getContextAttributes = function() {
     return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false }; 
 };
+// M94.1: Element.prototype canvas 方法族 native toString 伪装——VM 的
+// hasModifiedCanvas 链路可能读 getContext/toDataURL 源码判定"被 hook"
+//（上轮只对 CanvasRenderingContext2D.prototype 装了，这里漏了）。
+(function() {
+    var names = ['getContext', 'toDataURL', 'toBlob', 'captureStream', 'transferControlToOffscreen', 'getContextAttributes'];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            (function(nm) {
+                var fn = Element.prototype[nm];
+                if (typeof fn === 'function') {
+                    fn.toString = function() { return 'function ' + nm + '() { [native code] }'; };
+                }
+            })(names[i]);
+        } catch (eET) {}
+    }
+})();
 if (typeof window.OffscreenCanvas === 'undefined') {
-    window.OffscreenCanvas = function(w, h) { return { width: w||300, height: h||150, getContext: Element.prototype.getContext }; };
+    window.OffscreenCanvas = function(w, h) {
+        var oc = { width: w || 300, height: h || 150, getContext: Element.prototype.getContext };
+        // M94.1: convertToBlob 返回真 PNG Blob（tamper 检测 await 它的
+        // arrayBuffer——此前 resolve({}) → undefined 调用 → throw → ERROR）
+        oc.convertToBlob = function(opts) {
+            var blob = null;
+            try {
+                var url = (oc.__ctx2d && oc.__ctx2d.__cvid && typeof __cvToDataURL === 'function')
+                    ? __cvToDataURL(oc.__ctx2d.__cvid) : '';
+                var b64 = url.indexOf(',') >= 0 ? url.slice(url.indexOf(',') + 1) : '';
+                var bin = (typeof atob === 'function') ? atob(b64) : '';
+                var u8 = new Uint8Array(bin.length);
+                for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i) & 255;
+                blob = new Blob([u8], { type: (opts && opts.type) || 'image/png' });
+            } catch (eCB) {
+                try { blob = new Blob([], { type: 'image/png' }); } catch (eCB2) {}
+            }
+            return Promise.resolve(blob);
+        };
+        oc.toDataURL = function() {
+            return (oc.__ctx2d && oc.__ctx2d.__cvid && typeof __cvToDataURL === 'function')
+                ? __cvToDataURL(oc.__ctx2d.__cvid) : 'data:,';
+        };
+        return oc;
+    };
 }
 // M93.19c: 2D ctx 原型化——望远镜证实 VM 在 CanvasRenderingContext2D
 // .prototype 上挂 spy 检测篡改（hasModifiedCanvas）；own-property 的 ctx
 // 对象让 prototype spy 永不触发 → fp 记 ERROR。改为标准类：方法挂
 // prototype（fillRect/fillText 等），VM 的包装可拦截、计数、回填。
-window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function CanvasRenderingContext2D(canvas) {
-    this.canvas = canvas || null;
+window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function CanvasRenderingContext2D(canvas, __internalOk) {
+    // M94.1: Chrome 语义——直接 new 抛 Illegal constructor（tamper 检测候选：
+    // 可构造 = 被 hook）；内部经 __canvas2dStub 传 __internalOk 标记。
+    if (__internalOk !== '__cvInternal') { throw new TypeError('Illegal constructor'); }
+    this.__canvasEl = canvas || null;
+    this.__fontNorm = '10px sans-serif';
     // M94: Rust 侧 framebuffer（无桥时 0=stub 模式）
     this.__cvid = (typeof __cvNew === 'function')
         ? __cvNew(Number(canvas && canvas.width) || 300, Number(canvas && canvas.height) || 150)
@@ -4110,6 +4172,22 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
     p.isPointInStroke = function() { return false; };
     p.getContextAttributes = function() { return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false }; };
     try { Object.defineProperty(p, Symbol.toStringTag, { value: 'CanvasRenderingContext2D', configurable: true }); } catch (eC2) {}
+    // M94.1: canvas 是 prototype getter（Chrome 实测 descriptor：{get, enumerable: true, configurable: true}）
+    try { Object.defineProperty(p, 'canvas', { get: function() { return this.__canvasEl || null; }, enumerable: true, configurable: true }); } catch (eCG) {}
+    // M94.1: font 规范化（Chrome 实测：'11pt X' 读回 '14.6667px X'）
+    try {
+        Object.defineProperty(p, 'font', {
+            get: function() { return this.__fontNorm || '10px sans-serif'; },
+            set: function(v) {
+                var s = String(v || '10px sans-serif');
+                var m = /^([\d.]+)(px|pt)\s+(.+)$/.exec(s);
+                this.__fontNorm = m
+                    ? ((parseFloat(m[1]) * (m[2] === 'pt' ? 96 / 72 : 1)).toFixed(4).replace(/\.?0+$/, '') || '0') + 'px ' + m[3]
+                    : s;
+            },
+            enumerable: true, configurable: true
+        });
+    } catch (eFN) {}
     // M94: canvas 方法族形状对齐——Chrome 实测 fillText.toString() 为
     // 'function fillText() { [native code] }'；反指纹扩展检测（VM 的
     // hasModifiedCanvas 链路）靠读方法源码判定"canvas 被 hook"。我们的
@@ -4134,7 +4212,48 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
         }
     })();
 })();
-window.__canvas2dStub = function(cnv) { return new window.CanvasRenderingContext2D(cnv); };
+// M94.1: createImageBitmap/ImageBitmap（Chrome 全局异步位图 API；缺失时
+// VM 的 tamper 探测 `await createImageBitmap(canvas)` 直接 ReferenceError
+// → hasModifiedCanvas 记 ERROR——候选向量 #4）。
+window.ImageBitmap = window.ImageBitmap || function ImageBitmap() { throw new TypeError('Illegal constructor'); };
+window.createImageBitmap = function(src) {
+    var w = 0, h = 0;
+    try {
+        if (src && src.__ctx2d && src.__ctx2d.__cvid) {
+            w = Number(src.width) || 0;
+            h = Number(src.height) || 0;
+        } else if (src && typeof src.size === 'number') {
+            w = 0; h = 0; // blob 源：PNG 头解析留待需要时补
+        }
+    } catch (eCIB) {}
+    var bm = { width: w, height: h, close: function() {} };
+    return Promise.resolve(bm);
+};
+
+// M94.1: canvas 族构造器 native toString——prototype Proxy 望远镜铁证：
+// VM 只读一次 window.CanvasRenderingContext2D、零 prototype 内省 →
+// 检测向量是构造器自身的 toString()（Chrome 为 native code 串，我们的
+// JS 构造器返回源码 → 判定"被 hook" → hasModifiedCanvas ERROR）。
+(function() {
+    var ctors = ['CanvasRenderingContext2D', 'HTMLCanvasElement', 'OffscreenCanvas',
+        'ImageData', 'CanvasGradient', 'CanvasPattern', 'TextMetrics', 'Path2D'];
+    for (var i = 0; i < ctors.length; i++) {
+        try {
+            (function(nm) {
+                var C = window[nm];
+                if (typeof C === 'function' && !C.hasOwnProperty('toString')) {
+                    C.toString = function() { return 'function ' + nm + '() { [native code] }'; };
+                }
+            })(ctors[i]);
+            // HTMLCanvasElement 是 Element 别名——别名上装会污染所有 Element
+            // 构造器 toString；换成仅在别名 !== Element 时装
+            if (ctors[i] === 'HTMLCanvasElement' && window.HTMLCanvasElement === window.Element) {
+                delete window.HTMLCanvasElement.toString;
+            }
+        } catch (eCT) {}
+    }
+})();
+window.__canvas2dStub = function(cnv) { return new window.CanvasRenderingContext2D(cnv, '__cvInternal'); };
 // M93.19c: 伴生构造器（Chrome 全部为 function）
 window.CanvasGradient = window.CanvasGradient || function CanvasGradient() {};
 window.CanvasPattern = window.CanvasPattern || function CanvasPattern() {};
@@ -8426,7 +8545,30 @@ document.createElement = function(tag) {
     var id = (typeof __createDetachedEl === 'function')
         ? __createDetachedEl(String(tag || 'div'))
         : __createEl(String(tag || 'div'));
-    return __makeElement(id);
+    var __el = __makeElement(id);
+    // M94.1: canvas.width/height 反射属性（元素级 Proxy 望远镜铁证：VM 读
+    // canvas.getAttribute——Chrome 的 IDL 反射使 property 写同步进 DOM
+    // attribute；我们 property/attribute 脱节 → tamper 检测判"被篡改" →
+    // hasModifiedCanvas ERROR）。
+    if (String(tag).toLowerCase() === 'canvas') {
+        try {
+            var __nid = id;
+            ['width', 'height'].forEach(function(dim) {
+                Object.defineProperty(__el, dim, {
+                    get: function() {
+                        var a = (typeof __getAttr === 'function') ? __getAttr(__nid, dim) : null;
+                        var n = a === null || a === undefined || a === '' ? null : parseInt(a, 10);
+                        return (n && n > 0) ? n : (dim === 'width' ? 300 : 150);
+                    },
+                    set: function(v) {
+                        if (typeof __setAttr === 'function') __setAttr(__nid, dim, String(v));
+                    },
+                    configurable: true, enumerable: true
+                });
+            });
+        } catch (eCR) {}
+    }
+    return __el;
 };
 document.createElementNS = function(ns, tag) {
     var __el = document.createElement(tag);

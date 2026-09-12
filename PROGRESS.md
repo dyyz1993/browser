@@ -1,3 +1,18 @@
+## M94.1 hasModifiedCanvas 向量追猎（未破，资产沉淀）
+- 四层望远镜全零命中：方法调用链（无 THROW）/C2D.prototype Proxy（VM 不内省）
+  /canvas 元素 Proxy（只读 getContext/getAttribute/style/toDataURL）/
+  Error 构造日志（probe 异常不经 JS 构造器=引擎内部抛）
+- hik8ew serve 侧解码 dump（393 词表归档 /tmp/vmdump.txt）：canvas 探测代码
+  在 js-challenge.js 内（webgpu→canvas 探测簇 @2185-2206），但 fillText 等
+  API 名用 charCode 拼（hik8ew 表+明文均无）——静态 dump 抓不到
+- 8 项形状修复（全部 Chrome 实测语义，独立正确）：toBlob 真 PNG Blob
+  （cb 永非 null）/convertToBlob/createImageBitmap（原缺失 ReferenceError）
+  /canvas.width-height IDL 反射（getAttribute 一致性）/new C2D() Illegal
+  constructor/canvas prototype getter/font 规范化读回（14.6667px）/canvas
+  方法族+构造器 native toString
+- 实弹：canvasFingerprint 演进为 -650ed7e0（真实渲染），verify 仍 403
+- 门禁 1024/0
+
 ## M94 阶段 1：canvas 2D 真像素渲染落地（fontdue+超采样 AA+PNG）
 - canvas2d.rs：RGBA framebuffer/路径填充(4x4 超采样 evenodd+nonzero)/
   fontdue 文本/multiply 合成/png+base64 toDataURL/getImageData b64 往返
