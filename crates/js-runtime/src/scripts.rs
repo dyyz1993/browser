@@ -2540,6 +2540,35 @@ window.btoa = function(s) {
     return out;
 };
 
+// M93.12-diag: Promise 拒绝望远镜——then 源码级包装（安装期一致，VM 防篡改
+// 不可见），任何流经异步链的 rejection 及错误信息打印出来（xcancel VM 拿到
+// 挑战后 5 微任务死寂，唯一可观测缺口就是被吞的 rejection）。
+(function() {
+    var OT = Promise.prototype.then;
+    Promise.prototype.then = function(onF, onR) {
+        var wF = onF ? function(v) {
+            try { return onF(v); }
+            catch (e) {
+                if (typeof __ctrace === 'function') { try { __ctrace('THROW@then ' + String((e && (e.message || e)) || e).slice(0, 120) + ' STACK=' + String((e && e.stack) || '').split('\n').slice(0, 5).join(' ~ ').slice(0, 400)); } catch (e2) {} }
+                throw e;
+            }
+        } : onF;
+        var wR = onR ? function(e) {
+            if (typeof __ctrace === 'function') { try { __ctrace('CAUGHT@then ' + String((e && (e.message || e)) || e).slice(0, 180)); } catch (e2) {} }
+            try { return onR(e); }
+            catch (e3) {
+                if (typeof __ctrace === 'function') { try { __ctrace('THROW@catch ' + String((e3 && (e3.message || e3)) || e3).slice(0, 180)); } catch (e4) {} }
+                throw e3;
+            }
+        } : function(e) {
+            // 无 onR：rejection 继续传播——记录（若永远无人接住=unhandled）
+            if (typeof __ctrace === 'function') { try { __ctrace('PASS-REJECT ' + String((e && (e.message || e)) || e).slice(0, 180)); } catch (e5) {} }
+            throw e;
+        };
+        return OT.call(this, wF, wR);
+    };
+})();
+
 // M93.7: 纯 JS SHA-256（crypto.subtle.digest 的实现内核，零 Rust 依赖——G4 自研）。
 // 主上下文与 worker env（engine_quickjs.rs worker_env_js）各持一份同源拷贝：
 // 两处是独立 eval 空间，共享常量需跨模块传字符串，拷贝更稳。
@@ -3044,7 +3073,37 @@ window.__makeElement = function(nodeId) {
     if (typeof nodeId === 'number' && nodeId >= 0) {
         var key = String(nodeId);
         if (!window.__elCache[key]) {
-            window.__elCache[key] = new Element(nodeId);
+            var __el = new Element(nodeId);
+            // M93.12: 自定义元素升级——createElement/解析出的元素命中
+            // customElements registry 时，原型挂接 + 构造器执行（spec 的
+            // custom element upgrade 语义；xcancel VM 对 <cap-widget> 调
+            // .solve() 依赖此路径）。
+            try {
+                if (window.customElements && window.customElements.__registry) {
+                    var __tag = (__el.tagName || '').toLowerCase();
+                    var __ctor = window.customElements.__registry[__tag];
+                    if (__ctor && !__el.__customUpgraded) {
+                        var __real;
+                        try { __real = new __ctor(); }
+                        catch (eNew) {
+                            if (typeof __ctrace === 'function') { try { __ctrace('CTOR-THROW ' + String((eNew && (eNew.message || eNew)) || eNew).slice(0, 160)); } catch (e8) {} }
+                            throw eNew;
+                        }
+                        __real.__nodeId = __el.__nodeId;
+                        var __seen = { constructor: 1 };
+                        var __names = Object.getOwnPropertyNames(Element.prototype);
+                        for (var __i = 0; __i < __names.length; __i++) {
+                            var __k = __names[__i];
+                            if (__seen[__k]) continue;
+                            __seen[__k] = 1;
+                            try { __real[__k] = Element.prototype[__k]; } catch (eCp) {}
+                        }
+                        __real.__customUpgraded = true;
+                        __el = __real;
+                    }
+                }
+            } catch (eMk) {}
+            window.__elCache[key] = __el;
         }
         return window.__elCache[key];
     }
@@ -3117,7 +3176,97 @@ window.dispatchEvent = function(ev) {
 };
 
 // M66: customElements + HTMLElement（no-op，不存引用避免 GC 泄漏）
-window.customElements = { define: function(){}, get: function(){return undefined;}, upgrade: function(){}, whenDefined: function(){return Promise.resolve();} };
+// M93.12: Shadow DOM 最小子集——cap-widget 的 connectedCallback 用
+// this.attachShadow({mode:'open'}) + this.shadowRoot 构建组件 UI。
+// 爬虫近似：影根 = detached 真 DOM 节点（arena 里的游离 div），天然继承
+// 全部元素桥方法（appendChild/querySelector/innerHTML），子树查询用现有
+// qs（支持 root id）。
+Element.prototype.attachShadow = function(opts) {
+    if (this.__shadowRoot) return this.__shadowRoot;
+    try {
+        var rootId = (typeof __createDetachedEl === 'function') ? __createDetachedEl('div') : null;
+        var root = (typeof rootId === 'number' && typeof __makeElement === 'function') ? __makeElement(rootId) : null;
+        if (root) {
+            root.__isShadowRoot = true;
+            this.__shadowRoot = root;
+        }
+    } catch (eAs) {}
+    return this.__shadowRoot || null;
+};
+try {
+    Object.defineProperty(Element.prototype, 'shadowRoot', {
+        get: function() { return this.__shadowRoot || null; },
+        enumerable: false, configurable: true
+    });
+} catch (eSh) {}
+
+// M93.12: customElements 真实现——xcancel antibot 的 VM 用
+// `customElements.whenDefined('cap-widget').then(...solve())` 驱动挑战
+// （cap.min.js 定义 <cap-widget> 自定义元素）。M66 的 no-op 让元素永远
+// 没有 .solve() → VM 拿到挑战后 "not a function" 静默死。
+// GC 纪律权衡：registry 挂 customElements 对象自身（页面生命周期常驻，
+// runtime drop 时随全局一起回收——不挂 window 裸全局）。
+window.customElements = {
+    __registry: {},
+    define: function(name, ctor, opts) {
+        this.__registry[name] = ctor;
+        try {
+            // 已存在同名元素升级（spec：define 触发已有实例 upgrade）
+            var ids = (typeof __qsAll === 'function') ? String(__qsAll(name)).split(',') : [];
+            for (var i = 0; i < ids.length; i++) {
+                var nid = parseInt(ids[i], 10);
+                if (nid) { this.__upgradeOne(nid, ctor); }
+            }
+        } catch (eUp) {}
+    },
+    __upgradeOne: function(nodeId, ctor) {
+        var el = (typeof __makeElement === 'function') ? __makeElement(nodeId) : null;
+        if (!el || el.__customUpgraded) return el;
+        try {
+            // M93.12: 真构造（new ctor()——类私有字段 #x 只能经正式构造安装，
+            // ctor.call(el) 不行，cap-widget 的 this.#field 会炸）。DOM 桥
+            // 方法从 Element.prototype 拷贝 + __nodeId 带过去；真实例替换
+            // 缓存（getElementById 等返回同一对象，保持 === 同一性）。
+            var real = new ctor();
+            real.__nodeId = el.__nodeId;
+            var seen = { constructor: 1 };
+            var names = Object.getOwnPropertyNames(Element.prototype);
+            for (var i = 0; i < names.length; i++) {
+                var k = names[i];
+                if (seen[k]) continue;
+                seen[k] = 1;
+                try { real[k] = Element.prototype[k]; } catch (eCopy) {}
+            }
+            real.__customUpgraded = true;
+            var key = String(nodeId);
+            if (window.__elCache) { window.__elCache[key] = real; }
+            try {
+                if (typeof real.connectedCallback === 'function') real.connectedCallback();
+            } catch (eCc) {
+                if (typeof __ctrace === 'function') { try { __ctrace('UPCC-THROW ' + String((eCc && (eCc.message || eCc)) || eCc).slice(0, 160) + ' STACK=' + String((eCc && eCc.stack) || '').split('\n').slice(0, 4).join('~').slice(0, 320)); } catch (e7) {} }
+            }
+            return real;
+        } catch (eS) { return el; }
+    },
+    get: function(name) { return this.__registry[name] || undefined; },
+    upgrade: function(el) {
+        var t = ((el && el.tagName) || '').toLowerCase();
+        var ctor = this.__registry[t];
+        if (ctor && el && typeof el.__nodeId === 'number') { this.__upgradeOne(el.__nodeId, ctor); }
+    },
+    whenDefined: function(name) {
+        var self = this;
+        return new Promise(function(resolve) {
+            if (self.__registry[name]) { resolve(self.__registry[name]); return; }
+            var tries = 0;
+            var iv = setInterval(function() {
+                tries++;
+                if (self.__registry[name]) { clearInterval(iv); resolve(self.__registry[name]); return; }
+                if (tries > 400) { clearInterval(iv); resolve(undefined); }
+            }, 25);
+        });
+    }
+};
 if (typeof window.HTMLElement === 'undefined') { window.HTMLElement = Element; }
 // M70.13: SVG/数学/表单元素构造器——框架（Vue/React）用 instanceof 检查元素类型。
 // 对齐 Web 标准：所有 SVG 元素继承自 SVGElement → GraphicsElement → Element。
@@ -4825,6 +4974,17 @@ Element.prototype.appendChild = function(child) {
         }
         __appendChild(this.__nodeId, child.__nodeId);
         try { window.__fireMutation(this.__nodeId, 'childList'); } catch(e) {}
+        // M93.12: 自定义元素 connectedCallback（spec：连接到文档时派发一次）
+        try {
+            if (child.__customUpgraded && !child.__ccDone && typeof child.connectedCallback === 'function') {
+                child.__ccDone = true;
+                try {
+                    child.connectedCallback();
+                } catch (eCc3) {
+                    if (typeof __ctrace === 'function') { try { __ctrace('CC-THROW ' + String((eCc3 && (eCc3.message || eCc3)) || eCc3).slice(0, 160) + ' STACK=' + String((eCc3 && eCc3.stack) || '').split('\n').slice(0, 4).join('~').slice(0, 300)); } catch (e9) {} }
+                }
+            }
+        } catch (eCc2) {}
         // M69: 动态 script 执行。webpack/vite 等前端工程化站点把业务代码打包成
         // 独立 chunk，在运行时用 createElement("script") + head.appendChild(s)
         // 动态加载。浏览器语义：appendChild 一个 script 元素时，若它有 src 则
