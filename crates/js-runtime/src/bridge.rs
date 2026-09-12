@@ -1778,6 +1778,19 @@ where
     })
 }
 
+/// M93.4: 非 panic 版 storage 访问——QuickJS shim 的 localStorage/sessionStorage
+/// 每次读写都走 qjs_bridge::storage_*（JS 回调内），未安装 storage 时不能
+/// panic 穿透 FFI 边界，返回默认值即可。
+fn try_with_storage<F, R>(f: F, default: R) -> R
+where
+    F: FnOnce(&StorageHandle) -> R,
+{
+    CURRENT_STORAGE.with(|slot| match slot.borrow().as_ref() {
+        Some(handle) => f(handle),
+        None => default,
+    })
+}
+
 /// Install `handle` as the current thread's storage backend.
 /// Must be called before invoking any JS that uses localStorage/
 /// sessionStorage. Cleared automatically by TreeGuard drop.
@@ -3276,6 +3289,23 @@ pub mod qjs_bridge {
     /// storageRemove(key)。
     pub fn storage_remove(key: String) {
         with_storage(|h| browser_storage::storage_remove(&h, &key));
+    }
+
+    /// M93.4: storageLen() -> key 数量。走 try_with_storage——shim 的
+    /// `localStorage.length` getter 在 JS 回调内调用，未安装 storage 时
+    /// 返回 0 而不是 panic。
+    pub fn storage_len() -> f64 {
+        super::try_with_storage(|h| browser_storage::storage_len(h) as f64, 0.0)
+    }
+
+    /// M93.4: storageKey(index) -> 第 index 个 key（越界返回 None → JS null）。
+    pub fn storage_key(index: f64) -> Option<String> {
+        let idx = if index.is_finite() && index >= 0.0 {
+            index as usize
+        } else {
+            usize::MAX
+        };
+        super::try_with_storage(|h| browser_storage::storage_key(h, idx), None)
     }
 
     /// locationHref() -> String。

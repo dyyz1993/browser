@@ -31,6 +31,40 @@
 
 ## 最近变更（倒序）
 
+### M93.4 —— 文档导航跨页 storage 持久化（同源保留/跨源隔离）
+
+**背景**：M93 导航循环每跳 `run_page_quickjs` 内部 `new_storage()`——每页全新
+storage。真实浏览器语义是**同源导航后 localStorage/sessionStorage 都保留**
+（session 作用域是标签页不是文档），跨源导航才是全新 storage。Anubis 挑战流
+（挑战页→pass-challenge→真身）是同源三跳，站点若靠 localStorage 传状态会坏。
+
+**改动**：
+1. **导航循环层管理 storage 句柄**（`scripts.rs run_scripts_quickjs`）：循环
+   持有 `Option<StorageHandle>`，每跳比较 `url_origin`（下一跳 origin vs 当前
+   页 origin）——同源复用上一跳句柄，跨源/首跳 `new_storage()` 新建。
+   `run_page_quickjs` 改为接受传入句柄，只负责 install（TreeGuard::drop 清
+   thread_local slot，句柄本身由循环持有存活，下一跳重新 install）。
+2. **意外发现并修复：QuickJS shim 的 localStorage 原是纯 JS 对象**——
+   `QUICKJS_GLOBAL_SHIM` 里 `__makeStorageArea(__localStorage)` 从不调
+   `__storageGet/Set` 桥，页面写入随每页引擎销毁而丢，导航循环的句柄复用
+   对页面不可见。改为桥接 Rust StorageHandle（与 boa storage_shim 语义一致：
+   两个 area 共享同一后端），并补 `qjs_bridge::storage_len/storage_key`
+   非panic实现（`try_with_storage`：JS 回调内未安装 storage 返回默认值而非
+   panic 穿透 FFI）+ `engine_quickjs.rs` 的 `__storageLen/__storageKey` 从桩改
+   真实现。StorageEvent 派发（M78.22/M78.133/M92 语义）原样保留。
+3. boa 路径（`run_scripts_with_base_boa`）行为不变。
+
+**测试**：`crates/cli/tests/integration_nav_storage.rs`（wiremock 双实例模式，
+参考 `integration_worker_nav.rs`）：
+- `same_origin_navigation_preserves_storage`——page1 写 localStorage+sessionStorage
+  → `location.replace('/page2')` → page2 读到 `persisted`/`sess-persisted`；
+- `cross_origin_navigation_gets_fresh_storage`——server A 写入后导航到
+  server B（不同端口=不同 origin），page2 读同 key 为 NULL，输出不含 `persisted`。
+
+**验证**：两测试全绿；`cargo test -p browser-js-runtime`（72 pass）+
+`cargo test -p browser-cli` 全绿 + workspace `--no-fail-fast` 全绿；
+fmt/clippy(-D warnings) 0 diff 0 warning。
+
 ### M93 —— Anubis PoW 挑战闭环：Web Worker + 文档导航 + cookie 逐跳传递
 
 **背景**：用户要求爬 `xcancel.com/nim_lang`。实测结论：xcancel 自研 antibot

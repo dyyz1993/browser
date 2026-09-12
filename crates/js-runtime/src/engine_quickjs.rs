@@ -621,8 +621,10 @@ impl QuickJsEngine {
                 let _ = g.set("__storageSet", Function::new(ctx.clone(), |k: String, v: String| bridge::qjs_bridge::storage_set(k, v)).unwrap());
                 let _ = g.set("__storageRemove", Function::new(ctx.clone(), |k: String| bridge::qjs_bridge::storage_remove(k)).unwrap());
                 let _ = g.set("__storageClear", Function::new(ctx.clone(), || {}).unwrap());
-                let _ = g.set("__storageLen", Function::new(ctx.clone(), || 0i32).unwrap());
-                let _ = g.set("__storageKey", Function::new(ctx.clone(), |_: f64| Option::<String>::None).unwrap());
+                // M93.4: length/key 真实现（原为桩）——shim 的 localStorage.length
+                // / .key(i) 依赖它们枚举 StorageHandle 里的 key。
+                let _ = g.set("__storageLen", Function::new(ctx.clone(), bridge::qjs_bridge::storage_len).unwrap());
+                let _ = g.set("__storageKey", Function::new(ctx.clone(), |i: f64| bridge::qjs_bridge::storage_key(i)).unwrap());
 
                 // === Location ===
                 let _ = g.set("__locationHref", Function::new(ctx.clone(), bridge::qjs_bridge::location_href).unwrap());

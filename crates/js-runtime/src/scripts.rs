@@ -1404,6 +1404,10 @@ fn fire_dyn_pending(engine: &mut crate::engine_quickjs::QuickJsEngine, raw_src: 
 /// 传递），这里换 DOM 树、更新 base_url，进入下一跳。上限 [`MAX_NAV_HOPS`]
 /// 跳防导航环。
 ///
+/// M93.4: storage 与 JS 全局空间不同——同源跳复用同一 StorageHandle
+/// （localStorage/sessionStorage 跨页保留，对齐真实浏览器语义），跨源跳
+/// 新建。首跳总是新建。
+///
 /// 真实场景：Anubis PoW 挑战页解完 `location.replace(pass-challenge?...)`
 /// → Set-Cookie + 302 回原页 → 真身文档（Nitter SSR 时间线）。
 #[cfg(feature = "quickjs")]
@@ -1414,6 +1418,13 @@ fn run_scripts_quickjs(
     post_exprs: &[String],
 ) -> (crate::bridge::SharedTree, usize) {
     let mut executed_total = 0usize;
+    // M93.4: storage 句柄跨跳管理。真实浏览器语义：同源导航后 localStorage /
+    // sessionStorage 都保留（session 作用域是标签页不是文档）；跨源导航才是
+    // 全新 storage。每跳开始前比较下一跳 origin 与当前页 origin，同源则复用
+    // 上一跳的 Rc 句柄（TreeGuard::drop 只清 thread_local slot，不清句柄
+    // 本身），跨源/首跳才 `new_storage()`。
+    let mut prev_storage: Option<browser_storage::StorageHandle> = None;
+    let mut prev_origin: Option<String> = None;
     for hop in 0..=MAX_NAV_HOPS {
         // M64/M93: 每页预扫描 ESM module 脚本（决定引擎是否带 HttpModuleLoader）。
         let has_module = {
@@ -1435,8 +1446,19 @@ fn run_scripts_quickjs(
             None
         };
         let engine = engine_kind.create(esm_origin);
-        let (executed, next) =
-            run_page_quickjs(shared.clone(), base_url.clone(), engine, post_exprs);
+        let storage = match (&prev_storage, &prev_origin) {
+            (Some(handle), Some(po)) if *po == origin => handle.clone(),
+            _ => browser_storage::new_storage(),
+        };
+        prev_storage = Some(storage.clone());
+        prev_origin = Some(origin);
+        let (executed, next) = run_page_quickjs(
+            shared.clone(),
+            base_url.clone(),
+            engine,
+            storage,
+            post_exprs,
+        );
         executed_total += executed;
         match next {
             Some((url, html)) if hop < MAX_NAV_HOPS => {
@@ -1470,12 +1492,15 @@ const MAX_NAV_HOPS: usize = 5;
 /// M81: `post_exprs` —— 页面脚本 + 事件循环跑完后在同一会话内按序 eval 的
 /// 表达式（`--click` 合成点击用；addEventListener 监听器注册在会话内
 /// `__elCache` 缓存的元素包装上，引擎 drop 即失效，点击必须留在本会话）。
+/// M93.4: `storage` 由导航循环层传入（同源跳复用句柄，跨源跳新建）——
+/// 本函数只负责 install；TreeGuard::drop 清 slot 后下一跳重新 install。
 /// 返回 (executed 数, 待跟进的文档导航 (url, html))——None = 本页无导航。
 #[cfg(feature = "quickjs")]
 fn run_page_quickjs(
     shared: crate::bridge::SharedTree,
     base_url: Option<String>,
     mut engine_box: Box<dyn crate::engine::JsEngine>,
+    storage: browser_storage::StorageHandle,
     post_exprs: &[String],
 ) -> (usize, Option<(String, String)>) {
     // M93: 每页开始清空导航队列（防上一页/上一次 run 的残留串页）。
@@ -1489,7 +1514,6 @@ fn run_page_quickjs(
 
     // 安装 thread_local DOM 后端
     let _guard = crate::bridge::install_shared_with_base(shared.clone(), base_url.clone());
-    let storage = browser_storage::new_storage();
     crate::bridge::install_storage(storage);
     let initial_url = base_url
         .clone()
@@ -3330,10 +3354,12 @@ Object.defineProperty(document, 'currentScript', {
     configurable: true
 });
 
-// localStorage / sessionStorage（存键值对，爬虫场景空存储够用）
-// M78.22: setItem/removeItem/clear 派发 StorageEvent（WPT webstorage
-// 事件测试依赖；key/oldValue/newValue/url 齐全）。
-var __localStorage = {};
+// localStorage / sessionStorage
+// M93.4: 存储区改为桥接 Rust StorageHandle（__storageGet/Set/Remove/Clear/
+// Len/Key）——此前是纯 JS 对象，页面写入随每页引擎销毁而丢，导航循环层的
+// 同源 storage 复用对页面不可见。桥接后写入落到 CURRENT_STORAGE 句柄上，
+// 同源跳由导航循环复用句柄实现跨页保留；与 boa storage_shim 一致，两个
+// area 共享同一后端。setItem/removeItem/clear 仍派发 StorageEvent（M78.22）。
 function __StorageEvent(type, opts) {
     opts = opts || {};
     Event.call(this, type, opts);
@@ -3378,29 +3404,35 @@ function __fireStorage(area, key, oldV, newV) {
         } catch (e) {}
     }, 0);
 }
-function __makeStorageArea(store, storeName) {
+function __makeStorageArea(storeName) {
+    function __stored(v) { return (v === null || v === undefined) ? null : v; }
     return {
-        getItem: function(k) { k = String(k); return (k in store) ? store[k] : null; },
+        getItem: function(k) { return __stored(__storageGet(String(k))); },
         setItem: function(k, v) {
-            k = String(k); v = String(v);
-            var old = (k in store) ? store[k] : null;
-            store[k] = v;
+            k = String(k);
+            var old = __stored(__storageGet(k));
+            v = String(v);
+            __storageSet(k, v);
             __fireStorage(this, k, old, v);
         },
         removeItem: function(k) {
             k = String(k);
-            var old = (k in store) ? store[k] : null;
-            delete store[k];
+            var old = __stored(__storageGet(k));
+            __storageRemove(k);
             __fireStorage(this, k, old, null);
         },
-        clear: function() { store = {}; __fireStorage(this, null, null, null); },
-        key: function(i) { return Object.keys(store)[i] || null; },
-        get length() { return Object.keys(store).length; }
+        clear: function() {
+            __storageClear();
+            __fireStorage(this, null, null, null);
+        },
+        key: function(i) {
+            return __stored(__storageKey(Number(i)));
+        },
+        get length() { return __storageLen(); }
     };
 }
-window.localStorage = __makeStorageArea(__localStorage, 'local');
-var __sessionStore = {};
-window.sessionStorage = __makeStorageArea(__sessionStore, 'session');
+window.localStorage = __makeStorageArea('local');
+window.sessionStorage = __makeStorageArea('session');
 
 // URL 构造器（简化版——避免 QuickJS 不支持的复杂正则）
 // M81.7: BroadcastChannel 桩——同进程全局事件总线（多 tab 场景单进程近似）。
