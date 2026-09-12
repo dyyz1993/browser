@@ -1,3 +1,14 @@
+## M95 V8 系引擎实测评估——G3 预设被推翻（裁决选项 3 数据补齐）
+- /tmp/v8eval 实测（rusty_v8 0.32.1）：链接后二进制 **17.6MB**（预设
+  "~30MB+"）/空载 RSS **7MB**（预设"几百 MB"）——G3 两条预设均被推翻
+- 战略价值：V8 与 Chrome 同源——etsl/toSourceError 两个引擎级天花板
+  直接消失、canvasFingerprint 大概率一致（同 Skia）——**选项 3 可能
+  一次消解选项 2 的目标**
+- 集成成本：150 桥需重写（~1500 行）+ 5400 行 shim 引擎无关可复用 +
+  trait JsEngine 三后端架构现成——**2-4 周**（vs 选项 2 数月）
+- 推荐折中形态：默认 QuickJS 保卖点 + --features v8 可选（需 G3 修订 ADR）
+- 详见 docs/assessments/M95-v8-engine-evaluation.md
+
 ## M94.15 裁决补充：Skia 级期望收益进一步降低
 - Chrome headless（canvas hash 与有头完全相同）也被 xcancel 拒——证明
   服务端按浏览器族群聚类评分，非单字段判定；Skia 级投入后仍可能不过线
