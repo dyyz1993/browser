@@ -1,3 +1,11 @@
+## M94.7 双引擎 YPA 差分——分歧确证在 CFF 内层（裁决实证补全）
+- YPA2ccm（编排器序列收集器）首两次调用参数 dump 双引擎对比（serve 注入
+  + Chrome CDP 同页跑）：**逐参数零差异**（含 native toString 输出）
+- 方法 A 恒返回 undefined（YPA2ccm 首调后自替换空函数——两引擎同构），
+  canvasFingerprint/hasModifiedCanvas 的分歧在 CFF 状态机内层数据计算，
+  唯一通路=完整反编译（数天级）——两次裁决提请未答，工程侧无低成本
+  可推进项，悬置待用户三选一
+
 ## M94.6 fromCharCode C 层码点流 dump——VM 字符串表全量破译
 - quickjs.c js_string_fromCharCode 加码点流 dump（BROWSER_DUMP_FCC 门控，
   ADR-0005 补充）——9800 万码点流捕获；VM 全部解码器（hik8ew/Hi_Bodu/
