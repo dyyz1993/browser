@@ -291,3 +291,30 @@ fp 经 AES-256-GCM 加密上报（/antibot/api/dx 或 client-report），opjs �
 响应（5 个微任务）后死寂：零 Worker/零 crypto.subtle/零后续 fetch。
 剩余层完全在混淆 VM 腹地（其自解算器或 fp 加密在其内部 JS 中静默失败），
 下一步需要 QuickJS 指令级追踪或 VM 反编译（独立深潜课题）。
+
+## 12. M93.13：四层连破 + VM crypto 调用图全映射
+
+### 本轮修复链（verify POST 错误串=进度指示器，逐层剥开）
+| 错误 | 根因 | 修复 |
+|------|------|------|
+| `setAttribute of undefined` | **M93.12 拷贝循环原型污染**：读 Element.prototype 上的 getter（classList）以 prototype 为 this 执行，坏 DOMTokenList Proxy（__nodeId undefined）被缓存到 Element.prototype.__classList——全页 classList 炸 f64 | 删拷贝循环（原型链天然继承）+ classList getter own-property 判定 |
+| `worker registered no message handler` | cap worker 用 `self.onmessage = fn`（属性），我们只支持 addEventListener | worker dispatch 双通道 |
+| `not a function` | `crypto.subtle.generateKey` 缺失 | 映射+实现中 |
+| （更早）`Cannot read from private field` / f64 崩 | 直构 new ctor() 实例无 __nodeId | appendChild 收养机制 |
+
+### 诊断武器库（本轮沉淀）
+- **async CC 拒绝捕获**：connectedCallback 是 async 函数，同步 try/catch 抓不到内部异常（变 rejected Promise 静默丢）——必须 catch 返回的 Promise
+- **cap 侧 instrument**（重放服务器可控）：createUI 入口探针（注意 IIFE 的 this 绑定！）、原型方法全包装、Worker 通道包装
+- **subtle 调用图映射器**：假密钥逐层推进——每层日志揭示下一层调用+精确参数
+
+### VM crypto 完整调用图（六层全实测）
+```
+1. generateKey({ECDH, P-256}, true, [deriveBits])        ← 临时密钥对
+2. importKey(raw, 65B fpPublicKey, {ECDH,P-256}, false, []) ← 服务器公钥
+3. deriveBits({ECDH, public:server}, ephPriv, 256)        ← 共享密钥
+4. importKey(raw, "antibot-fp-..." bytes, HKDF, false, [deriveKey])
+5. deriveKey({HKDF, SHA-256, salt}, hkdfKey, {AES-GCM,256}, false, [encrypt])
+6. encrypt({AES-GCM, iv:12B}, key, '{"signals":{"au...' JSON)
+```
+即 ECIES 变体：ECDH → HKDF-SHA256 → AES-256-GCM 加密指纹信号上报。
+智能体并行实现中（纯 JS P-256 + HKDF + AES-GCM，NIST/RFC 向量验证）。
