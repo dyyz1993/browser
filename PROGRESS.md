@@ -1,3 +1,12 @@
+## M94.5 勘误：死循环假说证伪 + 终局结构（hasModifiedCanvas=状态机 VM）
+- 实验证伪 M94.4 因果链：26 处 while(true){} 全替换为 throw 后运行时
+  0 抛出——**全部防篡改壳校验在 QuickJS 通过**（具名函数 toString 是
+  源码回显，跨引擎一致）
+- 终局结构：canvas 探测=方法 A（我们引擎完整成功，canvasFingerprint
+  真实值）；**hasModifiedCanvas=方法 B：XJ26qG switch 状态机字节码
+  解释器**——所有 JS 层观测零命中的终极原因（探测在解释器内部）
+- 逆向成本数天起步；宪法级裁决待用户
+
 ## M94.4 hasModifiedCanvas 完整因果链破译（vendor rquickjs-sys + eval dump）
 - ADR-0005：vendor rquickjs-sys，quickjs.c JS_EvalObject 加 eval 体 dump
   （BROWSER_DUMP_EVAL 门控，默认零行为变化）——JS 层 wrap 不可达的根因：

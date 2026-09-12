@@ -169,3 +169,23 @@ own toString 伪装的源码级检测路径）。
 hasModifiedCanvas（深层同步探测，需引擎级 eval 拦截才能读源）、
 toSourceError（QuickJS C 文案）、canvasFingerprint（字节级判不可行）、
 rtcVideo（序列化）、pluginOverflow（语义未定位）。
+
+
+## 八、M94.5 勘误与终局事实（裁决依据）
+
+**勘误 M94.4**：「GgWjAt 校验失败→死循环→interrupt→ERROR」的因果链
+**被实验证伪**：serve 侧把全部 26 处 `while(true){}` 死循环替换为抛出
+校验值后，运行时 0 次抛出——**所有防篡改壳校验在 QuickJS 下全部通过**
+（具名函数声明的 toString 是源码回显，跨引擎一致）。
+
+**终局结构事实**（dump 明文体 + 列号直读）：
+- canvas 探测是对象方法 A（列 510020-515150）：createElement/width=400/
+  height=200/getContext('2d')/fillText×2/arc 序列/toDataURL→GgWjAt(spKQaIn
+  31 进制 hash，结果经 sl6A7w7 暂存)——**方法 A 在我们引擎完整成功**
+  （canvasFingerprint 有真实稳定值）。
+- **hasModifiedCanvas 是相邻方法 B（列 515160+）：独立的 XJ26qG switch
+  状态机字节码解释器**（解释执行自定义字节码）——这解释了全部 JS 层
+  观测（方法链/proto Proxy/元素 Proxy/Error 构造/CVTHROW/eval·Function·
+  then dump）零命中：探测行为在解释器内部，API 经字节码分发。
+- 逆向成本：需静态反编译状态机字节码（操作码表 XJ26qG + 状态转移表），
+  数天起步且不保证穷尽（解释器可多层）。
