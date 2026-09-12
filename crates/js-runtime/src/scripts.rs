@@ -2537,11 +2537,91 @@ window.btoa = function(s) {
     return out;
 };
 
-// crypto.getRandomValues（uuid 库需要）
+// M93.7: 纯 JS SHA-256（crypto.subtle.digest 的实现内核，零 Rust 依赖——G4 自研）。
+// 主上下文与 worker env（engine_quickjs.rs worker_env_js）各持一份同源拷贝：
+// 两处是独立 eval 空间，共享常量需跨模块传字符串，拷贝更稳。
+var __sha256 = (function() {
+    var K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+             0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+             0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+             0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+             0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+             0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+             0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+             0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    function rr(x, n) { return (x >>> n) | (x << (32 - n)); }
+    return function(bytes) {
+        var h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+        var ml = bytes.length, w = new Array(64), i;
+        var bitLenHi = Math.floor(ml / 0x20000000), bitLenLo = (ml << 3) >>> 0;
+        var padded = [];
+        for (i = 0; i < ml; i++) padded.push(bytes[i] & 255);
+        padded.push(0x80);
+        while (padded.length % 64 !== 56) padded.push(0);
+        padded.push((bitLenHi>>>24)&255,(bitLenHi>>>16)&255,(bitLenHi>>>8)&255,bitLenHi&255,
+                    (bitLenLo>>>24)&255,(bitLenLo>>>16)&255,(bitLenLo>>>8)&255,bitLenLo&255);
+        for (var b = 0; b < padded.length; b += 64) {
+            for (i = 0; i < 16; i++) w[i] = ((padded[b+4*i]&255)<<24)|((padded[b+4*i+1]&255)<<16)|((padded[b+4*i+2]&255)<<8)|(padded[b+4*i+3]&255);
+            for (i = 16; i < 64; i++) {
+                var s0 = rr(w[i-15],7)^rr(w[i-15],18)^(w[i-15]>>>3);
+                var s1 = rr(w[i-2],17)^rr(w[i-2],19)^(w[i-2]>>>10);
+                w[i] = (w[i-16]+s0+w[i-7]+s1)|0;
+            }
+            var a=h[0],bb=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],hh=h[7];
+            for (i = 0; i < 64; i++) {
+                var S1 = rr(e,6)^rr(e,11)^rr(e,25);
+                var ch = (e&f)^(~e&g);
+                var t1 = (hh+S1+ch+K[i]+w[i])|0;
+                var S0 = rr(a,2)^rr(a,13)^rr(a,22);
+                var mj = (a&bb)^(a&c)^(bb&c);
+                var t2 = (S0+mj)|0;
+                hh=g; g=f; f=e; e=(d+t1)|0; d=c; c=bb; bb=a; a=(t1+t2)|0;
+            }
+            h[0]=(h[0]+a)|0; h[1]=(h[1]+bb)|0; h[2]=(h[2]+c)|0; h[3]=(h[3]+d)|0;
+            h[4]=(h[4]+e)|0; h[5]=(h[5]+f)|0; h[6]=(h[6]+g)|0; h[7]=(h[7]+hh)|0;
+        }
+        var out = new Uint8Array(32);
+        for (i = 0; i < 8; i++) {
+            out[i*4]=(h[i]>>>24)&255; out[i*4+1]=(h[i]>>>16)&255; out[i*4+2]=(h[i]>>>8)&255; out[i*4+3]=h[i]&255;
+        }
+        return out;
+    };
+})();
+
+// M93.7: crypto.subtle.digest —— SHA-256 子集（cap.js 等 PoW 挑战的核心依赖；
+// spec 接口：digest(algo, BufferSource) → Promise<ArrayBuffer>）。
+function __subtleDigest(algo, data) {
+    return new Promise(function(resolve, reject) {
+        try {
+            var norm = String(algo).replace(/-/g, '').toUpperCase();
+            if (norm !== 'SHA256') {
+                var e1 = new Error("crypto.subtle.digest: unsupported algorithm '" + algo + "' (SHA-256 only)");
+                e1.name = 'NotSupportedError';
+                reject(e1);
+                return;
+            }
+            var u8;
+            if (data instanceof Uint8Array) { u8 = data; }
+            else if (data && data.buffer instanceof ArrayBuffer) { u8 = new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength); }
+            else if (data instanceof ArrayBuffer) { u8 = new Uint8Array(data); }
+            else if (typeof data === 'string') { u8 = new TextEncoder().encode(data); }
+            else {
+                reject(new TypeError('crypto.subtle.digest: data must be BufferSource'));
+                return;
+            }
+            resolve(__sha256(u8).buffer);
+        } catch (err) { reject(err); }
+    });
+}
+
+// crypto.getRandomValues（uuid 库需要）+ M93.7 subtle.digest（cap.js PoW）
 window.crypto = {
     getRandomValues: function(arr) {
         for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
         return arr;
+    },
+    subtle: {
+        digest: function(algo, data) { return __subtleDigest(algo, data); }
     }
 };
 
@@ -3891,21 +3971,33 @@ if (typeof structuredClone !== 'function') {
 // TextEncoder/TextDecoder（UTF-8，简化实现——爬虫场景不真正编码字节，
 // 但 length/content 与原文一致，满足框架初始化检查）
 if (typeof TextEncoder !== 'function') {
-    window.TextEncoder = function() { this.encoding = 'utf-8'; };
-    window.TextEncoder.prototype.encode = function(str) {
-        str = str == null ? '' : String(str);
-        // 返回伪 Uint8Array（length 正确，内容为 charCode）
-        var arr = [];
-        for (var i = 0; i < str.length; i++) { arr.push(str.charCodeAt(i) & 0xff); }
-        arr.encoding = 'utf-8';
-        return arr;
-    };
-    window.TextEncoder.prototype.encodeInto = function(str, dst) {
-        var e = this.encode(str);
-        for (var i = 0; i < e.length && i < dst.length; i++) { dst[i] = e[i]; }
-        return { read: e.length, written: Math.min(e.length, dst.length) };
-    };
-}
+            window.TextEncoder = function() { this.encoding = 'utf-8'; };
+            window.TextEncoder.prototype.encode = function(str) {
+                str = str == null ? '' : String(str);
+                // M93.7: 真 UTF-8 编码返回真 Uint8Array——旧版返回伪 Array
+                //（length 对但类型错），cap.js 的 `crypto.subtle.digest(
+                // 'SHA-256', g.encode(v))` 按 spec 要求 BufferSource。
+                var out = [], i = 0;
+                while (i < str.length) {
+                    var c = str.charCodeAt(i++);
+                    if (c >= 0xD800 && c <= 0xDBFF && i < str.length) {
+                        var c2 = str.charCodeAt(i++);
+                        if (c2 >= 0xDC00 && c2 <= 0xDFFF) { c = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00); }
+                        else { i--; c = 0xFFFD; }
+                    }
+                    if (c < 0x80) out.push(c);
+                    else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+                    else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+                    else out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+                }
+                return new Uint8Array(out);
+            };
+            window.TextEncoder.prototype.encodeInto = function(str, dst) {
+                var e = this.encode(str);
+                for (var i = 0; i < e.length && i < dst.length; i++) { dst[i] = e[i]; }
+                return { read: e.length, written: Math.min(e.length, dst.length) };
+            };
+        }
 if (typeof TextDecoder !== 'function') {
     window.TextDecoder = function(label) { this.encoding = (label || 'utf-8').toLowerCase(); };
     window.TextDecoder.prototype.decode = function(bytes) {
@@ -3929,13 +4021,38 @@ if (typeof TextDecoderStream !== 'function') {
 // Blob（构造器：存 size/type，爬虫不真正读内容）
 if (typeof Blob !== 'function') {
     window.Blob = function(parts, opts) {
-        var size = 0;
-        if (parts) { for (var i = 0; i < parts.length; i++) { size += (parts[i] && parts[i].length) ? parts[i].length : String(parts[i]).length; } }
-        this.size = size;
+        // M93.7: 存内容（_blob_text）——cap.js 等用 `URL.createObjectURL(
+        // new Blob([workerSrc]))` 构造 blob: Worker，此前桩不存内容，
+        // createObjectURL 注册的是空串，Worker 拿到空源码。
+        var text = '';
+        if (parts) {
+            for (var i = 0; i < parts.length; i++) {
+                var p = parts[i];
+                if (typeof p === 'string') { text += p; }
+                else if (p && p.buffer instanceof ArrayBuffer) {
+                    var u8 = new Uint8Array(p.buffer, p.byteOffset || 0, p.byteLength);
+                    var s = '';
+                    for (var j = 0; j < u8.length; j++) s += String.fromCharCode(u8[j]);
+                    text += s;
+                }
+                else if (p instanceof ArrayBuffer) {
+                    var u8b = new Uint8Array(p), sb = '';
+                    for (var k = 0; k < u8b.length; k++) sb += String.fromCharCode(u8b[k]);
+                    text += sb;
+                }
+                else if (p !== undefined && p !== null) { text += String(p); }
+            }
+        }
+        this._blob_text = text;
+        this.size = text.length;
         this.type = (opts && opts.type) || '';
     };
-    window.Blob.prototype.text = function() { return Promise.resolve(''); };
-    window.Blob.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+    window.Blob.prototype.text = function() { return Promise.resolve(this._blob_text || ''); };
+    window.Blob.prototype.arrayBuffer = function() {
+        var t = this._blob_text || '', u8 = new Uint8Array(t.length);
+        for (var i = 0; i < t.length; i++) u8[i] = t.charCodeAt(i) & 255;
+        return Promise.resolve(u8.buffer);
+    };
 }
 
 // Headers（大小写不敏感的 get/set/append）
@@ -8054,6 +8171,13 @@ const QUICKJS_WORKER_SHIM: &str = r#"
 (function() {
     function Worker(url) {
         this.__src = String(url);
+        this.__srcCode = null;
+        // M93.7: blob: URL ——从 M81.6 的 __blobUrls 注册表解析源码
+        //（cap.js 的 Worker 就是 `new Worker(URL.createObjectURL(new Blob([...])))`）。
+        if (this.__src.indexOf('blob:') === 0 && typeof __blobUrls !== 'undefined') {
+            var cached = __blobUrls[this.__src];
+            if (typeof cached === 'string' && cached.length > 0) this.__srcCode = cached;
+        }
         this.onmessage = null;
         this.onerror = null;
         this.onmessageerror = null;
@@ -8061,14 +8185,20 @@ const QUICKJS_WORKER_SHIM: &str = r#"
     }
     Worker.prototype.postMessage = function(msg) {
         if (this.__terminated) return;
-        if (typeof __workerRun !== 'function') {
+        var runner = (this.__srcCode !== null && typeof __workerRunSrc === 'function')
+            ? null : ((typeof __workerRun === 'function') ? __workerRun : null);
+        if (runner === null && this.__srcCode === null) {
             if (this.onerror) { try { this.onerror({ message: 'Worker bridge unavailable' }); } catch (e) {} }
             return;
         }
         var payload;
         try { payload = JSON.stringify(msg); } catch (e1) { payload = 'null'; }
         var raw;
-        try { raw = __workerRun(this.__src, payload); } catch (e2) {
+        try {
+            raw = (this.__srcCode !== null && typeof __workerRunSrc === 'function')
+                ? __workerRunSrc(this.__srcCode, payload)
+                : __workerRun(this.__src, payload);
+        } catch (e2) {
             if (this.onerror) { try { this.onerror({ message: String((e2 && e2.message) || e2) }); } catch (e3) {} }
             return;
         }

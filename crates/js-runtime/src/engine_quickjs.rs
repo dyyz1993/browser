@@ -85,6 +85,75 @@ TextEncoder.prototype.encode = function(s) {
     return new Uint8Array(out);
 };
 globalThis.TextEncoder = TextEncoder;
+// M93.7: crypto.subtle.digest（SHA-256 纯 JS）——cap.js（xcancel antibot）的
+// JS fallback solver 在 worker 里 await crypto.subtle.digest("SHA-256", ...)。
+// 与 scripts.rs 主 shim 的 __sha256 同源拷贝（独立 eval 空间）。
+var __sha256 = (function() {
+    var K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+             0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+             0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+             0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+             0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+             0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+             0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+             0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    function rr(x, n) { return (x >>> n) | (x << (32 - n)); }
+    return function(bytes) {
+        var h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+        var ml = bytes.length, w = new Array(64), i;
+        var bitLenHi = Math.floor(ml / 0x20000000), bitLenLo = (ml << 3) >>> 0;
+        var padded = [];
+        for (i = 0; i < ml; i++) padded.push(bytes[i] & 255);
+        padded.push(0x80);
+        while (padded.length % 64 !== 56) padded.push(0);
+        padded.push((bitLenHi>>>24)&255,(bitLenHi>>>16)&255,(bitLenHi>>>8)&255,bitLenHi&255,
+                    (bitLenLo>>>24)&255,(bitLenLo>>>16)&255,(bitLenLo>>>8)&255,bitLenLo&255);
+        for (var b = 0; b < padded.length; b += 64) {
+            for (i = 0; i < 16; i++) w[i] = ((padded[b+4*i]&255)<<24)|((padded[b+4*i+1]&255)<<16)|((padded[b+4*i+2]&255)<<8)|(padded[b+4*i+3]&255);
+            for (i = 16; i < 64; i++) {
+                var s0 = rr(w[i-15],7)^rr(w[i-15],18)^(w[i-15]>>>3);
+                var s1 = rr(w[i-2],17)^rr(w[i-2],19)^(w[i-2]>>>10);
+                w[i] = (w[i-16]+s0+w[i-7]+s1)|0;
+            }
+            var a=h[0],bb=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],hh=h[7];
+            for (i = 0; i < 64; i++) {
+                var S1 = rr(e,6)^rr(e,11)^rr(e,25);
+                var ch = (e&f)^(~e&g);
+                var t1 = (hh+S1+ch+K[i]+w[i])|0;
+                var S0 = rr(a,2)^rr(a,13)^rr(a,22);
+                var mj = (a&bb)^(a&c)^(bb&c);
+                var t2 = (S0+mj)|0;
+                hh=g; g=f; f=e; e=(d+t1)|0; d=c; c=bb; bb=a; a=(t1+t2)|0;
+            }
+            h[0]=(h[0]+a)|0; h[1]=(h[1]+bb)|0; h[2]=(h[2]+c)|0; h[3]=(h[3]+d)|0;
+            h[4]=(h[4]+e)|0; h[5]=(h[5]+f)|0; h[6]=(h[6]+g)|0; h[7]=(h[7]+hh)|0;
+        }
+        var out = new Uint8Array(32);
+        for (i = 0; i < 8; i++) {
+            out[i*4]=(h[i]>>>24)&255; out[i*4+1]=(h[i]>>>16)&255; out[i*4+2]=(h[i]>>>8)&255; out[i*4+3]=h[i]&255;
+        }
+        return out;
+    };
+})();
+globalThis.crypto = {
+    subtle: {
+        digest: function(algo, data) {
+            return new Promise(function(resolve, reject) {
+                try {
+                    var norm = String(algo).replace(/-/g, '').toUpperCase();
+                    if (norm !== 'SHA256') { var e1 = new Error('unsupported algorithm: ' + algo); e1.name = 'NotSupportedError'; reject(e1); return; }
+                    var u8;
+                    if (data instanceof Uint8Array) { u8 = data; }
+                    else if (data && data.buffer instanceof ArrayBuffer) { u8 = new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength); }
+                    else if (data instanceof ArrayBuffer) { u8 = new Uint8Array(data); }
+                    else if (typeof data === 'string') { u8 = new TextEncoder().encode(data); }
+                    else { reject(new TypeError('digest: data must be BufferSource')); return; }
+                    resolve(__sha256(u8).buffer);
+                } catch (err) { reject(err); }
+            });
+        }
+    }
+};
 "#,
     );
     // 注入消息（main 侧已 JSON.stringify，是合法 JS 字面量）
@@ -110,15 +179,21 @@ globalThis.TextEncoder = TextEncoder;
 /// 返回 JSON：`{"ok":true,"messages":[...]}`（outbox 原始 JSON 文本数组）
 /// 或 `{"ok":false,"error":"..."}`（主侧 Worker shim 转调 onerror）。
 fn worker_run(url: &str, msg_json: &str) -> String {
-    use rquickjs::context::EvalOptions;
-    use rquickjs::CatchResultExt;
-
     // 1. 解析相对 URL + 取 worker 源码（走既有缓存/net worker/cookie 管线）。
     let resolved = bridge::resolve_url(url);
     let source = match bridge::fetch_sync(&resolved) {
         Ok(s) => s,
         Err(e) => return format!("{{\"ok\":false,\"error\":\"fetch worker source failed: {e}\"}}"),
     };
+    worker_run_src(&source, msg_json)
+}
+
+/// M93.7: 直接以源码执行 worker（blob: URL 路径）——主侧 JS shim 从
+/// `__blobUrls` 注册表解析出 blob: 的源码文本后走这里，免去网络取回。
+fn worker_run_src(source: &str, msg_json: &str) -> String {
+    use rquickjs::context::EvalOptions;
+    use rquickjs::CatchResultExt;
+    let source = source.to_string();
 
     // 2. 独立 Runtime + Context（中断双保险：120s 硬上限 + 全局 deadline）。
     //    硬上限放宽到 120s（实测 anubis.techaro.lol difficulty 4/5 的运气
@@ -617,6 +692,8 @@ impl QuickJsEngine {
 
                 // === M93: Web Worker（同步子 Context）+ 文档导航记录 ===
                 let _ = g.set("__workerRun", Function::new(ctx.clone(), |url: String, msg: String| worker_run(&url, &msg)).unwrap());
+                // M93.7: blob: URL 路径——主侧 JS 已从 __blobUrls 解析出源码
+                let _ = g.set("__workerRunSrc", Function::new(ctx.clone(), |src: String, msg: String| worker_run_src(&src, &msg)).unwrap());
                 let _ = g.set("__navRecord", Function::new(ctx.clone(), |url: String| bridge::record_pending_navigation(&url)).unwrap());
 
                 // === WebSocket（复用 boa 的后台线程 WsManager）===
