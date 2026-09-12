@@ -1,3 +1,15 @@
+## M94.8 方法 A 全结构铁证 + 编排器组装段无静态锚（裁决四请）
+- 方法 A（canvas 探测）= 一条巨型逗号表达式 return（rect×2/textBaseline/
+  fillStyle×N/fillRect/fillText×2/arc 序列/fill('evenodd')/GgWjAt(toDataURL())）
+  ——**返回值 = GgWjAt(...) = hash 串**（两引擎同构）；hasModifiedCanvas 由
+  编排器消费 hash 时自行计算
+- 编排器组装段（码点流时间窗）字符串表仅 Promise/resolve/canvasFingerprint/
+  hasModifiedCanvas 四项——组装表达式纯变量引用，无静态锚点，CFF 反编译
+  确证无捷径（数天级完整工程）
+- VM 内部函数（TzgaPDB/SD1DYC/YPA2ccm 外层钩子）全部在校验链上，JS 层
+  观测全灭；YPA v2 完整函数源码 dump（UTF-8 解码器工厂）归档
+- 第四轮宪法级三选一裁决提请，仍待用户
+
 ## M94.7 双引擎 YPA 差分——分歧确证在 CFF 内层（裁决实证补全）
 - YPA2ccm（编排器序列收集器）首两次调用参数 dump 双引擎对比（serve 注入
   + Chrome CDP 同页跑）：**逐参数零差异**（含 native toString 输出）
