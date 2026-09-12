@@ -2959,6 +2959,7 @@ try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3)
     // M94.2: canvas 方法族白名单——VM 的 hasModifiedCanvas 用
     // Function.prototype.toString.call(fn) 读真源码检测 hook（绕过 own
     // toString 伪装）。白名单函数一律返回 native 串（Chrome 实测形状）。
+    var __nativeEvalRef = (typeof window !== 'undefined') ? window.eval : eval;
     var __nativeFns = {};
     ['fillRect','strokeRect','clearRect','beginPath','closePath','moveTo','lineTo','arc','arcTo',
      'rect','ellipse','bezierCurveTo','quadraticCurveTo','fill','stroke','clip','roundRect',
@@ -2971,6 +2972,9 @@ try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3)
         Object.defineProperty(Function.prototype, 'toString', {
             value: function __ts() {
                 if (this === Function.prototype.toString) return 'function toString() { [native code] }';
+                if (this === __nativeEvalRef) {
+                    return 'function eval() { [native code] }';
+                }
                 if (this && this.name && __nativeFns[this.name] === 1) {
                     return 'function ' + this.name + '() { [native code] }';
                 }
@@ -4276,7 +4280,7 @@ try {
 // M94.10: eval.toString() 形状——VM 的 etsl = eval.toString().length
 // （Chrome=33 'function eval() { [native code] }'；QuickJS 返回 226 字符
 // 真实源码）。own toString 覆盖（eval 是函数对象可加 own 属性）。
-try { Object.defineProperty(window.eval, 'toString', { value: function() { return 'function eval() { [native code] }'; }, writable: true, configurable: true }); } catch (eETS) {}
+try { Object.defineProperty(window.eval, 'toString', { value: function() { return 'function eval() { [native code] }'; }, writable: false, configurable: false }); } catch (eETS) {}
 
 window.Image = window.Image || function Image(w, h) {
     this.width = w || 0;

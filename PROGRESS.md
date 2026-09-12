@@ -1,3 +1,12 @@
+## M94.14 etsl 多修法终审——确证引擎级，收口
+- 三修法均无效：① toString 白名单按 name（QuickJS 原生 eval.name 为空不
+  中）②白名单按引用（VM 环境不中——机制未明）③own toString
+  non-configurable（仍被绕过）；window.eval setter 陷阱零触发但 VM 后
+  eval=function(code)——QuickJS 对象模型层的替换通道（页面/VM 作用域
+  引用差异），不再深挖
+- 定论维持：etsl=引擎级（1 个数值字段），403 主因判为 canvasFingerprint
+- 门禁 1024/0
+
 ## M94.13 战役总回顾文档归档
 - docs/assessments/M94-campaign-retrospective.md：M93.15→M94.12 全战役
   一站式索引（成果总表/里程碑链/终局定论/工具链/宪法红线）——任何未来
