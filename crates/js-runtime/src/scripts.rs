@@ -2361,7 +2361,7 @@ globalThis.Event = function Event(type, opts) {
 	// navigator
 // M83: UA 与主请求（net::client）一致——掘金风控 SDK 会比对 navigator.userAgent
 // 完整性（旧值 'Mozilla/5.0' 残缺，一眼非浏览器）。
-window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'], cookieEnabled: true };
+window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'], cookieEnabled: true, hardwareConcurrency: __hwConcurrency(), deviceMemory: 8, maxTouchPoints: 0 };
 // M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
 // 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
 // 空 PluginArray 语义（无插件环境，真实浏览器无插件时也是空数组）。
@@ -2596,6 +2596,7 @@ var __sha256 = (function() {
 function __subtleDigest(algo, data) {
     return new Promise(function(resolve, reject) {
         try {
+            if (typeof __ctrace === 'function') { try { __ctrace('subtle.digest algo=' + JSON.stringify(algo)); } catch (eT) {} }
             var norm = String(algo).replace(/-/g, '').toUpperCase();
             if (norm !== 'SHA256') {
                 var e1 = new Error("crypto.subtle.digest: unsupported algorithm '" + algo + "' (SHA-256 only)");
@@ -2617,15 +2618,32 @@ function __subtleDigest(algo, data) {
     });
 }
 
+// M93.11: navigator.hardwareConcurrency——cap.js 用 Math.min(hardwareConcurrency, N)
+// 决定 PoW Worker 数量；undefined → Math.min(NaN, N)=NaN → 零 Worker → 无限等待
+// （xcancel 挑战拿到 200 后死寂的根因）。诚实值：宿主真实逻辑核数。
+function __hwConcurrency() {
+    if (typeof __hwCores === 'number' && __hwCores > 0) return __hwCores;
+    return 8;
+}
+
 // crypto.getRandomValues（uuid 库需要）+ M93.7 subtle.digest（cap.js PoW）
+// M93.11-diag: subtle 方法访问追踪（env 门控，shim 自身代码——VM 防篡改不可见）
 window.crypto = {
     getRandomValues: function(arr) {
         for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
         return arr;
     },
-    subtle: {
+    subtle: new Proxy({
         digest: function(algo, data) { return __subtleDigest(algo, data); }
-    }
+    }, {
+        get: function(target, prop) {
+            if (typeof prop !== 'string') return target[prop];
+            if (typeof __ctrace === 'function' && prop !== 'digest') {
+                try { __ctrace('subtle.ACCESS ' + prop + ' (unsupported!)'); } catch (e) {}
+            }
+            return target[prop];
+        }
+    })
 };
 
 // location 对象
@@ -8163,14 +8181,33 @@ window.fetch = function(input, options) {
     options = options || {};
     var method = options.method || 'GET';
     var body = options.body || null;
-    var ct = options.headers ? (options.headers['Content-Type'] || options.headers['content-type'] || null) : null;
+    // M93.11: fetch headers 全量透传（spec）——平面对象/Headers 实例均可，
+    // 序列化成 JSON 交给 bridge；Content-Type 单独抽取保持旧路径。
+    var hdrJson = null;
+    try {
+        var hObj = options.headers || null;
+        var flat = {};
+        if (hObj) {
+            if (typeof hObj.forEach === 'function' && typeof hObj.has === 'function') {
+                hObj.forEach(function(v, k) { flat[k] = v; });
+            } else if (typeof hObj === 'object') {
+                for (var hk in hObj) { if (Object.prototype.hasOwnProperty.call(hObj, hk)) flat[hk] = hObj[hk]; }
+            }
+        }
+        var keys = Object.keys(flat);
+        if (keys.length > 0) { hdrJson = JSON.stringify(flat); }
+    } catch (eHdr) {}
+    var ct = options.headers ? (options.headers['Content-Type'] || options.headers['content-type'] || (hdrJson ? undefined : null)) : null;
+    if (ct === undefined) {
+        try { ct = (options.headers && options.headers.get && options.headers.get('Content-Type')) || null; } catch (eCt) { ct = null; }
+    }
     return new Promise(function(resolve, reject) {
         var raw = null;
         var statusCode = 200;
         // POST/PUT/DELETE → __fetchSyncMethod（支持 method/body，返回 "{status}\n{body}"）
         // GET → __fetchSync（现有同步 fetch）
         if (method !== 'GET' && typeof __fetchSyncMethod === 'function') {
-            raw = __fetchSyncMethod(url, method, body, ct);
+            raw = __fetchSyncMethod(url, method, body, ct, hdrJson);
             if (raw && raw.indexOf('\n') > 0) {
                 statusCode = parseInt(raw.split('\n')[0], 10);
                 raw = raw.slice(raw.indexOf('\n') + 1);

@@ -18,6 +18,8 @@ description = "HTTP / HTTPS / WebSocket client for the browser project"
 # 这些是 reqwest 官方解码 feature（非新 crate），属白名单 reqwest 的合理配置。
 reqwest = { version = "0.12", default-features = false, features = [
     "default-tls",
+    "native-tls",
+    "rustls-tls",
     "http2",
     "charset",
     "brotli",

@@ -59,7 +59,12 @@ fn browser_default_headers() -> reqwest::header::HeaderMap {
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct HttpClient {
+    /// M93.11: 主客户端（rustls——ALPN 可靠协商 HTTP/2，对齐 Chrome 协议层；
+    /// xcancel 等站 WAF 拒 HTTP/1.1）。
     inner: reqwest::Client,
+    /// M93.11: native-tls 兜底（ADR-0003：百度等中国大站 CDN 与 rustls/ring
+    /// 不兼容，TLS 握手失败时降级重试）。
+    alt: Option<reqwest::Client>,
     interceptor: Arc<dyn Interceptor + Send + Sync>,
 }
 
@@ -135,7 +140,11 @@ impl ClientBuilder {
             .interceptor
             .unwrap_or_else(|| Arc::new(NoopInterceptor));
         let inner = builder.build()?;
-        Ok(HttpClient { inner, interceptor })
+        Ok(HttpClient {
+            inner,
+            alt: None,
+            interceptor,
+        })
     }
 }
 
@@ -148,19 +157,27 @@ impl HttpClient {
     #[must_use]
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        // 跟随 redirect（浏览器标准行为，最多 10 次防死循环）。
-        let inner = reqwest::Client::builder()
-            .user_agent(UA)
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(60))
-            .default_headers(browser_default_headers())
-            .gzip(true)
-            .brotli(true)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        // M93.11: rustls 主（h2）+ native-tls 兜底。跟随 redirect（浏览器标准
+        // 行为，最多 10 次防死循环）。
+        let mk = |rustls: bool| {
+            let mut b = reqwest::Client::builder()
+                .user_agent(UA)
+                .redirect(reqwest::redirect::Policy::limited(10))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(60))
+                .default_headers(browser_default_headers())
+                .gzip(true)
+                .brotli(true);
+            b = if rustls {
+                b.use_rustls_tls()
+            } else {
+                b.use_native_tls()
+            };
+            b.build().unwrap_or_else(|_| reqwest::Client::new())
+        };
         Self {
-            inner,
+            inner: mk(true),
+            alt: Some(mk(false)),
             interceptor: Arc::new(NoopInterceptor),
         }
     }
@@ -173,18 +190,25 @@ impl HttpClient {
     #[must_use]
     #[allow(clippy::new_without_default)]
     pub fn new_no_redirect() -> Self {
-        let inner = reqwest::Client::builder()
-            .user_agent(UA)
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(60))
-            .default_headers(browser_default_headers())
-            .gzip(true)
-            .brotli(true)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let mk = |rustls: bool| {
+            let mut b = reqwest::Client::builder()
+                .user_agent(UA)
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(60))
+                .default_headers(browser_default_headers())
+                .gzip(true)
+                .brotli(true);
+            b = if rustls {
+                b.use_rustls_tls()
+            } else {
+                b.use_native_tls()
+            };
+            b.build().unwrap_or_else(|_| reqwest::Client::new())
+        };
         Self {
-            inner,
+            inner: mk(true),
+            alt: Some(mk(false)),
             interceptor: Arc::new(NoopInterceptor),
         }
     }
@@ -302,7 +326,7 @@ impl HttpClient {
                 scheme: parsed.scheme().to_string(),
             });
         }
-        let mut builder = self.inner.request(method, url);
+        let mut builder = self.inner.request(method.clone(), url);
         if let Some(cookie) = cookie_header {
             builder = builder.header("cookie", cookie);
         }
@@ -312,10 +336,33 @@ impl HttpClient {
         if let Some(b) = body {
             builder = builder.body(b.to_string());
         }
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| NetError::RequestFailed(e.to_string()))?;
+        let resp = match builder.send().await {
+            Ok(r) => r,
+            Err(primary_err) => {
+                if let Some(alt) = &self.alt {
+                    if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+                        eprintln!(
+                            "[net-diag] rustls primary failed ({primary_err}), retrying native-tls"
+                        );
+                    }
+                    let mut b2 = alt.request(method.clone(), url);
+                    if let Some(cookie) = cookie_header {
+                        b2 = b2.header("cookie", cookie);
+                    }
+                    if let Some(ct) = content_type {
+                        b2 = b2.header("content-type", ct);
+                    }
+                    if let Some(b) = body {
+                        b2 = b2.body(b.to_string());
+                    }
+                    b2.send()
+                        .await
+                        .map_err(|e| NetError::RequestFailed(e.to_string()))?
+                } else {
+                    return Err(NetError::RequestFailed(primary_err.to_string()));
+                }
+            }
+        };
         let status = resp.status().as_u16();
         if !resp.status().is_success() {
             return Err(NetError::BadStatus { code: status });
@@ -388,7 +435,7 @@ impl HttpClient {
             "PATCH" => Method::PATCH,
             _ => Method::GET,
         };
-        let mut builder = self.inner.request(m, url);
+        let mut builder = self.inner.request(m.clone(), url);
         if let Some(cookie) = cookie_header {
             builder = builder.header("cookie", cookie);
         }
@@ -403,6 +450,118 @@ impl HttpClient {
             .await
             .map_err(|e| NetError::RequestFailed(e.to_string()))?;
         let status = resp.status().as_u16();
+        let headers = resp.headers().clone();
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| NetError::ReadFailed(e.to_string()))?
+            .to_vec();
+        Ok((status, body, headers))
+    }
+
+    /// M93.11: request_full_raw + 任意额外请求头（fetch spec 的 headers
+    /// 透传——此前 bridge 只抠 Content-Type，VM/框架发的 Authorization 等
+    /// 全部被丢弃，xcancel 挑战 POST 因此 "unauthorized" 403）。
+    ///
+    /// # Errors
+    /// 同 [`HttpClient::request_full_raw`]。
+    pub async fn request_full_raw_hdr(
+        &self,
+        url: &str,
+        method: &str,
+        body: Option<&str>,
+        content_type: Option<&str>,
+        cookie_header: Option<&str>,
+        extra_headers: &[(String, String)],
+    ) -> Result<(u16, Vec<u8>, HeaderMap), NetError> {
+        // 先走标准路径拿 builder 不行（私有），这里直接重建请求逻辑：
+        // 复用 request_full_raw 的语义 + 追加 extra headers。
+        // 简洁实现：通过内部调用 + reqwest 的 header 机制不可行，改为
+        // 直接构造（与 request_full_raw 相同的校验/解析）。
+        let parsed = Url::parse(url).map_err(|_| NetError::InvalidUrl {
+            url: url.to_string(),
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(NetError::UnsupportedScheme {
+                scheme: parsed.scheme().to_string(),
+            });
+        }
+        let m = match method.to_uppercase().as_str() {
+            "POST" => Method::POST,
+            "PUT" => Method::PUT,
+            "DELETE" => Method::DELETE,
+            "HEAD" => Method::HEAD,
+            "PATCH" => Method::PATCH,
+            _ => Method::GET,
+        };
+        let mut builder = self.inner.request(m.clone(), url);
+        if let Some(cookie) = cookie_header {
+            builder = builder.header("cookie", cookie);
+        }
+        if let Some(ct) = content_type {
+            builder = builder.header("content-type", ct);
+        }
+        for (k, v) in extra_headers {
+            if k.eq_ignore_ascii_case("content-type") || k.eq_ignore_ascii_case("cookie") {
+                continue; // 已由专用参数处理，避免重复
+            }
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::try_from(k.as_str()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                builder = builder.header(name, val);
+            }
+        }
+        if let Some(b) = body {
+            builder = builder.body(b.to_string());
+        }
+        let resp = match builder.send().await {
+            Ok(r) => r,
+            Err(primary_err) => {
+                // M93.11: 传输层失败（rustls 与部分 CDN 不兼容——ADR-0003）
+                // → native-tls 兜底重试一次。
+                if let Some(alt) = &self.alt {
+                    if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+                        eprintln!(
+                            "[net-diag] rustls primary failed ({primary_err}), retrying native-tls"
+                        );
+                    }
+                    let mut b2 = alt.request(m.clone(), url);
+                    if let Some(cookie) = cookie_header {
+                        b2 = b2.header("cookie", cookie);
+                    }
+                    if let Some(ct) = content_type {
+                        b2 = b2.header("content-type", ct);
+                    }
+                    for (k, v) in extra_headers {
+                        if k.eq_ignore_ascii_case("content-type")
+                            || k.eq_ignore_ascii_case("cookie")
+                        {
+                            continue;
+                        }
+                        if let (Ok(name), Ok(val)) = (
+                            reqwest::header::HeaderName::try_from(k.as_str()),
+                            reqwest::header::HeaderValue::from_str(v),
+                        ) {
+                            b2 = b2.header(name, val);
+                        }
+                    }
+                    if let Some(b) = body {
+                        b2 = b2.body(b.to_string());
+                    }
+                    b2.send()
+                        .await
+                        .map_err(|e| NetError::RequestFailed(e.to_string()))?
+                } else {
+                    return Err(NetError::RequestFailed(primary_err.to_string()));
+                }
+            }
+        };
+        let status = resp.status().as_u16();
+        // M93.11-diag: 协议版本诊断（xcancel WAF 拒 HTTP/1.1）
+        if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+            eprintln!("[net-diag] {method} {url} -> proto={:?}", resp.version());
+        }
         let headers = resp.headers().clone();
         let body = resp
             .bytes()

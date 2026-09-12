@@ -179,6 +179,9 @@ globalThis.crypto = {
 /// 返回 JSON：`{"ok":true,"messages":[...]}`（outbox 原始 JSON 文本数组）
 /// 或 `{"ok":false,"error":"..."}`（主侧 Worker shim 转调 onerror）。
 fn worker_run(url: &str, msg_json: &str) -> String {
+    if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+        eprintln!("[worker-trace] SPAWN url={url}");
+    }
     // 1. 解析相对 URL + 取 worker 源码（走既有缓存/net worker/cookie 管线）。
     let resolved = bridge::resolve_url(url);
     let source = match bridge::fetch_sync(&resolved) {
@@ -193,6 +196,9 @@ fn worker_run(url: &str, msg_json: &str) -> String {
 fn worker_run_src(source: &str, msg_json: &str) -> String {
     use rquickjs::context::EvalOptions;
     use rquickjs::CatchResultExt;
+    if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+        eprintln!("[worker-trace] SPAWN src_len={}", source.len());
+    }
     let source = source.to_string();
 
     // 2. 独立 Runtime + Context（中断双保险：120s 硬上限 + 全局 deadline）。
@@ -679,7 +685,7 @@ impl QuickJsEngine {
                 // === Fetch ===
                 let _ = g.set("__fetchSync", Function::new(ctx.clone(), |url: String| bridge::qjs_bridge::fetch_sync(url)).unwrap());
                 let _ = g.set("__fetchSyncMethod", Function::new(ctx.clone(), |url: String, method: String, body: Option<String>, ct: Option<String>| {
-                    bridge::qjs_bridge::fetch_sync_method(url, method, body, ct)
+                    bridge::qjs_bridge::fetch_sync_method(url, method, body, ct, None)
                 }).unwrap());
                 // M93.5: __cacheAsset(url, body) —— 页面 fetch() 成功的静态资产
                 // GET 响应写 SCRIPT_CACHE（形状判断在 Rust 侧 is_static_asset_url，
@@ -695,6 +701,17 @@ impl QuickJsEngine {
                 // M93.7: blob: URL 路径——主侧 JS 已从 __blobUrls 解析出源码
                 let _ = g.set("__workerRunSrc", Function::new(ctx.clone(), |src: String, msg: String| worker_run_src(&src, &msg)).unwrap());
                 let _ = g.set("__navRecord", Function::new(ctx.clone(), |url: String| bridge::record_pending_navigation(&url)).unwrap());
+                // M93.11: 宿主真实逻辑核数（navigator.hardwareConcurrency 诚实值）
+                let hw = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(8);
+                let _ = g.set("__hwCores", hw);
+                // M93.11-diag: crypto.subtle 方法访问追踪（shim 源码级，VM 不可见）
+                let _ = g.set("__ctrace", Function::new(ctx.clone(), |msg: String| {
+                    if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+                        eprintln!("[crypto-trace] {msg}");
+                    }
+                }).unwrap());
 
                 // === WebSocket（复用 boa 的后台线程 WsManager）===
                 let _ = g.set("__wsCreate", Function::new(ctx.clone(), |url: String| bridge::ws_create(url) as f64).unwrap());
@@ -1688,6 +1705,10 @@ impl QuickJsEngine {
                 if guard > 1000 {
                     break;
                 }
+            }
+            // M93.11-diag: 微任务 drain 计数（VM then 是否执行的判别器）
+            if guard > 0 && std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+                eprintln!("[jobs-trace] drained {guard} microtasks");
             }
         });
     }

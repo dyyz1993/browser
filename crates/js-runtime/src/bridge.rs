@@ -829,6 +829,64 @@ struct NetWorker {
     tx: std::sync::mpsc::Sender<NetRequest>,
 }
 
+/// M93.11: 极简 JSON 对象解析（{"k":"v",...} 平面对象，字符串值）——
+/// fetch headers 透传用。不引 serde（G4 自研纪律）；非平面对象返回 None。
+fn serde_json_free_parse(s: &str) -> Option<Vec<(String, String)>> {
+    let t = s.trim();
+    if !t.starts_with('{') || !t.ends_with('}') {
+        return None;
+    }
+    let inner = &t[1..t.len() - 1];
+    if inner.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    // 逐段切分顶层逗号（值内逗号在引号内，简单状态机）
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut esc = false;
+    let mut start = 0usize;
+    let bytes = inner.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if esc {
+            esc = false;
+            continue;
+        }
+        match b {
+            b'\\' if in_str => esc = true,
+            b'"' => in_str = !in_str,
+            b'{' | b'[' if !in_str => depth += 1,
+            b'}' | b']' if !in_str => depth = depth.saturating_sub(1),
+            b',' if !in_str && depth == 0 => {
+                let part = &inner[start..i];
+                if let Some(kv) = parse_kv(part) {
+                    out.push(kv);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = &inner[start..];
+    if let Some(kv) = parse_kv(last) {
+        out.push(kv);
+    }
+    Some(out)
+}
+
+fn parse_kv(part: &str) -> Option<(String, String)> {
+    let p = part.trim();
+    let colon = p.find(':')?;
+    let k = p[..colon].trim().trim_matches('"').to_string();
+    let v_raw = p[colon + 1..].trim();
+    let v = v_raw.trim_matches('"').to_string();
+    if k.is_empty() {
+        None
+    } else {
+        Some((k, v))
+    }
+}
+
 struct NetRequest {
     url: String,
     method: String,
@@ -837,6 +895,8 @@ struct NetRequest {
     cookie_header: Option<String>,
     /// M93: true = 用 no-redirect 客户端（JS 导航闭环逐跳跟 3xx 用）。
     no_redirect: bool,
+    /// M93.11: fetch spec 的任意额外请求头（Authorization 等此前被丢弃）。
+    extra_headers: Vec<(String, String)>,
     reply: std::sync::mpsc::Sender<NetResult>,
 }
 
@@ -869,12 +929,13 @@ where
                     // 只有网络错误才失败）。旧 request_full_str 对 4xx/5xx
                     // 抛 BadStatus 丢 body → XHR status=0 / fetch 假 reject。
                     let picked = if req.no_redirect { &client_nr } else { &client };
-                    let result = rt.block_on(picked.request_full_raw(
+                    let result = rt.block_on(picked.request_full_raw_hdr(
                         &req.url,
                         &req.method,
                         req.body.as_deref(),
                         req.content_type.as_deref(),
                         req.cookie_header.as_deref(),
+                        &req.extra_headers,
                     ));
                     let reply = match result {
                         Ok((status, bytes, headers)) => {
@@ -918,6 +979,19 @@ fn fetch_sync_with_method_opts(
     body: Option<&str>,
     content_type: Option<&str>,
     no_redirect: bool,
+) -> Result<(u16, String, Vec<(String, String)>), String> {
+    fetch_sync_with_method_full(url, method, body, content_type, no_redirect, &[])
+}
+
+/// M93.11: 全量版——任意额外请求头透传（fetch spec 的 headers 支持）。
+#[allow(clippy::type_complexity)]
+fn fetch_sync_with_method_full(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+    content_type: Option<&str>,
+    no_redirect: bool,
+    extra_headers: &[(String, String)],
 ) -> Result<(u16, String, Vec<(String, String)>), String> {
     // M18.1: 标记网络请求进行中（networkidle 信号源）。
     inc_pending_requests();
@@ -965,6 +1039,7 @@ fn fetch_sync_with_method_opts(
             content_type: content_type.clone(),
             cookie_header: cookie_header.clone(),
             no_redirect,
+            extra_headers: extra_headers.to_vec(),
             reply: reply_tx,
         });
     });
@@ -3368,25 +3443,51 @@ pub mod qjs_bridge {
         method: String,
         body: Option<String>,
         ct: Option<String>,
+        headers_json: Option<String>,
     ) -> Option<String> {
         let resolved = resolve_url(&url);
+        // M93.11: fetch headers 透传——JS shim 序列化的 {"K":"V"} 对象。
+        let extra: Vec<(String, String)> = headers_json
+            .and_then(|j| serde_json_free_parse(&j))
+            .unwrap_or_default();
         // M93.7-diag: VM 不可见的 fetch 生命周期追踪（JS 层包装会被混淆 VM 的
         // 防篡改自检探测——toString 含非 [native code] 即可能触发死等）。
         let trace_fetch = std::env::var("BROWSER_TRACE_FETCH").is_ok();
-        if trace_fetch {
+        if trace_fetch && !extra.is_empty() {
+            let hs = extra
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            eprintln!("[fetch-trace] CALL {method} {resolved} hdr=[{hs}]");
+        } else if trace_fetch {
             eprintln!("[fetch-trace] CALL {method} {resolved}");
         }
-        let out = super::fetch_sync_with_method(&resolved, &method, body.as_deref(), ct.as_deref())
-            .ok()
-            .map(|(status, b)| {
-                if trace_fetch {
+        let out = super::fetch_sync_with_method_full(
+            &resolved,
+            &method,
+            body.as_deref(),
+            ct.as_deref(),
+            false,
+            &extra,
+        )
+        .ok()
+        .map(|(status, b, _h)| {
+            if trace_fetch {
+                if (200..300).contains(&status) {
                     eprintln!(
                         "[fetch-trace] DONE {method} {resolved} -> {status} ({}B)",
                         b.len()
                     );
+                } else {
+                    eprintln!(
+                        "[fetch-trace] DONE {method} {resolved} -> {status} BODY={:?}",
+                        b.chars().take(120).collect::<String>()
+                    );
                 }
-                format!("{status}\n{b}")
-            });
+            }
+            format!("{status}\n{b}")
+        });
         if trace_fetch && out.is_none() {
             eprintln!("[fetch-trace] FAIL {method} {resolved}");
         }
