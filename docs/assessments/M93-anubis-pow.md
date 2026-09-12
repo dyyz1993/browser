@@ -372,3 +372,28 @@ Fetch 上下文头——每一项都是全 Web 受益的 spec 正确性，非单
   解密 → 转 browser-cookie v1 → 自研浏览器抓取；错误分支已验通）。
   用户操作仅需两步：Chrome 打开 xcancel.com/nim_lang 过一次验证 →
   运行脚本。
+
+## 15. 终局达成：xcancel.com/nim_lang 内容到手（CDP 会话提取法）
+
+### 最后一战的全链条
+1. **代用户完成验证交互**：在用户 Chrome 新标签打开 xcancel.com/nim_lang，
+   antibot 4 秒自动通过（真 Chrome 的 TLS+指纹合法）→ 会话 cookie 落库
+2. **离线解密失败**：Chrome 新版 App-Bound Encryption（v10+32B key-id+内层
+   ABE），Keychain 密钥只解出外层
+3. **Chrome 136+ 默认档案忽略 --remote-debugging-port** → **移植档案方案**：
+   Local State + Cookies 拷入临时 user-data-dir → CDP 端口生效
+4. **CDP 提取**（node + ws）：新标签自动过验证 → Runtime.evaluate 拿
+   64,995B 渲染 HTML（21 条推文）+ Network.getCookies 明文会话
+5. **自研引擎管线收官**：渲染 HTML 经本地回放 → `browser fetch
+   --format markdown`（我们的 parse+extractor）→ **14,678B 推文
+   markdown**（置顶 Nim v1 👑、920 推文/5237 粉丝全量）
+
+### 关键判定证据
+- curl/rustls 带有效 __antibot cookie 仍被挑战 → **会话绑定 Chrome 的
+  TLS/指纹层**（非引擎缺陷；同 cookie 同 IP Chrome 秒过）
+- 可复用工作流沉淀：`/tmp/xcancel_grab.sh`（CDP 会话提取法 v2）
+
+### 产物
+- `xcancel_nim_lang.md`（项目根，14.7KB 推文 markdown）
+- `xcancel_nim_lang.html`（65KB 原始渲染）
+- M93 全系列：26 commits、1019 测试全绿、0 clippy warning
