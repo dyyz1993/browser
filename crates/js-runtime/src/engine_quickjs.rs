@@ -228,11 +228,14 @@ fn worker_run_src(source: &str, msg_json: &str) -> String {
             return format!("{{\"ok\":false,\"error\":\"worker script eval failed: {e}\"}}");
         }
         const DISPATCH: &str = r#"(function(){
+    // M93.13: 双通道 handler——addEventListener('message', fn) 或
+    // self.onmessage = fn（cap.js 的 fallback solver 用后者）。
     var h = __handlers['message'];
+    if (typeof h !== 'function' && typeof self.onmessage === 'function') { h = self.onmessage; }
     if (typeof h !== 'function') { __err = 'worker registered no message handler'; __done = true; return; }
     Promise.resolve().then(function(){ return h({ data: __msgData }); })
         .then(function(){ __done = true; },
-              function(e){ __err = String((e && e.message) || e); __done = true; });
+              function(e){ __err = String((e && e.message) || e) + ' @' + String((e && e.stack) || '').split('\n').slice(0,3).join('~').slice(0, 250); __done = true; });
 })();"#;
         if let Err(e) = ctx.eval::<(), _>(DISPATCH).catch(&ctx) {
             return format!("{{\"ok\":false,\"error\":\"worker dispatch failed: {e}\"}}");

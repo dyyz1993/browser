@@ -2667,10 +2667,18 @@ window.crypto = {
     }, {
         get: function(target, prop) {
             if (typeof prop !== 'string') return target[prop];
-            if (typeof __ctrace === 'function' && prop !== 'digest') {
-                try { __ctrace('subtle.ACCESS ' + prop + ' (unsupported!)'); } catch (e) {}
-            }
-            return target[prop];
+            if (typeof target[prop] !== 'undefined') return target[prop];
+            // M93.13-diag: 未实现的 subtle 方法——记参数后抛（逐步映射 VM 的
+            // 完整 crypto 调用图：generateKey/importKey/exportKey/encrypt/...）
+            return function() {
+                var args = [];
+                for (var i = 0; i < arguments.length; i++) {
+                    try { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i]).slice(0, 120) : String(arguments[i]).slice(0, 60)); }
+                    catch (eS) { args.push('?obj'); }
+                }
+                if (typeof __ctrace === 'function') { try { __ctrace('subtle.CALL ' + prop + '(' + args.join(', ') + ')'); } catch (eT) {} }
+                throw new TypeError('crypto.subtle.' + prop + ' is not implemented');
+            };
         }
     })
 };
@@ -3089,15 +3097,8 @@ window.__makeElement = function(nodeId) {
                             if (typeof __ctrace === 'function') { try { __ctrace('CTOR-THROW ' + String((eNew && (eNew.message || eNew)) || eNew).slice(0, 160)); } catch (e8) {} }
                             throw eNew;
                         }
+                        // M93.13-fix: 同 __upgradeOne——原型链继承，无拷贝
                         __real.__nodeId = __el.__nodeId;
-                        var __seen = { constructor: 1 };
-                        var __names = Object.getOwnPropertyNames(Element.prototype);
-                        for (var __i = 0; __i < __names.length; __i++) {
-                            var __k = __names[__i];
-                            if (__seen[__k]) continue;
-                            __seen[__k] = 1;
-                            try { __real[__k] = Element.prototype[__k]; } catch (eCp) {}
-                        }
                         __real.__customUpgraded = true;
                         __el = __real;
                     }
@@ -3182,6 +3183,7 @@ window.dispatchEvent = function(ev) {
 // 全部元素桥方法（appendChild/querySelector/innerHTML），子树查询用现有
 // qs（支持 root id）。
 Element.prototype.attachShadow = function(opts) {
+    if (typeof __ctrace === 'function') { try { __ctrace('attachShadow this=' + String(this && this.tagName) + ' nid=' + (this && this.__nodeId)); } catch (eT1) {} }
     if (this.__shadowRoot) return this.__shadowRoot;
     try {
         var rootId = (typeof __createDetachedEl === 'function') ? __createDetachedEl('div') : null;
@@ -3200,6 +3202,28 @@ try {
     });
 } catch (eSh) {}
 
+// M93.13: 直接构造的自定义元素实例（new CapWidget()）探测——沿原型链比对
+// customElements registry 的构造器（实例无 tagName 无 __nodeId，唯一线索是
+// 原型链）。返回注册名（小写 tag）或 null。
+window.__customInstanceOf = function(obj) {
+    try {
+        var reg = window.customElements && window.customElements.__registry;
+        if (!reg || !obj) return null;
+        var proto = Object.getPrototypeOf(obj);
+        var depth = 0;
+        while (proto && depth < 12) {
+            for (var name in reg) {
+                if (Object.prototype.hasOwnProperty.call(reg, name) && reg[name] && reg[name].prototype === proto) {
+                    return name;
+                }
+            }
+            proto = Object.getPrototypeOf(proto);
+            depth++;
+        }
+    } catch (e) {}
+    return null;
+};
+
 // M93.12: customElements 真实现——xcancel antibot 的 VM 用
 // `customElements.whenDefined('cap-widget').then(...solve())` 驱动挑战
 // （cap.min.js 定义 <cap-widget> 自定义元素）。M66 的 no-op 让元素永远
@@ -3209,6 +3233,7 @@ try {
 window.customElements = {
     __registry: {},
     define: function(name, ctor, opts) {
+        if (typeof __ctrace === 'function') { try { __ctrace('CE-define ' + String(name)); } catch (eT2) {} }
         this.__registry[name] = ctor;
         try {
             // 已存在同名元素升级（spec：define 触发已有实例 upgrade）
@@ -3228,20 +3253,25 @@ window.customElements = {
             // 方法从 Element.prototype 拷贝 + __nodeId 带过去；真实例替换
             // 缓存（getElementById 等返回同一对象，保持 === 同一性）。
             var real = new ctor();
+            // M93.13-fix: 删除"Element.prototype 方法拷贝"——读原型上的 getter
+            //（classList 等）会以 prototype 为 this 执行，把坏缓存（__nodeId
+            // undefined 的 DOMTokenList Proxy）污染到 Element.prototype.__classList，
+            // 全页 classList 随之炸 f64。真构造的原型链（ctor → HTMLElement =
+            // Element）天然继承全部方法，拷贝本来就多余。
             real.__nodeId = el.__nodeId;
-            var seen = { constructor: 1 };
-            var names = Object.getOwnPropertyNames(Element.prototype);
-            for (var i = 0; i < names.length; i++) {
-                var k = names[i];
-                if (seen[k]) continue;
-                seen[k] = 1;
-                try { real[k] = Element.prototype[k]; } catch (eCopy) {}
-            }
             real.__customUpgraded = true;
             var key = String(nodeId);
             if (window.__elCache) { window.__elCache[key] = real; }
             try {
-                if (typeof real.connectedCallback === 'function') real.connectedCallback();
+                if (typeof real.connectedCallback === 'function') {
+                    if (typeof __ctrace === 'function') { try { __ctrace('CC-upgrade nid=' + nodeId); } catch (eT4) {} }
+                    var __ccr2 = real.connectedCallback();
+                    if (__ccr2 && typeof __ccr2.catch === 'function') {
+                        __ccr2.catch(function (eCcB) {
+                            if (typeof __ctrace === 'function') { try { __ctrace('CCUP-ASYNC-THROW ' + String((eCcB && (eCcB.message || eCcB)) || eCcB).slice(0, 140) + ' STACK=' + String((eCcB && eCcB.stack) || '').split('\n').slice(0, 4).join('~').slice(0, 300)); } catch (e11) {} }
+                        });
+                    }
+                }
             } catch (eCc) {
                 if (typeof __ctrace === 'function') { try { __ctrace('UPCC-THROW ' + String((eCc && (eCc.message || eCc)) || eCc).slice(0, 160) + ' STACK=' + String((eCc && eCc.stack) || '').split('\n').slice(0, 4).join('~').slice(0, 320)); } catch (e7) {} }
             }
@@ -4957,6 +4987,23 @@ Element.prototype.getAttribute = function(key) {
 };
 Element.prototype.setAttribute = function(key, val) { __setAttr(this.__nodeId, key, String(val)); try { window.__fireMutation(this.__nodeId, 'attributes', String(key)); } catch(e) {} };
 Element.prototype.appendChild = function(child) {
+    // M93.13: 直构自定义元素收养——new CapWidget() 的实例不是 arena 节点
+    // （无 __nodeId），appendChild 会因 f64 转换炸掉。浏览器语义：自定义元素
+    // 构造即产生真实元素节点；此处近似：检测到注册表实例时创建 detached
+    // 节点收养（__nodeId 绑定 + __elCache 登记），后续 DOM 桥全部可用。
+    if (child && typeof child.__nodeId !== 'number' && !child.__isFragment) {
+        var __ctag = (typeof window.__customInstanceOf === 'function') ? window.__customInstanceOf(child) : null;
+        if (__ctag) {
+            try {
+                var __cid = (typeof __createDetachedEl === 'function') ? __createDetachedEl(__ctag) : null;
+                if (typeof __cid === 'number') {
+                    child.__nodeId = __cid;
+                    child.__customUpgraded = true;
+                    if (window.__elCache) { window.__elCache[String(__cid)] = child; }
+                }
+            } catch (eAdopt) {}
+        }
+    }
     if (child && typeof child.__nodeId === 'number') {
         // GAP-K: DocumentFragment 插入时展开子节点（Web 标准行为）。
         // fragment 的子节点逐个移动到 this，fragment 本身变空（不插入）。
@@ -4974,12 +5021,26 @@ Element.prototype.appendChild = function(child) {
         }
         __appendChild(this.__nodeId, child.__nodeId);
         try { window.__fireMutation(this.__nodeId, 'childList'); } catch(e) {}
-        // M93.12: 自定义元素 connectedCallback（spec：连接到文档时派发一次）
+        // M93.12: 自定义元素 connectedCallback（spec：连接到文档时派发一次）。
+        // M93.13: 条件放宽为注册表 tag 命中（直构 new ctor() 实例无
+        // __customUpgraded 标记，但其原型链上的 connectedCallback 同样必须派发）。
         try {
-            if (child.__customUpgraded && !child.__ccDone && typeof child.connectedCallback === 'function') {
+            var __ccTag = '';
+            try { __ccTag = String((child && child.tagName) || (typeof __getTag === 'function' ? __getTag(child.__nodeId) : '')).toLowerCase(); } catch (eTg) {}
+            var __ccHit = child.__customUpgraded ||
+                (__ccTag && window.customElements && window.customElements.__registry && window.customElements.__registry[__ccTag]);
+            if (__ccHit && !child.__ccDone && typeof child.connectedCallback === 'function') {
                 child.__ccDone = true;
+                if (typeof __ctrace === 'function') { try { __ctrace('CC-dispatch tag=' + __ccTag + ' nid=' + child.__nodeId); } catch (eT3) {} }
+                // M93.13: CC 可能是 async——同步 try/catch 抓不到内部异常
+                //（变成 rejected Promise 静默丢）。catch 返回的 Promise 记录。
                 try {
-                    child.connectedCallback();
+                    var __ccr = child.connectedCallback();
+                    if (__ccr && typeof __ccr.catch === 'function') {
+                        __ccr.catch(function (eCcA) {
+                            if (typeof __ctrace === 'function') { try { __ctrace('CC-ASYNC-THROW ' + String((eCcA && (eCcA.message || eCcA)) || eCcA).slice(0, 140) + ' STACK=' + String((eCcA && eCcA.stack) || '').split('\n').slice(0, 4).join('~').slice(0, 300)); } catch (e10) {} }
+                        });
+                    }
                 } catch (eCc3) {
                     if (typeof __ctrace === 'function') { try { __ctrace('CC-THROW ' + String((eCc3 && (eCc3.message || eCc3)) || eCc3).slice(0, 160) + ' STACK=' + String((eCc3 && eCc3.stack) || '').split('\n').slice(0, 4).join('~').slice(0, 300)); } catch (e9) {} }
                 }
@@ -5484,7 +5545,9 @@ Object.defineProperty(Element.prototype, 'classList', {
         // 惰性缓存：同一元素的 classList 必须身份相等（===）。
         // M91: Proxy 包装——数字索引 + length 直读 token（Array 迭代器
         // 经继承的 Array.prototype 方法操作）。
-        if (!this.__classList) {
+        // M93.13-fix: own-property 判定——防止原型上的意外缓存（__classList
+        // 沿原型链查到别人的缓存会返回错误的 DOMTokenList）。
+        if (!Object.prototype.hasOwnProperty.call(this, '__classList')) {
             var inst = new DOMTokenList(this.__nodeId);
             this.__classList = new Proxy(inst, {
                 get: function(t, k) {
