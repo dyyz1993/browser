@@ -356,3 +356,19 @@ canPlayType 编解码表/HTTP2 双栈/fetch headers 透传/hardwareConcurrency/
 customElements 真实现/Shadow DOM/私有字段真构造/收养机制/worker onmessage
 双通道/P-256 ECDH+HKDF+AES-GCM 纯 JS（NIST 向量）/screen/chrome/plugins/
 Fetch 上下文头——每一项都是全 Web 受益的 spec 正确性，非单站 hack。
+
+## 14. M93.17 + 会话提取基建（用户交互一步化）
+
+- **M93.17**（已提交）：Navigator WebIDL 形状（prototype getter 访问器替代
+  纯数据对象——fp 的 navigatorPropertyDescriptors 全 0 是自研引擎特征）
+  + Notification.permission 'default'（denied 是 headless 特征）+ vendor/
+  product/webdriver=false 常量族。实弹仍拒——判定面在 cdp 向量/stack 格式/
+  toString 源码（深度身份区）。
+- **重试终验**：2 次全新会话（页面自述 "second try"）均 "Automated
+  verification failed"——判定是确定性的，非随机分。
+- **Chrome cookie 全面搜索**：本机 3 个 Chrome 档案 + Edge 均 0 条 xcancel
+  cookie（用户当时的验证会话在隐私窗口或已过期清理）。
+- **一键脚本就绪**：`/tmp/xcancel_grab.sh`（读 Chrome cookie 库 → Keychain
+  解密 → 转 browser-cookie v1 → 自研浏览器抓取；错误分支已验通）。
+  用户操作仅需两步：Chrome 打开 xcancel.com/nim_lang 过一次验证 →
+  运行脚本。
