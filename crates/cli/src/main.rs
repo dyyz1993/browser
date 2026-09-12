@@ -1271,7 +1271,9 @@ fn is_retryable_net_error(e: &anyhow::Error) -> bool {
                         || m.contains("certificate"))
                 }
                 // 5xx 可能瞬时（网关抖动）→ 重试；4xx 确定性 → 放弃。
-                browser_net::NetError::BadStatus { code } => *code >= 500,
+                // M93.3 例外：429（限流）可重试——长退避后往往放行
+                //（tiekoetter/Anubis 实测：入口 429 冷却后同请求 200）。
+                browser_net::NetError::BadStatus { code } => *code >= 500 || *code == 429,
                 browser_net::NetError::ReadFailed(_) => true,
                 browser_net::NetError::InvalidUrl { .. }
                 | browser_net::NetError::UnsupportedScheme { .. } => false,
@@ -1296,7 +1298,16 @@ async fn fetch_with_jar(url: &str) -> Result<String> {
                 }
                 last_err = Some(e);
                 if attempt < 2 {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    // M93.3: 429 用长退避（5s），其余维持 500ms。
+                    let is_rate_limited = last_err
+                        .as_ref()
+                        .map(|err| err.to_string().contains("429"))
+                        .unwrap_or(false);
+                    let backoff = if is_rate_limited { 5000 } else { 500 };
+                    if is_rate_limited {
+                        eprintln!("[net] HTTP 429 — backing off {backoff}ms");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
                 }
             }
         }

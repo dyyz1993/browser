@@ -951,6 +951,7 @@ fn fetch_sync_with_method_opts(
 pub(crate) fn fetch_navigation_document(url: &str) -> Result<String, String> {
     let trace = std::env::var("BROWSER_TRACE_NAV").is_ok();
     let mut current = url.to_string();
+    let mut rate_limit_backoff = 0u32;
     for _hop in 0..10 {
         let (status, body, headers) =
             fetch_sync_with_method_opts(&current, "GET", None, None, true)?;
@@ -970,6 +971,24 @@ pub(crate) fn fetch_navigation_document(url: &str) -> Result<String, String> {
                 "[nav-trace] GET {current} -> {status} loc={loc} set-cookie=[{setc}] body_len={}",
                 body.len()
             );
+        }
+        // M93.3: 429 退避重试——PoW 解完后的 pass-challenge→真身是背靠背
+        // 请求对，容易踩挑战端点的突发限流（tiekoetter 实测：PoW 通过但
+        // redirect 目标 429，拿到 125B 错误页）。浏览器语义：尊重
+        // Retry-After（缺省 8s），最多退避 3 次，全局 deadline 兜底。
+        if status == 429 && rate_limit_backoff < 3 {
+            rate_limit_backoff += 1;
+            let retry_after = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("retry-after"))
+                .and_then(|(_, v)| v.parse::<u64>().ok())
+                .unwrap_or(8)
+                .min(20);
+            eprintln!(
+                "[nav] HTTP 429 on {current} — backing off {retry_after}s (attempt {rate_limit_backoff}/3)"
+            );
+            std::thread::sleep(std::time::Duration::from_secs(retry_after));
+            continue;
         }
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
             let location = headers
@@ -3681,5 +3700,60 @@ mod gap_i_descendant_selector_tests {
         let t = build_tree();
         let found = find_all_by_selector(&t, "div .child");
         assert!(!found.is_empty(), "div .child 后代选择器应找到节点");
+    }
+}
+
+/// M93.3: 导航文档 fetch 的 429 退避重试测试（引擎无关，纯 net 层）。
+#[cfg(test)]
+mod nav_rate_limit_tests {
+    use super::*;
+
+    /// 单线程迷你 HTTP 服务器：前 N 个请求回 429（带 Retry-After: 0 让测试
+    /// 秒重试），之后回 200 + body。记录收到的请求次数。
+    fn flaky_server(fail_times: usize) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits_clone = hits.clone();
+        std::thread::spawn(move || {
+            for (i, stream) in listener.incoming().enumerate() {
+                let Ok(mut s) = stream else { break };
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                hits_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let resp = if i < fail_times {
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNAV-OKDOC!"
+                };
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://127.0.0.1:{port}/doc"), hits)
+    }
+
+    #[test]
+    fn navigation_document_retries_on_429() {
+        let (url, hits) = flaky_server(2);
+        let doc = fetch_navigation_document(&url).expect("nav fetch should succeed after backoff");
+        assert!(doc.contains("NAV-OKDOC"), "doc={doc:?}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "2 次 429 + 1 次 200"
+        );
+    }
+
+    #[test]
+    fn navigation_document_gives_up_after_three_429s() {
+        let (url, hits) = flaky_server(10);
+        let doc = fetch_navigation_document(&url).expect("429 body 也按浏览器语义返回");
+        assert!(!doc.contains("NAV-OKDOC"), "不应拿到 200 body");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            4,
+            "1 + 3 次退避后放弃"
+        );
     }
 }
