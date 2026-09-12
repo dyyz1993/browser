@@ -27,6 +27,34 @@ use crate::interceptor::{RequestContext, ResponseContext};
 /// 真实 Chrome UA（解决反爬 + 模拟浏览器行为）。
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
+/// M93.2: 浏览器级默认请求头——与 UA（Chrome/126, macOS）**身份一致**的
+/// 恒定头组。真实浏览器每个请求（导航/script/XHR）都带这四个头；我们此前
+/// 只发裸 UA，WAF 请求评分一眼"非浏览器"。
+///
+/// 纪律边界（宪法原则 4）：这是**补全基础请求能力**——头组与我们声明的
+/// UA 完全一致（不伪装成别的浏览器/平台），全部是 Chrome 对任何资源类型
+/// 都恒定发送的真值。不做 per-站点指纹定制、不伪造 sec-fetch 场景头。
+fn browser_default_headers() -> reqwest::header::HeaderMap {
+    let mut h = reqwest::header::HeaderMap::new();
+    let ins = |h: &mut reqwest::header::HeaderMap, k: &'static str, v: &'static str| {
+        if let (Ok(name), Ok(val)) = (
+            reqwest::header::HeaderName::try_from(k),
+            reqwest::header::HeaderValue::from_str(v),
+        ) {
+            h.insert(name, val);
+        }
+    };
+    ins(&mut h, "accept-language", "en-US,en;q=0.9");
+    ins(
+        &mut h,
+        "sec-ch-ua",
+        "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"",
+    );
+    ins(&mut h, "sec-ch-ua-mobile", "?0");
+    ins(&mut h, "sec-ch-ua-platform", "\"macOS\"");
+    h
+}
+
 /// HTTP client. Cheap to clone (reqwest internally `Arc`-wrapped).
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -90,7 +118,12 @@ impl ClientBuilder {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(self.connect_timeout)
             .timeout(self.timeout)
-            .redirect(reqwest::redirect::Policy::limited(self.redirect_limit));
+            .redirect(reqwest::redirect::Policy::limited(self.redirect_limit))
+            // M93.2: 浏览器级默认头 + 压缩协商（Accept-Encoding 由 reqwest
+            // 依 feature 自动附加并透明解压）。
+            .default_headers(browser_default_headers())
+            .gzip(true)
+            .brotli(true);
 
         if let Some(ua) = self.user_agent {
             builder = builder.user_agent(&ua);
@@ -121,6 +154,9 @@ impl HttpClient {
             .redirect(reqwest::redirect::Policy::limited(10))
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(60))
+            .default_headers(browser_default_headers())
+            .gzip(true)
+            .brotli(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
@@ -142,6 +178,9 @@ impl HttpClient {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(60))
+            .default_headers(browser_default_headers())
+            .gzip(true)
+            .brotli(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
