@@ -199,3 +199,46 @@ crypto.subtle.digest（SHA-256）、blob Worker、Blob 真内容、TextEncoder �
 UTF-8——任何用 WebCrypto/Worker 的正常站点（cap.js 同款 PoW 已大量部署）直接受益。
 本地三链路铁证：/tmp/cap_test.html 模式（SHA-256 标准向量 + blob Worker +
 worker 内 PoW 解题复验）。
+
+## 9. M93.8/M93.9：xcancel 持续攻坚——readyState 根因修复 + 八假设排除矩阵
+
+### 攻坚方法学（可复用）
+- **工厂模式钩子**：把混淆 VM 的自执行入口改写为 `window.__vmFactory =`（去尾调用），
+  手动注入带日志 getter 的环境对象调用——VM 行为可控可观测。
+- **主入口手术钩子**：只包 VM 尾部的 `addEventListener(evt, main) : main()` 一处
+  （零全局包装，防 VM 防篡改机制）。混淆 VM 会被 JS 层运行时包装（fetch/then/canvas
+  hook）改变行为——Rust 桥层追踪（M93.9 BROWSER_TRACE_FETCH）才可靠。
+- **双引擎差分**：同一插桩页 Chrome vs 我们，第一处分歧即卡点。
+
+### 已攻克的层（各一个 commit）
+| 层 | 根因 | 修复 |
+|----|------|------|
+| 脚本解析 | — | 本来就能跑（语法探针仅 top-level-await 不支持） |
+| WASM 门禁 | cap.js feature-gate | 形状桩触发其设计内 JS 降级路径 |
+| crypto.subtle/blob Worker/Blob/TextEncoder | spec 缺失 | M93.7 全部实现（本地三链路铁证） |
+| **入口时序** | **readyState 硬编码 'complete'**（spec 违反）→ VM 在 Pass 1（经典脚本前）直跑 main，依赖缺失静默死锁 | **M93.8 真语义 loading→interactive→complete**；钩子实锤 VM 转为 `MAIN-EV type=DOMContentLoaded`（与 Chrome 完全一致） |
+
+### 八假设排除矩阵（全部铁证）
+| 假设 | 排除证据 |
+|------|---------|
+| Promise 永不 settle | then 追踪 main@DCL 后 **n=0 pending** |
+| 缺 API（20+ 形状桩扫射） | 无效果（且旧扫射在 readyState 修复前无效条件） |
+| canvas 指纹 | VM **零 canvas 调用**（方法级日志） |
+| DOM 保真度 | 双引擎 id 集合完全一致 |
+| 事件循环早退 | BROWSER_EL_MAX_MS=12s 无变化 |
+| TLS/传输 | 入口正常（Rust 侧 fetch trace） |
+| cap 库半执行 | Cap.prototype 双引擎一致 |
+| 环境对象注入 | envCalls=0（VM 走浏览器路径） |
+
+### 剩余墙的定性（终局）
+main 在 DCL 以 Chrome 完全相同的方式运行、返回、**零可观测副作用**（无 DOM 查询
+差异、无 canvas、无 Promise、无 fetch），挑战永不发起。结合无头 Chrome（拥有全部
+真实 API）在同一站得到显式 "Automated verification failed"：剩余层是 VM 的
+**环境判定（anti-automation verdict）**——silent early-return 型。通过它需要：
+(a) 全量 VM 反混淆定位具体检查（多层字符串表 + VM 字节码，天级 RE 投入），且
+(b) 通过后让引擎呈现"真交互浏览器"的完整可观测身份 = 指纹伪造区（宪法原则 4 禁区）。
+**结论：xcancel 判定墙属反爬对抗核心，依法不攻。**
+
+### 本轮沉淀（与判定墙无关，永久有效）
+M93.8 readyState 真语义（全 Web 受益的 spec 正确性修复）、M93.9 BROWSER_TRACE_FETCH、
+工厂钩子/双引擎差分诊断法（本文件 + /tmp/xc_srv/ 基建）。
