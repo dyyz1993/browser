@@ -2395,7 +2395,36 @@ window.caches = {
     delete: function() { return Promise.resolve(false); }
 };
 
-window.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', platform: 'MacIntel', language: 'en-US', languages: ['en-US','en'], cookieEnabled: true, hardwareConcurrency: __hwConcurrency(), deviceMemory: 8, maxTouchPoints: 0 };
+// M93.17: Navigator WebIDL 形状——属性挂在 Navigator.prototype 的 getter
+// 访问器上（真 Chrome 的 Object.getOwnPropertyDescriptor 形状；纯数据对象
+// 是自研引擎特征，fp 的 navigatorPropertyDescriptors 全 0）。
+window.Navigator = function Navigator() {};
+window.Navigator.prototype = Object.create(Object.prototype);
+window.Navigator.prototype.constructor = window.Navigator;
+try { Object.defineProperty(window.Navigator.prototype, Symbol.toStringTag, { value: 'Navigator', configurable: true }); } catch (eNav1) {}
+(function() {
+    var STATE = {
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        platform: 'MacIntel', language: 'en-US', languages: ['en-US', 'en'],
+        cookieEnabled: true, hardwareConcurrency: __hwConcurrency(),
+        deviceMemory: 8, maxTouchPoints: 0, pdfViewerEnabled: true,
+        vendor: 'Google Inc.', vendorSub: '', productSub: '20030107',
+        product: 'Gecko', appName: 'Netscape', appVersion: '5.0 (Macintosh)',
+        appCodeName: 'Mozilla', onLine: true, webdriver: false,
+        doNotTrack: null, globalPrivacyControl: false
+    };
+    Object.keys(STATE).forEach(function(k) {
+        try {
+            Object.defineProperty(window.Navigator.prototype, k, {
+                get: function() { return STATE[k]; },
+                set: function(v) { try { STATE[k] = v; } catch (eS) {} },
+                enumerable: true, configurable: true
+            });
+        } catch (eNav2) {}
+    });
+    window.__navState = STATE;
+})();
+window.navigator = new window.Navigator();
 // M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
 // 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
 // 空 PluginArray 语义（无插件环境，真实浏览器无插件时也是空数组）。
@@ -3892,7 +3921,9 @@ if (typeof window.Notification === 'undefined') {
         this.body = (opts && opts.body) || '';
         this.close = function() {};
     };
-    window.Notification.permission = 'denied';
+    // M93.17: 'default' 是真 Chrome 的默认值（denied 是 headless 特征——
+    // xcancel fp 采集 Notification.permission 判自动化）。
+    window.Notification.permission = 'default';
     window.Notification.requestPermission = function(cb) {
         if (cb) setTimeout(function() { cb('denied'); }, 0);
         return Promise.resolve('denied');
