@@ -570,6 +570,8 @@ dependencies = [
  "browser-net",
  "browser-storage",
  "browser-ws",
+ "fontdue",
+ "png 0.17.16",
  "rquickjs",
  "rquickjs-core",
  "tempfile",

@@ -1,3 +1,15 @@
+## M94 阶段 1：canvas 2D 真像素渲染落地（fontdue+超采样 AA+PNG）
+- canvas2d.rs：RGBA framebuffer/路径填充(4x4 超采样 evenodd+nonzero)/
+  fontdue 文本/multiply 合成/png+base64 toDataURL/getImageData b64 往返
+- Chrome 实测语义对齐：arc(0,TAU,ccw) 画满圆（CDP 铁证，spec 直觉相反）
+- CanvasRenderingContext2D 接真实现（__cv* 桥 state-first）；canvas 方法族
+  toString 形状对齐（native code）
+- 验收：VM 序列真实执行（toDataURL 118B 常量→13KB 真 PNG，跨运行字节
+  稳定）；getImageData 精确读回 #f60；evenodd donut 洞空环实
+- fpo/实弹 canvasFingerprint 变真实稳定值（-609a216c）；hasModifiedCanvas
+  仍 ERROR（VM 深层检测未破，阶段 1 未竟项）；实弹 verify 仍 403
+- 门禁 1024/0（+4 单测 +1 集成 canvas_e2e）
+
 ## M94 可行性评估：canvas 真像素渲染（路线 B 超集）
 - 五层差距全实测量化：字体回退(-apple-system=SF Pro)/AA 算法族差(布局对齐后
   exact 仅 3.8%、mean|diff| 93/255、AA 分布定性相反)/sbix emoji(零支持)/

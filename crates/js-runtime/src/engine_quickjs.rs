@@ -792,6 +792,20 @@ impl QuickJsEngine {
                     }
                 }).unwrap());
 
+                // === M94: canvas 2D 真像素（canvas2d.rs，thread_local 槽位） ===
+                let _ = g.set("__cvNew", Function::new(ctx.clone(), |w: f64, h: f64| crate::canvas2d::cv_new(w, h)).unwrap());
+                let _ = g.set("__cvResize", Function::new(ctx.clone(), |id: f64, w: f64, h: f64| crate::canvas2d::cv_resize(id, w, h)).unwrap());
+                let _ = g.set("__cvBeginPath", Function::new(ctx.clone(), |id: f64| crate::canvas2d::cv_begin_path(id)).unwrap());
+                let _ = g.set("__cvRect", Function::new(ctx.clone(), |id: f64, x: f64, y: f64, w: f64, h: f64| crate::canvas2d::cv_rect(id, x, y, w, h)).unwrap());
+                let _ = g.set("__cvArc", Function::new(ctx.clone(), |id: f64, x: f64, y: f64, r: f64, a0: f64, a1: f64, ccw: bool| crate::canvas2d::cv_arc(id, x, y, r, a0, a1, ccw)).unwrap());
+                let _ = g.set("__cvSetStyle", Function::new(ctx.clone(), |style: String, alpha: f64, multiply: bool| crate::canvas2d::cv_set_style(&style, alpha, multiply)).unwrap());
+                let _ = g.set("__cvFill", Function::new(ctx.clone(), |id: f64, rule: String| crate::canvas2d::cv_fill(id, &rule)).unwrap());
+                let _ = g.set("__cvFillRect", Function::new(ctx.clone(), |id: f64, x: f64, y: f64, w: f64, h: f64| crate::canvas2d::cv_fill_rect(id, x, y, w, h)).unwrap());
+                let _ = g.set("__cvFillText", Function::new(ctx.clone(), |id: f64, text: String, x: f64, y: f64, px: f64, family: String| crate::canvas2d::cv_fill_text(id, &text, x, y, px, &family)).unwrap());
+                let _ = g.set("__cvToDataURL", Function::new(ctx.clone(), |id: f64| -> String { crate::canvas2d::cv_to_data_url(id) }).unwrap());
+                let _ = g.set("__cvGetImageData", Function::new(ctx.clone(), |id: f64, x: f64, y: f64, w: f64, h: f64| -> String { crate::canvas2d::cv_get_image_data(id, x, y, w, h) }).unwrap());
+                let _ = g.set("__cvPutImageData", Function::new(ctx.clone(), |id: f64, b64: String, dx: f64, dy: f64, w: f64| crate::canvas2d::cv_put_image_data(id, &b64, dx, dy, w)).unwrap());
+
                 // === WebSocket（复用 boa 的后台线程 WsManager）===
                 let _ = g.set("__wsCreate", Function::new(ctx.clone(), |url: String| bridge::ws_create(url) as f64).unwrap());
                 let _ = g.set("__wsSend", Function::new(ctx.clone(), |id: f64, data: String| bridge::ws_send(id as u32, data)).unwrap());

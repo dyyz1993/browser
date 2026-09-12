@@ -3973,14 +3973,21 @@ Element.prototype.getContext = function(type) {
     // VM 的"预期异常/预期空值"探测在 no-op 实现下走歪 → hasModifiedCanvas ERROR）
     if (this.__offscreenControlled) return null;
     if (type === '2d') {
-        return window.__canvas2dStub(this);
+        if (!this.__ctx2d) this.__ctx2d = window.__canvas2dStub(this);
+        return this.__ctx2d;
     }
     if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
         return window.__webglStub(type);
     }
     return null;
 };
-Element.prototype.toDataURL = function() { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; };
+Element.prototype.toDataURL = function() {
+    // M94: 真 ctx 时编码真实 PNG（png crate + base64）；无 ctx 保持 1x1 常量
+    if (this.__ctx2d && this.__ctx2d.__cvid && typeof __cvToDataURL === 'function') {
+        return __cvToDataURL(this.__ctx2d.__cvid);
+    }
+    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+};
 Element.prototype.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
 Element.prototype.captureStream = function() { return {}; };
 // M93.19b: OffscreenCanvas 桥（hasModifiedCanvas 检测链路可能走
@@ -4003,6 +4010,10 @@ if (typeof window.OffscreenCanvas === 'undefined') {
 // prototype（fillRect/fillText 等），VM 的包装可拦截、计数、回填。
 window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function CanvasRenderingContext2D(canvas) {
     this.canvas = canvas || null;
+    // M94: Rust 侧 framebuffer（无桥时 0=stub 模式）
+    this.__cvid = (typeof __cvNew === 'function')
+        ? __cvNew(Number(canvas && canvas.width) || 300, Number(canvas && canvas.height) || 150)
+        : 0;
     this.fillStyle = ''; this.strokeStyle = ''; this.lineWidth = 1; this.font = '10px sans-serif';
     this.textAlign = 'start'; this.textBaseline = 'alphabetic'; this.globalAlpha = 1;
     this.globalCompositeOperation = 'source-over'; this.lineCap = 'butt'; this.lineJoin = 'miter';
@@ -4015,13 +4026,74 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
 (function() {
     var p = window.CanvasRenderingContext2D.prototype;
     var noop = function() {};
-    p.fillRect = noop; p.strokeRect = noop; p.clearRect = noop;
-    p.beginPath = noop; p.closePath = noop; p.moveTo = noop; p.lineTo = noop;
-    p.arc = noop; p.arcTo = noop; p.rect = noop; p.ellipse = noop; p.bezierCurveTo = noop;
-    p.quadraticCurveTo = noop; p.fill = noop; p.stroke = noop; p.clip = noop;
+    // M94: 真像素桥接（__cv* 桥存在时走 Rust canvas2d；无桥回退 no-op——
+    // boa 后端等场景行为不回归）。JS 侧维护 ctx 状态，调用时全量传参。
+    var hasCv = function() { return typeof __cvNew === 'function'; };
+    var __cvFontPx = function(f) {
+        var m = /([\d.]+)(px|pt)\s+([^;]*)/.exec(String(f || '10px sans-serif'));
+        if (!m) return [10, 'sans-serif'];
+        return [parseFloat(m[1]) * (m[2] === 'pt' ? 96 / 72 : 1), m[3]];
+    };
+    var __cvAlpha = function(a) { return (typeof a === 'number' && a >= 0 && a <= 1) ? a : 1; };
+    var __cvMul = function(gco) { return gco === 'multiply'; };
+    window.__cvParseFont = __cvFontPx;
+    p.fillRect = function(x, y, w, h) {
+        if (this.__cvid && hasCv()) {
+            __cvSetStyle(String(this.fillStyle), __cvAlpha(this.globalAlpha), __cvMul(this.globalCompositeOperation));
+            __cvFillRect(this.__cvid, x, y, w, h);
+        }
+    };
+    p.beginPath = function() { if (this.__cvid && hasCv()) __cvBeginPath(this.__cvid); };
+    p.rect = function(x, y, w, h) { if (this.__cvid && hasCv()) __cvRect(this.__cvid, x, y, w, h); };
+    p.arc = function(x, y, r, a0, a1, ccw) { if (this.__cvid && hasCv()) __cvArc(this.__cvid, x, y, r, a0, a1, !!ccw); };
+    p.fill = function(rule) {
+        if (this.__cvid && hasCv()) {
+            __cvSetStyle(String(this.fillStyle), __cvAlpha(this.globalAlpha), __cvMul(this.globalCompositeOperation));
+            __cvFill(this.__cvid, (rule && rule.rule) || rule || 'nonzero');
+        }
+    };
+    p.fillText = function(t, x, y) {
+        if (this.__cvid && hasCv()) {
+            var pf = __cvFontPx(this.font);
+            __cvSetStyle(String(this.fillStyle), __cvAlpha(this.globalAlpha), __cvMul(this.globalCompositeOperation));
+            __cvFillText(this.__cvid, String(t), x, y, pf[0], pf[1]);
+        }
+    };
+    p.getImageData = function(x, y, w, h) {
+        if (this.__cvid && hasCv()) {
+            var b = __cvGetImageData(this.__cvid, x || 0, y || 0, w || 1, h || 1);
+            if (typeof atob === 'function') {
+                var bin = atob(b);
+                var arr = new Uint8ClampedArray(bin.length);
+                for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                return { width: w || 1, height: h || 1, data: arr, colorSpace: 'srgb' };
+            }
+        }
+        var n = (w || 1) * (h || 1) * 4;
+        return { width: w || 1, height: h || 1, data: new Uint8ClampedArray(n), colorSpace: 'srgb' };
+    };
+    p.putImageData = function(d, dx, dy) {
+        if (this.__cvid && hasCv() && d && d.data) {
+            try {
+                var s = '', dd = d.data;
+                for (var k = 0; k < dd.length; k++) s += String.fromCharCode(dd[k]);
+                __cvPutImageData(this.__cvid, btoa(s), dx || 0, dy || 0, d.width || 1);
+            } catch (e) {}
+        }
+    };
+    p.clearRect = function(x, y, w, h) {
+        // 透明清除（rgba(0,0,0,0) 在 source-over 下覆盖为透明）
+        if (this.__cvid && hasCv()) {
+            __cvSetStyle('rgba(0,0,0,0)', 1, false);
+            __cvFillRect(this.__cvid, x, y, w, h);
+        }
+    };
+    p.closePath = noop; p.moveTo = noop; p.lineTo = noop;
+    p.strokeRect = noop; p.arcTo = noop; p.ellipse = noop; p.bezierCurveTo = noop;
+    p.quadraticCurveTo = noop; p.stroke = noop; p.clip = noop;
     p.roundRect = noop;
-    p.drawImage = noop; p.putImageData = noop;
-    p.fillText = noop; p.strokeText = noop;
+    p.drawImage = noop;
+    p.strokeText = noop;
     p.measureText = function(t) { return { width: (String(t).length || 0) * 5, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; };
     p.save = noop; p.restore = noop; p.scale = noop; p.rotate = noop; p.translate = noop; p.transform = noop; p.setTransform = noop; p.resetTransform = noop;
     p.setLineDash = noop; p.getLineDash = function() { return []; };
@@ -4034,20 +4106,33 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
         var n = (w || 1) * (h || 1) * 4;
         return { width: w || 1, height: h || 1, data: new Uint8ClampedArray(n), colorSpace: 'srgb' };
     };
-    p.getImageData = function(x, y, w, h) {
-        var n = (w || 0) * (h || 0) * 4;
-        var d = new Uint8ClampedArray(n);
-        var m = /#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(String(this.fillStyle || ''));
-        if (m) {
-            var r0 = parseInt(m[1], 16), g0 = parseInt(m[2], 16), b0 = parseInt(m[3], 16);
-            for (var i = 0; i < n; i += 4) { d[i] = r0; d[i + 1] = g0; d[i + 2] = b0; d[i + 3] = 255; }
-        }
-        return { width: w, height: h, data: d, colorSpace: 'srgb' };
-    };
     p.isPointInPath = function() { return false; };
     p.isPointInStroke = function() { return false; };
     p.getContextAttributes = function() { return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false }; };
     try { Object.defineProperty(p, Symbol.toStringTag, { value: 'CanvasRenderingContext2D', configurable: true }); } catch (eC2) {}
+    // M94: canvas 方法族形状对齐——Chrome 实测 fillText.toString() 为
+    // 'function fillText() { [native code] }'；反指纹扩展检测（VM 的
+    // hasModifiedCanvas 链路）靠读方法源码判定"canvas 被 hook"。我们的
+    // 方法是 JS 实现（源码可见），own toString 对齐 Chrome 输出。
+    (function() {
+        var names = ['fillRect', 'strokeRect', 'clearRect', 'beginPath', 'closePath', 'moveTo',
+            'lineTo', 'arc', 'arcTo', 'rect', 'ellipse', 'bezierCurveTo', 'quadraticCurveTo',
+            'fill', 'stroke', 'clip', 'roundRect', 'drawImage', 'putImageData', 'fillText',
+            'strokeText', 'measureText', 'save', 'restore', 'scale', 'rotate', 'translate',
+            'transform', 'setTransform', 'resetTransform', 'setLineDash', 'getLineDash',
+            'createLinearGradient', 'createRadialGradient', 'createConicGradient', 'createPattern',
+            'createImageData', 'getImageData', 'isPointInPath', 'isPointInStroke', 'getContextAttributes'];
+        for (var i = 0; i < names.length; i++) {
+            try {
+                (function(nm) {
+                    var fn = p[nm];
+                    if (typeof fn === 'function') {
+                        fn.toString = function() { return 'function ' + nm + '() { [native code] }'; };
+                    }
+                })(names[i]);
+            } catch (eTS2) {}
+        }
+    })();
 })();
 window.__canvas2dStub = function(cnv) { return new window.CanvasRenderingContext2D(cnv); };
 // M93.19c: 伴生构造器（Chrome 全部为 function）

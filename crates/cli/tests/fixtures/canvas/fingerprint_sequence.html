@@ -1,0 +1,84 @@
+<!DOCTYPE html><html><body><div id="out"></div><script>
+(function() {
+  function runSequence() {
+    var c = document.createElement('canvas');
+    c.width = 400; c.height = 200;
+    var ctx = c.getContext('2d');
+    ctx.textBaseline = 'alphabetic';
+    var txt = 'Cwm fjordbank glyphs vext quiz';
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(125, 1, 62, 20);
+    ctx.fillText(txt, 2, 15);
+    ctx.fillStyle = '#069';
+    ctx.fillText(txt, 4, 45);
+    ctx.fillStyle = 'rgba(102, 204, 0, 0.2)';
+    ctx.font = '18pt Arial';
+    ctx.beginPath(); ctx.arc(50, 50, 50, 0, 6.283185307179586, true); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(100, 50, 50, 0, 6.283185307179586, true); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(75, 100, 50, 0, 6.283185307179586, true); ctx.closePath(); ctx.fill();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = 'rgb(255,0,255)';
+    ctx.rect(0, 0, 10, 10); ctx.rect(2, 2, 6, 6);
+    ctx.arc(75, 75, 75, 0, 6.283185307179586, true);
+    ctx.fillStyle = 'rgb(0,255,255)';
+    ctx.arc(75, 75, 25, 0, 6.283185307179586, true);
+    ctx.fillStyle = 'rgb(255,255,0)';
+    ctx.fill('evenodd');
+    return c.toDataURL();
+  }
+  var u1 = runSequence();
+  var u2 = runSequence();
+  var d = document.createElement('canvas'); d.width = 8; d.height = 8;
+  var dc = d.getContext('2d');
+  dc.fillStyle = '#f60';
+  dc.fillRect(2, 2, 4, 4);
+  var px = dc.getImageData(2, 2, 1, 1).data;
+  // donut evenodd：外环有墨、圆心空
+  var e = document.createElement('canvas'); e.width = 200; e.height = 200;
+  var ec = e.getContext('2d');
+  ec.fillStyle = '#ff0';
+  ec.beginPath();
+  ec.arc(75, 75, 75, 0, 6.283185307179586, true);
+  ec.arc(75, 75, 25, 0, 6.283185307179586, true);
+  ec.fill('evenodd');
+  var hole = ec.getImageData(75, 75, 1, 1).data[3];
+  var ring = ec.getImageData(75, 5, 1, 1).data[3];
+  document.getElementById('out').textContent = 'E2E[' +
+    'png=' + (u1.indexOf('iVBOR') >= 0) +
+    ',big=' + (u1.length > 5000) +
+    ',stable=' + (u1 === u2) +
+    ',px=' + px[0] + ',' + px[1] + ',' + px[2] + ',' + px[3] +
+    ',hole=' + hole + ',ring=' + ring +
+  ']E2EEND';
+})();
+</script></body></html>"#
+        .to_string()
+}
+
+#[test]
+fn canvas2d_real_pixels_end_to_end() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let page = dir.path().join("canvas_e2e.html");
+    std::fs::write(&page, canvas_e2e_page()).expect("write fixture");
+
+    let out = Command::cargo_bin("browser")
+        .expect("browser binary")
+        .args(["render-file"])
+        .arg(&page)
+        .args(["--width", "500"])
+        .output()
+        .expect("run render-file");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let start = text.find("E2E[").expect("marker start") + 4;
+    let end = text[start..].find("]E2EEND").expect("marker end") + start;
+    let marks = &text[start..end];
+
+    assert!(marks.contains("png=true"), "toDataURL must be real PNG: {marks}");
+    assert!(marks.contains("big=true"), "PNG must be substantial: {marks}");
+    assert!(marks.contains("stable=true"), "two runs must be byte-identical: {marks}");
+    // fillRect #f60 精确读回（getImageData 真像素）
+    assert!(marks.contains("px=255,102,0,255"), "pixel readback: {marks}");
+    // evenodd donut：圆心空、外环实
+    assert!(marks.contains("hole=0"), "evenodd hole must be empty: {marks}");
+    assert!(marks.contains("ring=255"), "outer ring must be opaque: {marks}");
+}

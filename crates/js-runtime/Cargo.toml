@@ -24,6 +24,10 @@ rquickjs = { version = "0.12", features = ["bindgen", "loader"], optional = true
 rquickjs-core = { version = "0.12", features = ["loader"], optional = true }
 tokio = { workspace = true, features = ["rt", "net"] }
 url = "2"
+# M94: canvas 2D 真像素实现（fontdue 光栅化 + PNG 编码）——白名单依赖
+# 复用（render/screenshot 已用同库），非新增依赖项。
+fontdue = "0.9"
+png = "0.17"
 # M62: innerHTML setter 解析 HTML 为真实 DOM 节点（docsify 渲染管线必需）。
 browser-html-parser = { path = "../html-parser" }
 
