@@ -25,7 +25,7 @@ use crate::interceptor::{Interceptor, NoopInterceptor};
 use crate::interceptor::{RequestContext, ResponseContext};
 
 /// 真实 Chrome UA（解决反爬 + 模拟浏览器行为）。
-const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
 /// M93.2: 浏览器级默认请求头——与 UA（Chrome/126, macOS）**身份一致**的
 /// 恒定头组。真实浏览器每个请求（导航/script/XHR）都带这四个头；我们此前

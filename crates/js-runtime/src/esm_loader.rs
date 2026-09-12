@@ -184,6 +184,7 @@ impl HttpModuleLoader {
 
     /// 加载单个模块：fetch → 写临时文件 → parse → 缓存。返回 Module。
     /// M65: 如果 prefetch_dependencies 已预写临时文件，直接读文件（跳过 fetch）。
+
     fn load_module(&self, url: &str, context: &mut Context) -> JsResult<Module> {
         // 缓存命中
         if let Some(m) = self.modules.borrow().get(url).cloned() {
@@ -278,6 +279,13 @@ impl ModuleLoader for HttpModuleLoader {
     ) -> impl std::future::Future<Output = JsResult<Module>> {
         let result = (|| {
             let specifier = request.specifier().to_std_string_escaped();
+            eprintln!(
+                "[esm-trace] import spec={specifier} referrer={}",
+                referrer
+                    .path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "?".into())
+            );
             // referrer 的临时文件 path → 绝对 URL
             let referrer_url = referrer.path().and_then(|p| self.temp_path_to_url(p));
             let resolved_url = self.resolve_url(&specifier, referrer_url.as_deref());
@@ -367,3 +375,52 @@ fn extract_import_specifiers(source: &str) -> Vec<String> {
 // 避免未使用警告
 #[allow(dead_code)]
 fn _unused(_v: JsValue, _c: Component) {}
+
+/// M93.18: 手写 base64 解码（G4 自研——不引 crate）。标准字母表 + padding。
+fn b64_decode(input: &str) -> Option<Vec<u8>> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let input: Vec<u8> = input
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits = 0u32;
+    for &b in &input {
+        let v = TABLE.iter().position(|&t| t == b)? as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// M93.18: percent-decoding（%XX → 字节；+ → 空格 不做——data URL 用 %20）。
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = |b: u8| -> Option<u8> {
+                match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                }
+            };
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}

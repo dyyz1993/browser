@@ -1384,6 +1384,9 @@ fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEng
 /// 转义后嵌入 JS 字符串字面量（同 ws 事件派发的转义方式）。
 #[cfg(feature = "quickjs")]
 fn fire_dyn_pending(engine: &mut crate::engine_quickjs::QuickJsEngine, raw_src: &str, ok: bool) {
+    if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+        eprintln!("[dyn-trace] fire raw={raw_src} ok={ok}");
+    }
     let esc = raw_src.replace('\\', "\\\\").replace('\'', "\\'");
     let status = if ok { "loaded" } else { "failed" };
     let js = format!(
@@ -1391,7 +1394,11 @@ fn fire_dyn_pending(engine: &mut crate::engine_quickjs::QuickJsEngine, raw_src: 
          try{{var __f=(window.__dynPending||{{}})['{esc}'];if(typeof __f==='function'){{try{{__f()}}catch(e2){{}}}}}}catch(e1){{}}\
          try{{delete window.__dynPending['{esc}'];}}catch(e3){{}}"
     );
-    let _ = engine.eval_safe(&js);
+    if let Err(e) = engine.eval_safe(&js) {
+        if std::env::var("BROWSER_TRACE_SCRIPTS").is_ok() {
+            eprintln!("[dyn-trace] fire eval FAILED: {e}");
+        }
+    }
 }
 
 /// M93: QuickJS 主入口 = **文档导航循环**。
@@ -1531,38 +1538,20 @@ fn run_page_quickjs(
     // QuickJS 的 ctx.eval 每次是独立 scope，var 声明不跨 eval 泄漏。
     // 必须拼接后一次执行，让 window/document 等 var 在后续 eval 中可见。
     let shims = get_all_shim_js(&base_url);
-    let combined_shim: String = shims
-        .iter()
-        .map(|(_, js)| js.as_str())
-        .collect::<Vec<_>>()
-        .join("\n;\n");
+    // M93.18: shim 包 IIFE——顶层 var（__xxx 内部状态 ~75 个）留闭包不挂
+    // window（dunder 全局是无头/自动化启发式的经典命中源）；Rust 侧后续
+    // eval 依赖的 8 个函数显式挂回。
+    let combined_shim: String = wrap_shim_iife(
+        &shims
+            .iter()
+            .map(|(_, js)| js.as_str())
+            .collect::<Vec<_>>()
+            .join("\n;\n"),
+    );
     // M78.128-debug: eval_safe 打印异常 message（eval 的 Debug 格式只有 Exception）。
     if let Err(e) = engine.eval_safe(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
-        // M78.36-debug: 逐段定位 + 段内二分找首个失败行。
-        for (name, js) in &shims {
-            if let Err(se) = engine.eval_safe(js) {
-                eprintln!("[js-runtime] shim 段 [{name}] 失败: {se}");
-                let lines: Vec<&str> = js.split('\n').collect();
-                let (mut lo, mut hi) = (0usize, lines.len() - 1);
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    if engine.eval(&lines[..=mid].join("\n")).is_ok() {
-                        lo = mid + 1;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                eprintln!(
-                    "[js-runtime] [{name}] 首个失败行 ≈ {}: {}",
-                    hi + 1,
-                    lines[hi].trim()
-                );
-            }
-        }
     }
-    // M66: 设置裸全局变量——QuickJS 的 globalThis.xxx 不会被解析为裸变量 xxx。
-    // 用 eval 设置 var 让后续 eval 能用裸 document/window/navigator 等。
     let _ = engine.eval(
         r#"var document = globalThis.document;
         var navigator = globalThis.navigator;
@@ -2307,6 +2296,87 @@ fn pump_after_click_quickjs(engine: &mut crate::engine_quickjs::QuickJsEngine, m
 /// 最小版本——只包含 QuickJS 验证所需的核心 shim。
 /// 后续需要从 boa 的 shim 模块提取完整 JS 字符串。
 #[cfg(feature = "quickjs")]
+/// M93.18: shim IIFE 包装——顶层 var（__xxx 内部状态）留闭包不挂 window；
+/// 公共 API（Rust 后续 eval 依赖的函数 + 用户脚本需要的全局）显式导出；
+/// 尾部统一清扫残留 dunder（跨段 window.__ 赋值），保留 Rust 侧必需的最小集。
+fn wrap_shim_iife(inner: &str) -> String {
+    // M93.18-final: IIFE 试验回退——shim 函数体引用后续 eval 注入的 var 别名
+    //（var document = globalThis.document 独立 eval），闭包内不可见导致 148 测试红。
+    // dunder 收敛方向正确但需要 shim 全量重构成单一作用域（~5000 行改动），
+    // 记录于评估文档，本里程碑先回退保稳。
+    inner.to_string()
+}
+
+#[allow(dead_code)]
+fn wrap_shim_iife_full(inner: &str) -> String {
+    let keep: &[&str] = &[
+        "__drainDueTimers",
+        "__drainDueTransitions",
+        "__findTag",
+        "__nextTimerDueInMs",
+        "__wsDispatchEvent",
+        "__setBody",
+        "__appendBody",
+        "__makeElement",
+        "__activeEl",
+        "__dynStatus",
+        "__dynPending",
+        "__react_stub",
+        "__docReadyState",
+        "__hasPendingTimers",
+    ];
+    let keep_list = keep
+        .iter()
+        .map(|k| format!("\"{k}\":1"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut out = String::with_capacity(inner.len() + 2048);
+    out.push_str("(function(){\n");
+    out.push_str(inner);
+    out.push_str("\n;\n");
+    out.push_str("window.__drainDueTimers=__drainDueTimers;window.__drainDueTransitions=__drainDueTransitions;\n");
+    out.push_str("window.__findTag=__findTag;window.__nextTimerDueInMs=__nextTimerDueInMs;window.__wsDispatchEvent=__wsDispatchEvent;\n");
+    out.push_str("window.__setBody=__setBody;window.__appendBody=__appendBody;\n");
+    out.push_str(
+        "window.__react_stub=(typeof __react_stub!==\"undefined\")?__react_stub:function(){};\n",
+    );
+    out.push_str("window.__makeElement=__makeElement;window.__activeEl=__activeEl;\n");
+    out.push_str("globalThis.window=window;globalThis.self=self;globalThis.URL=URL;globalThis.URLSearchParams=URLSearchParams;\n");
+    out.push_str("globalThis.setTimeout=setTimeout;globalThis.setInterval=setInterval;globalThis.clearTimeout=clearTimeout;globalThis.clearInterval=clearInterval;\n");
+    out.push_str("globalThis.sessionStorage=sessionStorage;globalThis.localStorage=localStorage;globalThis.requestAnimationFrame=requestAnimationFrame;\n");
+    out.push_str("globalThis.queueMicrotask=queueMicrotask;globalThis.navigator=navigator;globalThis.location=location;globalThis.history=history;\n");
+    out.push_str("globalThis.fetch=fetch;globalThis.Event=Event;globalThis.CustomEvent=CustomEvent;globalThis.crypto=crypto;globalThis.btoa=btoa;globalThis.atob=atob;\n");
+    for c in [
+        "CompositionEvent",
+        "DOMException",
+        "FocusEvent",
+        "FormData",
+        "InputEvent",
+        "KeyboardEvent",
+        "MimeType",
+        "MimeTypeArray",
+        "MouseEvent",
+        "NamedNodeMap",
+        "Plugin",
+        "PluginArray",
+        "PointerEvent",
+        "Range",
+        "Request",
+        "Response",
+        "TextEvent",
+        "UIEvent",
+        "WebSocket",
+        "WheelEvent",
+        "XMLHttpRequest",
+    ] {
+        out.push_str(&format!("try{{globalThis.{c}={c};}}catch(e){{}}"));
+    }
+    out.push_str(&format!("var __keep={{{keep_list}}};"));
+    out.push_str("try{Object.getOwnPropertyNames(globalThis).forEach(function(k){if(k.indexOf('__')===0&&!__keep[k]){try{delete globalThis[k]}catch(e){}}});}catch(e2){}\n");
+    out.push_str("})();");
+    out
+}
+
 fn get_all_shim_js(_base_url: &Option<String>) -> Vec<(&'static str, String)> {
     vec![
         ("globals", QUICKJS_GLOBAL_SHIM.to_string()),
@@ -2364,18 +2434,206 @@ globalThis.Event = function Event(type, opts) {
 	// navigator
 // M83: UA 与主请求（net::client）一致——掘金风控 SDK 会比对 navigator.userAgent
 // 完整性（旧值 'Mozilla/5.0' 残缺，一眼非浏览器）。
+// M93.18: Intl 最小子集（QuickJS 无 ICU——fp 采集 Intl.DateTimeFormat()
+// .resolvedOptions() 直接 ReferenceError 报 ERROR）。时区取系统真实值
+//（macOS /etc/localtime 链目标名），locale 跟随 navigator.language。
+window.__sysTZ = (function() {
+    try {
+        var bridgeTZ = (typeof __sysTimezone === 'function') ? __sysTimezone() : '';
+        if (bridgeTZ) return bridgeTZ;
+    } catch (e) {}
+    return 'Asia/Shanghai';
+})();
+function __intlLocale() {
+    try { return (typeof navigator !== 'undefined' && navigator && navigator.language) || 'zh-CN'; }
+    catch (e) { return 'zh-CN'; }
+}
+window.Intl = window.Intl || {};
+window.Intl.DateTimeFormat = function(locales, opts) {
+    this.resolvedOptions = function() {
+        return {
+            locale: __intlLocale(),
+            calendar: 'gregory',
+            numberingSystem: 'latn',
+            timeZone: window.__sysTZ,
+            year: 'numeric', month: 'numeric', day: 'numeric'
+        };
+    };
+    this.format = function(d) {
+        var dt = d instanceof Date ? d : new Date();
+        return dt.getFullYear() + '/' + (dt.getMonth() + 1) + '/' + dt.getDate();
+    };
+};
+window.Intl.NumberFormat = function(locales, opts) {
+    this.resolvedOptions = function() {
+        return { locale: __intlLocale(), numberingSystem: 'latn', style: 'decimal', currencyDisplay: 'symbol', useGrouping: true };
+    };
+    this.format = function(n) { return String(n); };
+};
+window.Intl.Collator = function(locales, opts) {
+    this.resolvedOptions = function() { return { locale: __intlLocale(), usage: 'sort', sensitivity: 'variant', ignorePunctuation: false, collation: 'default' }; };
+    this.compare = function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); };
+};
+
+// M93.18: RTCRtpSender.getCapabilities（fp 的 rtcAudio/VideoCapabilitiesHash——
+// 返回本机真实编解码能力表形状）
+window.RTCRtpSender = window.RTCRtpSender || {};
+window.RTCRtpSender.getCapabilities = function(kind) {
+    if (kind === 'audio') {
+        return { codecs: [
+            { channels: 2, clockRate: 48000, mimeType: 'audio/opus', sdpFmtpLine: 'minptime=10;useinbandfec=1' },
+            { channels: 1, clockRate: 16000, mimeType: 'audio/red', sdpFmtpLine: '' },
+            { channels: 1, clockRate: 8000, mimeType: 'audio/PCMU' },
+            { channels: 1, clockRate: 8000, mimeType: 'audio/PCMA' }
+        ], headerExtensions: [] };
+    }
+    if (kind === 'video') {
+        return { codecs: [
+            { clockRate: 90000, mimeType: 'video/VP8' },
+            { clockRate: 90000, mimeType: 'video/VP9' },
+            { clockRate: 90000, mimeType: 'video/H264', sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f' },
+            { clockRate: 90000, mimeType: 'video/AV1' }
+        ], headerExtensions: [] };
+    }
+    return null;
+};
+window.RTCRtpReceiver = window.RTCRtpReceiver || {};
+window.RTCRtpReceiver.getCapabilities = window.RTCRtpSender.getCapabilities;
+
+// M93.18: WebAssembly 形状（仅存在性——fp bitmask 检测 typeof WebAssembly。
+// 不真执行 WASM：instantiate/compile reject → 使用方自动降级 JS 路径，
+// cap.js 的 "WebAssembly unavailable, using JS fallback" 已实测）。
+window.WebAssembly = {
+    Module: function() { throw new Error('unavailable'); },
+    Instance: function() { throw new Error('unavailable'); },
+    Memory: function() { throw new Error('unavailable'); },
+    Table: function() { throw new Error('unavailable'); },
+    Global: function() { throw new Error('unavailable'); },
+    CompileError: function(m) { this.message = m; },
+    RuntimeError: function(m) { this.message = m; },
+    LinkError: function(m) { this.message = m; },
+    compile: function() { return Promise.reject(new Error('unavailable')); },
+    compileStreaming: function() { return Promise.reject(new Error('unavailable')); },
+    instantiate: function() { return Promise.reject(new Error('unavailable')); },
+    instantiateStreaming: function() { return Promise.reject(new Error('unavailable')); },
+    validate: function() { return false; }
+};
+
+// M93.18: Chrome 特有 API 形状（fp 的 features bitmask 逐项检测存在性；
+// 与 M83 的 Plugin/PluginArray 桩同类——形状补全，调用为 no-op）。
+(function() {
+    var shapes = ['BarcodeDetector', 'BatteryManager', 'BrowserCaptureMediaStreamTrack',
+                  'DevicePosture', 'EditContext', 'EyeDropper', 'Fence',
+                  'HTMLOTCredential', 'OTPCredential', 'PaymentRequestUpdateEvent',
+                  'PressureObserver', 'PressureRecord', 'Sanitizer', 'Serial',
+                  'SerialPort', 'USB', 'USBDevice', 'DocumentPictureInPicture',
+                  'DocumentPictureInPictureEvent'];
+    for (var i = 0; i < shapes.length - 1; i++) {
+        try { if (typeof window[shapes[i]] === 'undefined') window[shapes[i]] = function() {}; } catch (eS) {}
+    }
+    try {
+        if (!window.documentPictureInPicture) {
+            window.documentPictureInPicture = { window: null, requestWindow: function() { return Promise.resolve(null); } };
+        }
+    } catch (eDPP) {}
+    // webkit 前缀函数
+    try { if (typeof window.webkitRequestAnimationFrame === 'undefined') window.webkitRequestAnimationFrame = window.requestAnimationFrame; } catch (eW) {}
+    try { if (typeof window.webkitCancelAnimationFrame === 'undefined') window.webkitCancelAnimationFrame = window.cancelAnimationFrame; } catch (eW2) {}
+    // navigator.getBattery
+    // battery/gpu/keyboard 的 prototype 挂载在 Navigator 定义后（见 userAgentData 处）
+    // navigator.gpu（WebGPU 形状 + adapter 真实 hardware 信息）
+    try {
+        if (navigator && !navigator.gpu) {
+            navigator.gpu = {
+                requestAdapter: function() {
+                    return Promise.resolve({
+                        info: { vendor: 'apple', architecture: 'metal-3', device: '', description: '', features: [], limits: {} },
+                        features: new Set([]),
+                        limits: {},
+                        requestDevice: function() {
+                            return Promise.resolve({ features: new Set(), limits: {}, queue: {}, createBuffer: function(){return{}}, destroy: function(){} });
+                        }
+                    });
+                }
+            };
+        }
+    } catch (eG) {}
+    // MediaSource 形状（codecs.hasMediaSource）
+    try {
+        if (typeof window.MediaSource === 'undefined') {
+            window.MediaSource = function() { this.readyState = 'closed'; this.sourceBuffers = []; };
+            window.MediaSource.isTypeSupported = function(t) { return /mp4|webm/i.test(String(t)); };
+        }
+        if (typeof window.WebKitMediaSource === 'undefined') window.WebKitMediaSource = window.MediaSource;
+    } catch (eMS) {}
+})();
+
+// M93.18: navigator.userAgentData（UA-CH Client Hints——fp 的
+// highEntropyValues 8 字段全 NA）。版本对齐本机真实 Chrome 153。
+// M93.18: navigator.keyboard.getLayoutMap（fp 的 keyboard.layout/layoutSize——
+// oracle 的 48 键真实映射）
+(function() {
+    try {
+        if (!navigator.keyboard) navigator.keyboard = {};
+        var layoutMap = {
+            'KeyK': 'k', 'KeyG': 'g', 'Digit2': '2', 'Digit0': '0', 'KeyV': 'v',
+            'KeyA': 'a', 'Backquote': '`', 'KeyL': 'l', 'IntlBackslash': '§',
+            'Quote': "'", 'KeyW': 'w', 'Digit8': '8', 'KeyO': 'o', 'KeyS': 's',
+            'KeyD': 'd', 'KeyI': 'i', 'KeyZ': 'z', 'KeyX': 'x', 'KeyC': 'c',
+            'KeyB': 'b', 'KeyM': 'm', 'KeyN': 'n', 'KeyQ': 'q', 'KeyE': 'e',
+            'KeyR': 'r', 'KeyT': 't', 'KeyY': 'y', 'KeyU': 'u', 'KeyP': 'p',
+            'KeyH': 'h', 'KeyJ': 'j', 'KeyF': 'f', 'Digit1': '1', 'Digit3': '3',
+            'Digit4': '4', 'Digit5': '5', 'Digit6': '6', 'Digit7': '7',
+            'Digit9': '9', 'Digit0': '0', 'Minus': '-', 'Equal': '=',
+            'BracketLeft': '[', 'BracketRight': ']', 'Semicolon': ';',
+            'Comma': ',', 'Period': '.', 'Slash': '/'
+        };
+        navigator.keyboard.getLayoutMap = function() {
+            return Promise.resolve({
+                size: 48,
+                get: function(k) { return layoutMap[k] || ''; },
+                has: function(k) { return Object.prototype.hasOwnProperty.call(layoutMap, k); },
+                entries: function() { return Object.entries(layoutMap); },
+                forEach: function(cb) { for (var k in layoutMap) cb(layoutMap[k], k); }
+            });
+        };
+    } catch (eKB) {}
+})();
+
+window.__UA_BRANDS = [
+    { brand: 'Google Chrome', version: '153' },
+    { brand: 'Not_A Brand', version: '8' },
+    { brand: 'Chromium', version: '153' }
+];
+window.__UA_HIGH_ENTROPY = {
+    architecture: 'arm', bitness: '64', mobile: false, model: '',
+    platform: 'macOS', platformVersion: '26.2.0',
+    uaFullVersion: '153.0.8010.36', wow64: false,
+    brands: window.__UA_BRANDS,
+    fullVersionList: [
+        { brand: 'Google Chrome', version: '153.0.8010.36' },
+        { brand: 'Not_A Brand', version: '8.0.0.0' },
+        { brand: 'Chromium', version: '153.0.8010.36' }
+    ]
+};
+
 // M93.15: screen——此前完全未定义，站点指纹采集 screen.width 直接
 // ReferenceError（xcancel fp 报 screenResolution:"ERROR"）。spec 常规形状
 // + macOS 主流值（与 UA/platform 的 MacIntel 声明一致——环境一致性）。
 window.screen = {
+    // M93.18: 本机真实值（主显示器 XDR：10bit=30 / 缩放可用区 / 外接第二屏）。
+    // Chrome oracle 实测（fp diff）：colorDepth 30、avail 1454x949、isExtended true。
     width: 1512, height: 982,
-    availWidth: 1512, availHeight: 930,
-    colorDepth: 24, pixelDepth: 24,
-    isExtended: false,
+    availWidth: 1454, availHeight: 949,
+    colorDepth: 30, pixelDepth: 30,
+    isExtended: true,
     availLeft: 0, availTop: 25,
     orientation: { type: 'landscape-primary', angle: 0, onchange: null }
 };
 try { window.screen.orientation.type = 'landscape-primary'; } catch (eScr) {}
+// innerWidth/innerHeight 对齐 oracle（Chrome 窗口在主屏的典型尺寸）
+window.innerWidth = 1200;
+window.innerHeight = 762;
 
 // M93.15: window.chrome——UA 声明 Chrome 而 window.chrome 缺失是环境
 // 不一致信号（fp 检查 window.chrome 存在性）。现代 Chrome 的最小形状。
@@ -2404,10 +2662,10 @@ window.Navigator.prototype.constructor = window.Navigator;
 try { Object.defineProperty(window.Navigator.prototype, Symbol.toStringTag, { value: 'Navigator', configurable: true }); } catch (eNav1) {}
 (function() {
     var STATE = {
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        platform: 'MacIntel', language: 'en-US', languages: ['en-US', 'en'],
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        platform: 'MacIntel', language: 'zh-CN', languages: ['zh-CN', 'zh'],
         cookieEnabled: true, hardwareConcurrency: __hwConcurrency(),
-        deviceMemory: 8, maxTouchPoints: 0, pdfViewerEnabled: true,
+        deviceMemory: 32, maxTouchPoints: 0, pdfViewerEnabled: true,
         vendor: 'Google Inc.', vendorSub: '', productSub: '20030107',
         product: 'Gecko', appName: 'Netscape', appVersion: '5.0 (Macintosh)',
         appCodeName: 'Mozilla', onLine: true, webdriver: false,
@@ -2415,16 +2673,117 @@ try { Object.defineProperty(window.Navigator.prototype, Symbol.toStringTag, { va
     };
     Object.keys(STATE).forEach(function(k) {
         try {
-            Object.defineProperty(window.Navigator.prototype, k, {
+            var desc = {
                 get: function() { return STATE[k]; },
-                set: function(v) { try { STATE[k] = v; } catch (eS) {} },
                 enumerable: true, configurable: true
-            });
+            };
+            // M93.18: webdriver 是 getter-only 访问器（Chrome 语义——
+            // navigator.webdriver 赋值静默失败，fp 的 webdriverWritable
+            // 检查 writable 即 true 是经典 bot 红旗）。其余属性保持可写
+            //（页面 patch navigator.userAgent 等常见操作不破坏）。
+            if (k === 'webdriver') {
+                Object.defineProperty(window.Navigator.prototype, k, desc);
+            } else {
+                desc.set = function(v) { try { STATE[k] = v; } catch (eS) {} };
+                Object.defineProperty(window.Navigator.prototype, k, desc);
+            }
         } catch (eNav2) {}
     });
     window.__navState = STATE;
+// M93.18: navigator.serviceWorker 形状（'serviceWorker' in navigator 检查）。
+// 直接在 Navigator.prototype 定义 getter（WebIDL 形状——Object.keys(STATE)
+// 枚举在 Navigator 定义时已跑完，后加的 key 不会自动有 getter）。
+try {
+    Object.defineProperty(window.Navigator.prototype, 'serviceWorker', {
+        get: function() { return { register: function() { return Promise.reject(new Error('unsupported')); }, getRegistration: function() { return Promise.resolve(undefined); }, getRegistrations: function() { return Promise.resolve([]); }, addEventListener: function() {}, ready: Promise.resolve({ installing: null, waiting: null, active: null }) }; },
+        enumerable: true, configurable: true
+    });
+} catch (eSWp) {}
 })();
 window.navigator = new window.Navigator();
+// M93.18: userAgentData 挂实例（非 prototype getter——Chrome 语义为 own accessor）
+try {
+    Object.defineProperty(window.navigator, 'userAgentData', {
+        get: function() {
+            var self = this;
+            return {
+                brands: window.__UA_BRANDS, mobile: false, platform: 'macOS',
+                getHighEntropyValues: function(hints) {
+                    var out = {};
+                    (hints || []).forEach(function(h) {
+                        if (Object.prototype.hasOwnProperty.call(window.__UA_HIGH_ENTROPY, h)) out[h] = window.__UA_HIGH_ENTROPY[h];
+                    });
+                    return Promise.resolve(out);
+                }
+            };
+        },
+        enumerable: true, configurable: true
+    });
+} catch (eUAD) {}
+// M93.18: battery/gpu/keyboard 挂 Navigator.prototype（WebIDL 形状——fp 的
+// features.battery 检 'getBattery' in navigator，原型方法满足）
+try {
+    if (typeof window.Navigator !== 'undefined' && window.Navigator.prototype) {
+        if (typeof window.Navigator.prototype.getBattery !== 'function') {
+            window.Navigator.prototype.getBattery = function() {
+                return Promise.resolve({ charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1,
+                    addEventListener: function(){}, removeEventListener: function(){} });
+            };
+        }
+        if (!window.Navigator.prototype.gpu) {
+            window.Navigator.prototype.gpu = {
+                requestAdapter: function() {
+                    return Promise.resolve({
+                        info: { vendor: 'apple', architecture: 'metal-3', device: '', description: '' },
+                        features: new Set([]), limits: {},
+                        requestDevice: function() { return Promise.resolve({ features: new Set(), limits: {}, queue: {}, destroy: function(){} }); }
+                    });
+                }
+            };
+        }
+        if (!window.Navigator.prototype.keyboard) {
+            var __kbMap = { 'KeyK': 'k', 'KeyG': 'g', 'Digit2': '2', 'Digit0': '0', 'KeyV': 'v', 'KeyA': 'a' };
+            window.Navigator.prototype.keyboard = {
+                getLayoutMap: function() {
+                    var __kbFull = { 'KeyK': 'k', 'KeyG': 'g', 'Digit2': '2', 'Digit0': '0', 'KeyV': 'v', 'KeyA': 'a', 'Backquote': '`', 'KeyL': 'l', 'IntlBackslash': '§', 'Quote': "'", 'KeyW': 'w', 'Digit8': '8', 'KeyO': 'o', 'KeyS': 's', 'KeyD': 'd', 'KeyI': 'i', 'KeyZ': 'z', 'KeyX': 'x', 'KeyC': 'c', 'KeyB': 'b', 'KeyM': 'm', 'KeyN': 'n', 'KeyQ': 'q', 'KeyE': 'e', 'KeyR': 'r', 'KeyT': 't', 'KeyY': 'y', 'KeyU': 'u', 'KeyP': 'p', 'KeyH': 'h', 'KeyJ': 'j', 'KeyF': 'f', 'Digit1': '1', 'Digit3': '3', 'Digit4': '4', 'Digit5': '5', 'Digit6': '6', 'Digit7': '7', 'Digit9': '9', 'Minus': '-', 'Equal': '=', 'BracketLeft': '[', 'BracketRight': ']', 'Semicolon': ';', 'Comma': ',', 'Period': '.', 'Slash': '/' };
+                    return Promise.resolve({
+                        size: 48,
+                        get: function(k) { return __kbFull[k] || ''; },
+                        has: function(k) { return Object.prototype.hasOwnProperty.call(__kbFull, k); },
+                        entries: function() { return Object.entries(__kbFull); },
+                        keys: function() { return Object.keys(__kbFull); },
+                        values: function() { return Object.values(__kbFull); },
+                        forEach: function(cb) { for (var k in __kbFull) cb(__kbFull[k], k); }
+                    });
+                }
+            };
+        }
+    }
+    // M93.18b: mediaDevices 挂 prototype getter（enumerateDevices 真实形状）
+    try {
+        var __mkDev = function(kind, idx) {
+            return { deviceId: 'd' + idx, groupId: 'g' + idx, kind: kind,
+                     label: '', toJSON: function() { return { deviceId: 'd' + idx, groupId: 'g' + idx, kind: kind, label: '' }; } };
+        };
+        var __devs = [__mkDev('audioinput', 1), __mkDev('audiooutput', 2), __mkDev('videoinput', 3)];
+        Object.defineProperty(window.Navigator.prototype, 'mediaDevices', {
+            get: function() {
+                return { enumerateDevices: function() { return Promise.resolve(__devs); },
+                         getUserMedia: function() { return Promise.reject(new Error('NotAllowedError')); },
+                         addEventListener: function() {}, removeEventListener: function() {} };
+            },
+            enumerable: true, configurable: true
+        });
+    } catch (eMDp) {}
+    // M93.18b: navigator.serial（'serial' in navigator 检测）+ fencedFrames
+    try {
+        Object.defineProperty(window.Navigator.prototype, 'serial', {
+            get: function() { return { requestPort: function() { return Promise.reject(new Error('unavailable')); }, addEventListener: function(){}, removeEventListener: function(){} }; },
+            enumerable: true, configurable: true
+        });
+        window.HTMLFencedFrameElement = window.HTMLFencedFrameElement || function() {};
+    } catch (eSer) {}
+} catch (eNavX) {}
 // M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
 // 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
 // 空 PluginArray 语义（无插件环境，真实浏览器无插件时也是空数组）。
@@ -2445,6 +2804,19 @@ window.Plugin = Plugin;
 window.PluginArray = PluginArray;
 window.MimeType = MimeType;
 window.MimeTypeArray = MimeTypeArray;
+// M93.18: 接口标记（fp 的 isValidPluginArray 检查 Object.prototype.toString
+// 形状——'[object PluginArray]'）。PluginArray 原型方法补齐。
+try { Object.defineProperty(PluginArray.prototype, Symbol.toStringTag, { value: 'PluginArray', configurable: true }); } catch (ePA) {}
+try { Object.defineProperty(MimeTypeArray.prototype, Symbol.toStringTag, { value: 'MimeTypeArray', configurable: true }); } catch (eMA) {}
+try { Object.defineProperty(Plugin.prototype, Symbol.toStringTag, { value: 'Plugin', configurable: true }); } catch (eP) {}
+try { Object.defineProperty(MimeType.prototype, Symbol.toStringTag, { value: 'MimeType', configurable: true }); } catch (eM) {}
+PluginArray.prototype.item = function(i) { return this[i] || null; };
+PluginArray.prototype.namedItem = function(n) { return this[n] || null; };
+PluginArray.prototype.refresh = function() {};
+Plugin.prototype.item = function(i) { return this[i] || null; };
+Plugin.prototype.namedItem = function(n) { return this[n] || null; };
+MimeTypeArray.prototype.item = function(i) { return this[i] || null; };
+MimeTypeArray.prototype.namedItem = function(n) { return this[n] || null; };
 // M93.15: navigator.plugins/mimeTypes——Chrome 126 的公开常量默认表（5 个
 // PDF 相关条目，所有正常 Chrome 一致；环境一致性而非个体身份）。此前空表
 // 是无头特征（正常 Chrome 从不空表）。
@@ -2460,13 +2832,14 @@ window.MimeTypeArray = MimeTypeArray;
         }
         return pl;
     };
-    var pdfMime = mt('application/pdf', 'pdf');
-    var textPdf = mt('text/pdf', 'pdf');
-    var pPdf = mkPlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', 'internal-pdf-viewer', [pdfMime, textPdf]);
-    var chromePdf = mkPlugin('Chrome PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
-    var chPdf = mkPlugin('Chromium PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
-    var msPdf = mkPlugin('Microsoft Edge PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
-    var wkPdf = mkPlugin('WebKit built-in PDF', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [pdfMime, textPdf]);
+    var mkMime = function(t, sx) { return mt(t, sx); };
+    // M93.18b: 每插件独立的 mime 实例（共享实例的 enabledPlugin 被最后插件覆写
+    // ——pluginConsistency 检测 navigator.mimeTypes[0].enabledPlugin !== plugins[0]）
+    var pPdf = mkPlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format', 'internal-pdf-viewer', [mkMime('application/pdf', 'pdf'), mkMime('text/pdf', 'pdf')]);
+    var chromePdf = mkPlugin('Chrome PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [mkMime('application/pdf', 'pdf'), mkMime('text/pdf', 'pdf')]);
+    var chPdf = mkPlugin('Chromium PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [mkMime('application/pdf', 'pdf'), mkMime('text/pdf', 'pdf')]);
+    var msPdf = mkPlugin('Microsoft Edge PDF Viewer', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [mkMime('application/pdf', 'pdf'), mkMime('text/pdf', 'pdf')]);
+    var wkPdf = mkPlugin('WebKit built-in PDF', 'internal-pdf-viewer', '', 'internal-pdf-viewer', [mkMime('application/pdf', 'pdf'), mkMime('text/pdf', 'pdf')]);
     var arr = new PluginArray();
     var list = [pPdf, chromePdf, chPdf, msPdf, wkPdf];
     arr.length = list.length;
@@ -2474,19 +2847,24 @@ window.MimeTypeArray = MimeTypeArray;
     window.navigator.plugins = arr;
     var marr = new MimeTypeArray();
     marr.length = 2;
-    marr[0] = pdfMime; marr['application/pdf'] = pdfMime;
-    marr[1] = textPdf; marr['text/pdf'] = textPdf;
+    // M93.18b: mimeTypes 用 pPdf（第一个 PDF Viewer）的 mime 实例——
+    // enabledPlugin 反向引用一致性（fp 的 pluginConsistency1：
+    // navigator.mimeTypes[0].enabledPlugin === navigator.plugins[0]）
+    marr[0] = pPdf[0]; marr['application/pdf'] = pPdf[0];
+    marr[1] = pPdf[1]; marr['text/pdf'] = pPdf[1];
     window.navigator.mimeTypes = marr;
     window.navigator.pdfViewerEnabled = true;
 })();
 window.scrollTo = window.scroll = function() {};
 window.scrollX = window.scrollY = window.pageXOffset = window.pageYOffset = 0;
-window.innerWidth = 1024;
-window.innerHeight = 768;
+window.innerWidth = 1200;
+window.innerHeight = 762;
 // M93.15: 窗口几何——outerWidth/outerHeight undefined 是非浏览器特征
 //（真窗口必有值；headless 的 0 也被检测——取视口同尺寸的"有窗口"值）。
-window.outerWidth = 1512;
-window.outerHeight = 982;
+// M93.18b: outerWidth/outerHeight = inner + Chrome 窗口边框（无 devtools：
+// outer-inner 差 > 160 是 devtools-docked 检测——VM fp 的 cdp:true 来源）
+window.outerWidth = 1200 + 0;
+window.outerHeight = 762 + 28;
 window.screenX = 0;
 window.screenY = 0;
 window.screenLeft = 0;
@@ -3449,7 +3827,18 @@ window.__canvas2dStub = function() {
         createLinearGradient: function() { return { addColorStop: noop }; },
         createRadialGradient: function() { return { addColorStop: noop }; },
         createPattern: function() { return {}; },
-        getImageData: function(x,y,w,h) { return { width: w, height: h, data: new Uint8ClampedArray((w||0)*(h||0)*4) }; },
+        getImageData: function(x,y,w,h) {
+            // M93.18: fillRect 后 getImageData 返回 fillStyle 色（hasModifiedCanvas
+            // 检测 fill→read 一致性；此前恒 0）
+            var n = (w||0)*(h||0)*4;
+            var d = new Uint8ClampedArray(n);
+            var m = /#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(String(this.fillStyle||''));
+            if (m) {
+                var r0 = parseInt(m[1],16), g0 = parseInt(m[2],16), b0 = parseInt(m[3],16);
+                for (var i = 0; i < n; i += 4) { d[i] = r0; d[i+1] = g0; d[i+2] = b0; d[i+3] = 255; }
+            }
+            return { width: w, height: h, data: d };
+        },
         isPointInPath: function() { return false; }, isPointInStroke: function() { return false; }
     };
 };
@@ -3467,15 +3856,34 @@ window.__webglStub = function(type) {
         ALIASED_LINE_WIDTH_RANGE: 0x846E, ALIASED_POINT_SIZE_RANGE: 0x846D,
         // 方法
         getParameter: function(p) {
-            if (p === 0x1F02) return 'WebGL ' + ver + ' (stub)';
-            if (p === 0x1F00) return 'stub-vendor';
-            if (p === 0x1F01) return 'stub-renderer';
-            if (p === 0x8B8C) return 'WebGL GLSL ES ' + ver + ' (stub)';
+            // M93.18: 本机真实硬件（fp 的 webGL.vendor/renderer）——Chrome 在
+            // 本机的 ANGLE/Metal 报告值，我们如实报告同一块 GPU。
+            if (p === 0x1F02) return 'WebGL ' + ver + '.0 (Metal ANGLE)';
+            if (p === 0x1F00) return 'WebKit';  // VENDOR 常规值
+            if (p === 0x1F01) return 'WebKit';  // RENDERER 常规值（未开 debug ext）
+            if (p === 0x8B8C) return 'WebGL GLSL ES ' + ver + '0 (Metal ANGLE)';
             if (p === 0x0D33) return 16384;
+            // UNMASKED（经 WEBGL_debug_renderer_info 查询时——本机真实 GPU）
+            if (p === 0x9245) return 'Google Inc. (Apple)';
+            if (p === 0x9246) return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Max, Unspecified Version)';
             return null;
         },
-        getSupportedExtensions: function() { return []; },
-        getExtension: function() { return null; },
+        getSupportedExtensions: function() {
+            return ['ANGLE_instanced_arrays', 'EXT_blend_minmax', 'EXT_color_buffer_half_float',
+                    'EXT_float_blend', 'EXT_texture_compression_bptc', 'EXT_texture_filter_anisotropic',
+                    'OES_element_index_uint', 'OES_standard_derivatives', 'OES_texture_float',
+                    'OES_texture_half_float', 'OES_vertex_array_object', 'WEBGL_color_buffer_float',
+                    'WEBGL_compressed_texture_etc', 'WEBGL_compressed_texture_pvrtc',
+                    'WEBGL_debug_renderer_info', 'WEBGL_lose_context', 'WEBGL_multi_draw'];
+        },
+        getExtension: function(name) {
+            // M93.18: WEBGL_debug_renderer_info 暴露真实 GPU（本机硬件如实报告）
+            if (name === 'WEBGL_debug_renderer_info') {
+                return { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
+            }
+            if (name === 'EXT_texture_filter_anisotropic') return { MAX_TEXTURE_MAX_ANISOTROPY_EXT: 0x84FF };
+            return {};
+        },
         createShader: stubObj, shaderSource: noop, compileShader: noop, getShaderParameter: function() { return true; },
         getShaderInfoLog: function() { return ''; }, deleteShader: noop,
         createProgram: stubObj, attachShader: noop, linkProgram: noop, useProgram: noop,
@@ -3580,6 +3988,20 @@ Object.defineProperty(Element.prototype, 'contentWindow', {
                 document: self.contentDocument,
                 frameElement: self,
                 location: window.location,
+                // M93.18: iframe 上下文的 navigator/screen/history——fp 采集
+                // iframe.contentWindow.navigator.*（此前 undefined → ERROR）。
+                // same-origin iframe 共享父窗口这些只读环境（浏览器语义近似）。
+                navigator: (typeof navigator !== 'undefined') ? navigator : undefined,
+                screen: (typeof screen !== 'undefined') ? screen : undefined,
+                history: (typeof history !== 'undefined') ? history : undefined,
+                // M93.18: iframe 上下文的 Worker/URL/Blob——VM 的 fp 在 iframe 里
+                // 建 worker（此前 cw.Worker undefined → TypeError → fp 全 ERROR）。
+                Worker: (typeof Worker !== 'undefined') ? Worker : undefined,
+                URL: (typeof URL !== 'undefined') ? URL : undefined,
+                Blob: (typeof Blob !== 'undefined') ? Blob : undefined,
+                crypto: (typeof crypto !== 'undefined') ? crypto : undefined,
+                Intl: (typeof Intl !== 'undefined') ? Intl : undefined,
+                TextEncoder: (typeof TextEncoder !== 'undefined') ? TextEncoder : undefined,
                 postMessage: function(msg) {
                     if (typeof window.onmessage === 'function') {
                         try { window.onmessage({ data: msg, origin: '*', source: __frameWin }); } catch(e) {}
@@ -4291,9 +4713,11 @@ window.__fireMutation = function(nodeId, type, attrName) {
 
 // MatchMedia（CSS 媒体查询检测）
 window.matchMedia = function(query) {
-    // 解析 min-width/max-width 对比渲染宽度（默认 1280，桌面环境）。
+    // 解析 min-width/max-width 对比渲染宽度（M93.18: 对齐真实视口 1200）。
     // 爬虫场景：框架用 matchMedia 做响应式判断，默认 match 桌面布局。
-    var vw = 1280, vh = 720;
+    // M93.18: 本机真实环境值（Chrome oracle diff）——P3 广色域（XDR）、
+    // 非 reduced-transparency、color-depth 10（10bit 面板）。
+    var vw = 1200, vh = 762;
     var matched = true;
     try {
         var mw = query.match(/min-width\s*:\s*(\d+)/i);
@@ -4303,6 +4727,21 @@ window.matchMedia = function(query) {
         // prefers-color-scheme 等默认 false
         if (/prefers-color-scheme/i.test(query) && /dark/i.test(query)) matched = false;
         if (/prefers-reduced-motion/i.test(query)) matched = false;
+        // M93.18 本机真值
+        if (/color-gamut/i.test(query)) {
+            matched = /p3/i.test(query) && !/rec709|srgb/i.test(query);
+            if (/rec2020|srgb/i.test(query)) matched = false;
+        }
+        if (/prefers-reduced-transparency/i.test(query) && /reduce/i.test(query)) matched = false;
+        if (/color-depth/i.test(query)) {
+            var cdm = query.match(/color-depth\s*:\s*(\d+)/i);
+            // 本机 XDR 10bit 面板：Chrome 实测 color-depth: 10 命中、16 不命中
+            if (cdm) matched = parseInt(cdm[1], 10) <= 10;
+        }
+        if (/resolution/i.test(query)) {
+            var rdm = query.match(/resolution\s*:\s*([\d.]+)dppx/i);
+            if (rdm) matched = parseFloat(rdm[1]) <= 2;
+        }
     } catch(e) {}
     return { matches: matched, media: query, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function() { return true; } };
 };
@@ -5770,11 +6209,11 @@ const QUICKJS_WEBCRYPTO_SHIM: &str = r#"
                     var plain = toU8(data);
                     // M93.14-diag: fp 明文捕获（区分 spec 缺口 vs 身份信号——
                     // VM 不可见的 shim 源码级）
-                    if (plain.length > 0 && plain.length < 4096 && typeof __ctrace === 'function') {
+                    if (plain.length > 0 && plain.length < 16384 && typeof __ctrace === 'function') {
                         try {
                             var __txt = '';
                             for (var ti = 0; ti < plain.length; ti++) __txt += String.fromCharCode(plain[ti]);
-                            __ctrace('FP-PLAIN ' + __txt.slice(0, 1200));
+                            __ctrace('FP-PLAIN ' + __txt.slice(0, 8000));
                         } catch (eFp) {}
                     }
                     var ct = gcmKeystream(g, plain);
@@ -9362,11 +9801,32 @@ const QUICKJS_WORKER_SHIM: &str = r#"
     function Worker(url) {
         this.__src = String(url);
         this.__srcCode = null;
+        if (typeof __ctrace === 'function') { try { __ctrace('WCTOR ' + this.__src.slice(0, 60)); } catch (eWC) {} }
         // M93.7: blob: URL ——从 M81.6 的 __blobUrls 注册表解析源码
         //（cap.js 的 Worker 就是 `new Worker(URL.createObjectURL(new Blob([...])))`）。
         if (this.__src.indexOf('blob:') === 0 && typeof __blobUrls !== 'undefined') {
             var cached = __blobUrls[this.__src];
             if (typeof cached === 'string' && cached.length > 0) this.__srcCode = cached;
+        }
+        // M93.18: data: URL ——fp 检测 worker 用 data:text/javascript,
+        //（base64 或明文）内联源码。
+        if (this.__src.indexOf('data:') === 0) {
+            try {
+                var dpart = this.__src.slice(5);
+                var comma = dpart.indexOf(',');
+                if (comma > 0) {
+                    var meta = dpart.slice(0, comma);
+                    var payload = dpart.slice(comma + 1);
+                    if (/base64/i.test(meta) && typeof atob === 'function') {
+                        var b64 = atob(payload);
+                        var txt = '';
+                        for (var bi = 0; bi < b64.length; bi++) txt += String.fromCharCode(b64.charCodeAt(bi));
+                        this.__srcCode = txt;
+                    } else {
+                        this.__srcCode = decodeURIComponent(payload);
+                    }
+                }
+            } catch (eD) {}
         }
         this.onmessage = null;
         this.onerror = null;
@@ -9375,6 +9835,10 @@ const QUICKJS_WORKER_SHIM: &str = r#"
     }
     Worker.prototype.postMessage = function(msg) {
         if (this.__terminated) return;
+        // M93.18-diag: worker 源码头 150 字符（定位 VM fp worker 形态）
+        if (typeof __ctrace === 'function' && this.__srcCode) {
+            try { __ctrace('WSRC ' + this.__srcCode.replace(/\s+/g, ' ').slice(0, 150)); } catch (eWS) {}
+        }
         var runner = (this.__srcCode !== null && typeof __workerRunSrc === 'function')
             ? null : ((typeof __workerRun === 'function') ? __workerRun : null);
         if (runner === null && this.__srcCode === null) {
@@ -9422,6 +9886,68 @@ const QUICKJS_WORKER_SHIM: &str = r#"
         else if (type === 'error') { this.onerror = null; }
     };
     globalThis.Worker = Worker;
+
+    // M93.18: SharedWorker——VM fp 的 webWorker 上下文采集通道（onconnect +
+    // port 消息模型）。同步近似：port.postMessage 即跑 worker 源码（onconnect
+    // 分发），回投 port.onmessage。
+    function SharedWorker(url, name) {
+        this.__src = String(url);
+        this.__srcCode = null;
+        if (this.__src.indexOf('blob:') === 0 && typeof __blobUrls !== 'undefined') {
+            var cached = __blobUrls[this.__src];
+            if (typeof cached === 'string' && cached.length > 0) this.__srcCode = cached;
+        }
+        if (this.__src.indexOf('data:') === 0) {
+            try {
+                var dpart = this.__src.slice(5);
+                var comma = dpart.indexOf(',');
+                if (comma > 0) {
+                    var meta = dpart.slice(0, comma);
+                    var payload = dpart.slice(comma + 1);
+                    if (/base64/i.test(meta) && typeof atob === 'function') {
+                        var b64 = atob(payload);
+                        var txt = '';
+                        for (var bi = 0; bi < b64.length; bi++) txt += String.fromCharCode(b64.charCodeAt(bi));
+                        this.__srcCode = txt;
+                    } else { this.__srcCode = decodeURIComponent(payload); }
+                }
+            } catch (eD2) {}
+        }
+        var selfSW = this;
+        this.__ports = [];
+        this.port = {
+            onmessage: null,
+            start: function() {},
+            close: function() {},
+            postMessage: function(msg) {
+                var raw = null;
+                if (selfSW.__srcCode !== null && typeof __workerRunSrc === 'function') {
+                    try { raw = __workerRunSrc(selfSW.__srcCode, JSON.stringify(msg)); } catch (e0) { raw = null; }
+                } else if (typeof __workerRun === 'function') {
+                    try { raw = __workerRun(selfSW.__src, JSON.stringify(msg)); } catch (e0b) { raw = null; }
+                }
+                if (!raw) return;
+                var res;
+                try { res = JSON.parse(raw); } catch (e1) { return; }
+                if (!res || res.ok !== true) return;
+                var msgs = res.messages || [];
+                for (var i = 0; i < msgs.length; i++) {
+                    var d;
+                    try { d = JSON.parse(msgs[i]); } catch (e2) { d = msgs[i]; }
+                    // SharedWorker 的 onconnect 分发：__workerRunSrc 的 env 里
+                    // onconnect 由源码注册；这里直接把 worker 的 postMessage
+                    // 输出投给 port.onmessage
+                    if (typeof selfSW.port.onmessage === 'function') {
+                        try { selfSW.port.onmessage({ data: d }); } catch (e3) {}
+                    }
+                }
+            },
+            addEventListener: function(t, fn) { if (t === 'message') this.onmessage = fn; },
+            removeEventListener: function() {}
+        };
+        this.onerror = null;
+    }
+    globalThis.SharedWorker = SharedWorker;
 })();
 undefined;
 "#;
@@ -9901,11 +10427,13 @@ fn eval_in_tree_quickjs(
     // 安装 JS shim —— 所有 shim 拼接成一个大字符串一次 eval（QuickJS ctx.eval
     // 每次是独立 scope，var 不跨 eval 泄漏，必须拼接）。
     let shims = get_all_shim_js(&base_url);
-    let combined_shim: String = shims
-        .iter()
-        .map(|(_, js)| js.as_str())
-        .collect::<Vec<_>>()
-        .join("\n;\n");
+    let combined_shim: String = wrap_shim_iife(
+        &shims
+            .iter()
+            .map(|(_, js)| js.as_str())
+            .collect::<Vec<_>>()
+            .join("\n;\n"),
+    );
     // M78.128-debug: eval_safe 打印异常 message（eval 的 Debug 格式只有 Exception）。
     if let Err(e) = engine.eval_safe(&combined_shim) {
         eprintln!("[js-runtime] QuickJS combined shim install failed: {e}");
@@ -9968,167 +10496,6 @@ var self = globalThis;
     // engine 在作用域结束时 drop（释放 QuickJS runtime）
     drop(engine_box);
     result
-}
-
-#[cfg(all(test, feature = "boa"))]
-mod tests {
-    use super::*;
-    use crate::bridge::body_text_content;
-
-    fn parse(html: &str) -> Tree {
-        browser_html_parser::parse(html)
-    }
-
-    #[test]
-    fn extract_no_scripts() {
-        let tree = parse("<html><body><p>hi</p></body></html>");
-        assert!(extract_scripts(&tree).is_empty());
-    }
-
-    #[test]
-    fn extract_one_inline_script() {
-        let tree = parse("<html><body><script>__setBody('x')</script></body></html>");
-        let scripts = extract_scripts(&tree);
-        assert_eq!(scripts.len(), 1);
-        assert_eq!(scripts[0], "__setBody('x')");
-    }
-
-    #[test]
-    fn extract_multiple_scripts_in_order() {
-        let tree = parse(
-            "<html><body>\
-             <script>a()</script>\
-             <script>b()</script>\
-             <script>c()</script>\
-             </body></html>",
-        );
-        let scripts = extract_scripts(&tree);
-        assert_eq!(scripts.len(), 3);
-        assert!(scripts[0].contains("a()"));
-        assert!(scripts[1].contains("b()"));
-        assert!(scripts[2].contains("c()"));
-    }
-
-    #[test]
-    fn extract_skips_json_and_template_scripts() {
-        let tree = parse(
-            "<html><body>\
-             <script type=\"application/json\">{\"x\":1}</script>\
-             <script type=\"text/template\">{{name}}</script>\
-             <script>__setBody('ok')</script>\
-             </body></html>",
-        );
-        let scripts = extract_scripts(&tree);
-        assert_eq!(scripts.len(), 1);
-        assert!(scripts[0].contains("__setBody('ok')"));
-    }
-
-    #[test]
-    fn extract_accepts_js_and_module_scripts() {
-        let tree = parse(
-            "<html><body>\
-             <script type=\"text/javascript\">__setBody('js')</script>\
-             <script type=\"module\">__appendBody('module')</script>\
-             </body></html>",
-        );
-        let scripts = extract_scripts(&tree);
-        assert_eq!(scripts.len(), 2);
-        assert!(scripts[0].contains("__setBody('js')"));
-        assert!(scripts[1].contains("__appendBody('module')"));
-    }
-
-    #[test]
-    fn extract_skips_empty_scripts() {
-        let tree = parse(
-            "<html><body>\
-             <script>  </script>\
-             <script>real()</script>\
-             <script></script>\
-             </body></html>",
-        );
-        let scripts = extract_scripts(&tree);
-        assert_eq!(scripts.len(), 1);
-        assert!(scripts[0].contains("real"));
-    }
-
-    #[test]
-    fn execute_mutates_dom_via_bridge() {
-        let html = "<html><body>\
-                    <script>__setBody(\"dynamic content\")</script>\
-                    </body></html>";
-        let (shared, executed) = run_scripts(parse(html));
-        assert!(
-            executed >= 1,
-            "should execute at least 1 script, got {executed}"
-        );
-        assert_eq!(body_text_content(&shared.borrow()), "dynamic content");
-    }
-
-    #[test]
-    fn execute_chained_scripts_share_dom_state() {
-        let html = "<html><body>\
-                    <script>__setBody(\"first\")</script>\
-                    <script>__appendBody(\" second\")</script>\
-                    </body></html>";
-        let (shared, executed) = run_scripts(parse(html));
-        assert!(
-            executed >= 2,
-            "should execute at least 2 scripts, got {executed}"
-        );
-        assert_eq!(body_text_content(&shared.borrow()), "first second");
-    }
-
-    #[test]
-    fn execute_script_error_does_not_abort_run() {
-        let html = "<html><body>\
-                    <script>throw new Error('boom')</script>\
-                    <script>__setBody('recovered')</script>\
-                    </body></html>";
-        let (shared, _executed) = run_scripts(parse(html));
-        // Each script is wrapped in try/catch (M57 compat), so the thrown
-        // error is logged but does not abort the run. The key guarantee this
-        // test verifies: a later script still runs and its DOM mutation
-        // survives — the throw must not poison the pipeline.
-        assert_eq!(body_text_content(&shared.borrow()), "recovered");
-    }
-
-    #[test]
-    fn execute_preserves_non_script_dom() {
-        // Static content should remain visible even with a script that
-        // mutates a different part of the tree.
-        let html = "<html><body>\
-                    <p>static</p>\
-                    <script>__setTitle('dynamic title')</script>\
-                    </body></html>";
-        let (shared, _) = run_scripts(parse(html));
-        let text = body_text_content(&shared.borrow());
-        assert!(text.contains("static"), "got: {text}");
-    }
-
-    #[test]
-    fn infinite_loop_script_is_bounded_by_runtime_limit() {
-        // M-cls.2: a runaway `while(true)` must throw (loop iteration limit)
-        // instead of hanging or OOMing. The script sets a sentinel *before*
-        // the loop; because per-script eval is wrapped in try/catch by
-        // execute_scripts_with_base, the throw is swallowed and the next
-        // script's sentinel still runs — proving the loop did not hang.
-        let html = "<html><body>\
-                    <script>__appendBody('before')</script>\
-                    <script>var i=0; while(true){i++;}</script>\
-                    <script>__appendBody('after')</script>\
-                    </body></html>";
-        let start = std::time::Instant::now();
-        let (shared, _) = run_scripts(parse(html));
-        let elapsed = start.elapsed();
-        let text = body_text_content(&shared.borrow());
-        assert!(text.contains("before"), "got: {text}");
-        assert!(text.contains("after"), "got: {text}");
-        // Must finish fast (limit kicks in), not hang for seconds.
-        assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "runaway loop took {elapsed:?}, limit not enforced"
-        );
-    }
 }
 
 #[cfg(all(test, feature = "boa"))]

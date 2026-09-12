@@ -31,7 +31,7 @@ use boa_engine::{Context, JsResult};
 /// 注：UA 定义在 net crate 的 client.rs，这里复制一份避免 js-runtime 依赖 net
 /// （net 依赖 reqwest，重）。M28.5 可考虑提取到共享常量。
 const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
 /// 映射当前编译目标到 navigator.platform（Chrome 语义）。
 fn platform_string() -> &'static str {

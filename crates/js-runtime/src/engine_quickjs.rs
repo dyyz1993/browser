@@ -50,21 +50,24 @@ function addEventListener(t, h) { __handlers[t] = h; }
 function removeEventListener(t) { delete __handlers[t]; }
 globalThis.self = globalThis;
 globalThis.isSecureContext = false;
-globalThis.navigator = { userAgent: "#,
-    );
-    // UA 转义（字面量内只可能出现引号/反斜杠，走通用转义保守处理）
-    let mut ua_esc = String::new();
-    for c in ua.chars() {
-        match c {
-            '"' => ua_esc.push_str("\\\""),
-            '\\' => ua_esc.push_str("\\\\"),
-            '\n' => ua_esc.push_str("\\n"),
-            c => ua_esc.push(c),
-        }
-    }
-    env.push_str(&format!("\"{ua_esc}\""));
-    env.push_str(
-        r#" };
+// M93.18: worker env 的 setTimeout/setInterval——VM fp worker 源码可能用
+// setTimeout 延迟 postMessage（无此 API → throw → fp webWorker 字段 ERROR）。
+// 同步近似：立即执行回调（microtask 语义足够——采集场景 delay 只是排程用）。
+globalThis.setTimeout = function(cb) { try { if (typeof cb === 'function') cb(); } catch (e) {} return 0; };
+globalThis.clearTimeout = function() {};
+globalThis.setInterval = function(cb) { try { if (typeof cb === 'function') cb(); } catch (e) {} return 0; };
+globalThis.clearInterval = function() {};
+globalThis.requestAnimationFrame = function(cb) { try { if (typeof cb === 'function') cb(); } catch (e) {} return 0; };
+globalThis.queueMicrotask = function(cb) { try { if (typeof cb === 'function') cb(); } catch (e) {} };
+globalThis.performance = { now: function() { return Date.now(); }, timeOrigin: Date.now() };
+globalThis.addEventListener = addEventListener;
+globalThis.removeEventListener = removeEventListener;
+globalThis.location = { href: "about:blank", origin: "null", protocol: "about:", host: "", hostname: "", port: "", pathname: "blank", search: "", hash: "" };
+globalThis.navigator = {
+        userAgent: "__UA_PLACEHOLDER__",
+        platform: "MacIntel", language: "zh-CN", languages: ["zh-CN", "zh", "en-US", "en"],
+        hardwareConcurrency: 12, deviceMemory: 32, vendor: "Google Inc. (Apple)", webdriver: false
+    };
 globalThis.console = { log: function(){}, warn: function(){}, error: function(){}, debug: function(){}, info: function(){}, trace: function(){} };
 function TextEncoder() {}
 TextEncoder.prototype.encode = function(s) {
@@ -85,6 +88,42 @@ TextEncoder.prototype.encode = function(s) {
     return new Uint8Array(out);
 };
 globalThis.TextEncoder = TextEncoder;
+// M93.18: worker 上下文的 Intl + 时间戳（fp 的 contexts.webWorker.intl 检查）
+// M93.18: worker 上下文的 OffscreenCanvas + WebGL（fp 的 webWorker.renderer
+// 经 OffscreenCanvas.getContext('webgl') 采 GPU 字符串）
+globalThis.OffscreenCanvas = function(w, h) {
+    this.width = w || 300; this.height = h || 150;
+    var noop = function() {};
+    this.getContext = function(type) {
+        if (type === '2d') return { fillRect: noop, clearRect: noop, getImageData: function() { return { width: 1, height: 1, data: new Uint8ClampedArray(4) }; }, putImageData: noop, createImageData: function() { return { width: 1, height: 1, data: new Uint8ClampedArray(4) }; }, setTransform: noop, drawImage: noop, save: noop, fillText: noop, restore: noop, beginPath: noop, moveTo: noop, lineTo: noop, closePath: noop, stroke: noop, translate: noop, scale: noop, rotate: noop, arc: noop, fill: noop, measureText: function() { return { width: 0 }; }, transform: noop, rect: noop, clip: noop };
+        if (type === 'webgl' || type === 'webgl2') {
+            return {
+                getParameter: function(p) {
+                    if (p === 0x9245) return 'Google Inc. (Apple)';
+                    if (p === 0x9246) return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Max, Unspecified Version)';
+                    if (p === 0x1F00) return 'WebKit';
+                    if (p === 0x1F01) return 'WebKit';
+                    return null;
+                },
+                getExtension: function(n) { return n === 'WEBGL_debug_renderer_info' ? { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 } : {}; },
+                getSupportedExtensions: function() { return ['WEBGL_debug_renderer_info']; }
+            };
+        }
+        return null;
+    };
+    this.toDataURL = function() { return 'data:,'; };
+    this.convertToBlob = function() { return Promise.resolve({}); };
+};
+globalThis.Intl = {
+    DateTimeFormat: function() {
+        this.resolvedOptions = function() { return { locale: 'zh-CN', calendar: 'gregory', numberingSystem: 'latn', timeZone: 'Asia/Shanghai' }; };
+        this.format = function(d) { var dt = d instanceof Date ? d : new Date(); return dt.getFullYear() + '/' + (dt.getMonth() + 1) + '/' + dt.getDate(); };
+    },
+    NumberFormat: function() {
+        this.resolvedOptions = function() { return { locale: 'zh-CN', numberingSystem: 'latn' }; };
+        this.format = function(n) { return String(n); };
+    }
+};
 // M93.7: crypto.subtle.digest（SHA-256 纯 JS）——cap.js（xcancel antibot）的
 // JS fallback solver 在 worker 里 await crypto.subtle.digest("SHA-256", ...)。
 // 与 scripts.rs 主 shim 的 __sha256 同源拷贝（独立 eval 空间）。
@@ -156,6 +195,9 @@ globalThis.crypto = {
 };
 "#,
     );
+    // M93.18: 真实 UA 注入（worker 上下文 fp 采集 userAgent）
+    let ua_esc = ua.replace('\\', "\\\\").replace('"', "\\\"");
+    env = env.replace("__UA_PLACEHOLDER__", &ua_esc);
     // 注入消息（main 侧已 JSON.stringify，是合法 JS 字面量）
     env.push_str(&format!("var __msgData = {msg_json};\n"));
     env.push_str("var __done = false, __err = null;\n");
@@ -214,7 +256,7 @@ fn worker_run_src(source: &str, msg_json: &str) -> String {
 
     // 3. env → worker 源码 → 消息分发 → drain → 收集。
     ctx.with(|ctx: Ctx| {
-        let env = worker_env_js(msg_json, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+        let env = worker_env_js(msg_json, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36");
         if let Err(e) = ctx.eval::<(), _>(env.as_str()).catch(&ctx) {
             return format!("{{\"ok\":false,\"error\":\"worker env install failed: {e}\"}}");
         }
@@ -228,6 +270,23 @@ fn worker_run_src(source: &str, msg_json: &str) -> String {
             return format!("{{\"ok\":false,\"error\":\"worker script eval failed: {e}\"}}");
         }
         const DISPATCH: &str = r#"(function(){
+    // M93.18: SharedWorker 的 onconnect 分发——源码注册 onconnect(e) 时，
+    // 用 mock port（postMessage 直接进 outbox）先触发连接，随后该 port 上的
+    // onmessage 就是消息 handler。
+    if (typeof self.onconnect === 'function') {
+        try {
+            var __port = {
+                onmessage: null,
+                start: function() {},
+                close: function() {},
+                postMessage: function(d) { try { __outbox.push(JSON.stringify(d)); } catch (ePm) {} },
+                addEventListener: function(t, fn) { if (t === 'message') this.onmessage = fn; },
+                removeEventListener: function() {}
+            };
+            self.onconnect({ ports: [__port] });
+            if (typeof __port.onmessage === 'function') { __handlers['message'] = function(ev) { return __port.onmessage(ev); }; }
+        } catch (eOc) {}
+    }
     // M93.13: 双通道 handler——addEventListener('message', fn) 或
     // self.onmessage = fn（cap.js 的 fallback solver 用后者）。
     var h = __handlers['message'];
@@ -704,6 +763,17 @@ impl QuickJsEngine {
                 // M93.7: blob: URL 路径——主侧 JS 已从 __blobUrls 解析出源码
                 let _ = g.set("__workerRunSrc", Function::new(ctx.clone(), |src: String, msg: String| worker_run_src(&src, &msg)).unwrap());
                 let _ = g.set("__navRecord", Function::new(ctx.clone(), |url: String| bridge::record_pending_navigation(&url)).unwrap());
+                // M93.18: 系统真实时区（Intl.resolvedOptions().timeZone——
+                // /etc/localtime 符号链目标 → Region/City 名）
+                let _ = g.set("__sysTimezone", Function::new(ctx.clone(), || -> String {
+                    std::fs::read_link("/etc/localtime")
+                        .ok()
+                        .and_then(|p| {
+                            let s = p.to_string_lossy().to_string();
+                            s.split("zoneinfo/").nth(1).map(|tz| tz.to_string())
+                        })
+                        .unwrap_or_else(|| "Asia/Shanghai".to_string())
+                }).unwrap());
                 // M93.11: 宿主真实逻辑核数（navigator.hardwareConcurrency 诚实值）
                 let hw = std::thread::available_parallelism()
                     .map(|n| n.get())
