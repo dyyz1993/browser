@@ -4239,6 +4239,41 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
 // M94.1: createImageBitmap/ImageBitmap（Chrome 全局异步位图 API；缺失时
 // VM 的 tamper 探测 `await createImageBitmap(canvas)` 直接 ReferenceError
 // → hasModifiedCanvas 记 ERROR——候选向量 #4）。
+// M94.9: Image 构造器——VM 的 hasModifiedCanvas 探测（QpXuZMO，反混淆
+// 铁证）：new Image()+src=data:1x1 透明 PNG → onload → ctx.drawImage →
+// getImageData 4 字节全 0 检查。此前 Image 未定义 → new throw → 探测
+// catch → fp 恒 'ERROR'。onload 以微任务近似 Chrome 的异步解码完成。
+window.Image = window.Image || function Image(w, h) {
+    this.width = w || 0;
+    this.height = h || 0;
+    this.onload = null;
+    this.onerror = null;
+    this.complete = false;
+    this.naturalWidth = 0;
+    this.naturalHeight = 0;
+    this.crossOrigin = null;
+    var __imgSelf = this;
+    var __imgSrc = '';
+    try {
+        Object.defineProperty(this, 'src', {
+            get: function() { return __imgSrc; },
+            set: function(v) {
+                __imgSrc = String(v);
+                __imgSelf.complete = true;
+                __imgSelf.naturalWidth = 1;
+                __imgSelf.naturalHeight = 1;
+                // Chrome：图像解码是异步任务——微任务近似（data: URL 即刻完成）
+                Promise.resolve().then(function() {
+                    if (typeof __imgSelf.onload === 'function') {
+                        try { __imgSelf.onload({ type: 'load', target: __imgSelf }); } catch (eIL) {}
+                    }
+                });
+            },
+            configurable: true, enumerable: true
+        });
+    } catch (eID) { this.src = ''; }
+};
+
 window.ImageBitmap = window.ImageBitmap || function ImageBitmap() { throw new TypeError('Illegal constructor'); };
 window.createImageBitmap = function(src) {
     var w = 0, h = 0;

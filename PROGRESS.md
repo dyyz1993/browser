@@ -1,3 +1,19 @@
+## M94.9 脚本化反混淆终局——hasModifiedCanvas 破译并修复（false ✓）
+- 解码器复现工程：Mjx3k2E 表 + rHYohf 单表 + 5 实例（各 92 字符字母表，
+  字符串感知括号平衡提取——字符串内 } 误截函数体是关键坑）；实参保
+  「已切片串」（wrapper 负责 slice）——双锚验证 Hi_Bodu(0x1e09,8)+'xt'
+  ='fillText'、(0x1f69,11)='toDataURL' 逐字命中
+- 全 body 反混淆 1303 处调用 → 编排器/加密链/探测注册全部明文可读
+- **hasModifiedCanvas 语义终局**（QpXuZMO 函数反混淆铁证）：
+  new Image()+src=1x1 透明 PNG → onload → drawImage → getImageData(0,0,1,1)
+  → 4 字节全 0 检查（Chrome=false）；Promise.race 超时 2500ms 兜底 ERROR
+- **根因**：window.Image 未定义 → new throw → catch → 恒 'ERROR'
+- **修复**：Image 构造器（data:URL src 设置→微任务触发 onload）
+- **fpo 验证：hasModifiedCanvas=false（与 Chrome 一致）**；fp diff 实质剩
+  cdp(伪影)/toSource(C 层)/canvasFingerprint(字节级)/rtcVideo/pluginOverflow
+  /etsl(动态耗时非形状)
+- 门禁 1024/0
+
 ## M94.8 方法 A 全结构铁证 + 编排器组装段无静态锚（裁决四请）
 - 方法 A（canvas 探测）= 一条巨型逗号表达式 return（rect×2/textBaseline/
   fillStyle×N/fillRect/fillText×2/arc 序列/fill('evenodd')/GgWjAt(toDataURL())）
