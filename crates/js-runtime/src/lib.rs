@@ -8,6 +8,8 @@
 
 pub mod bridge;
 pub mod canvas2d;
+#[cfg(feature = "v8")]
+pub mod engine_v8;
 // M71.1: boa 专属模块——仅在 --features boa 时编译（默认 quickjs）。
 #[cfg(feature = "boa")]
 mod compat_shim;

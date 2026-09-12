@@ -30,6 +30,9 @@ fontdue = "0.9"
 png = "0.17"
 # M62: innerHTML setter 解析 HTML 为真实 DOM 节点（docsify 渲染管线必需）。
 browser-html-parser = { path = "../html-parser" }
+# M95/ADR-0006: V8 引擎后端（可选，默认不编译——需 --features v8。
+# 与 Chrome 同源：etsl/toSourceError/canvasFingerprint 三差异一次消解。
+rusty_v8 = { version = "0.32", optional = true }
 
 [dev-dependencies]
 wiremock = "0.6"
@@ -43,3 +46,5 @@ default = ["quickjs"]
 quickjs = ["dep:rquickjs", "dep:rquickjs-core"]
 # M71.1: boa 引擎后端（备选，降为 optional。默认不编译，需 --features boa）。
 boa = ["dep:boa_engine"]
+# M95/ADR-0006: V8 引擎后端（可选，默认 QuickJS 不受影响）。
+v8 = ["dep:rusty_v8"]

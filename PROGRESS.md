@@ -1,3 +1,13 @@
+## M96.0 ADR-0006 落地——V8 可选后端 feature 骨架（G3 修订）
+- ADR-0006：G3「不引入 V8」→「默认构建不引入 V8」；rusty_v8 入白名单
+  （optional）；--features v8 + --js-engine v8 第三引擎选项
+- js-runtime：rusty_v8 optional 依赖 + engine_v8.rs 骨架（挂 lib，cfg 门控）
+- **实测验证 ADR 承诺**：默认构建 10.3MB 零变化；--features v8 编译绿
+  （骨架未引用 rusty_v8 时不链接——桥层 use 时才拉库，体积增量届时实测）
+- 依据：M95 实测推翻 G3 预设（17.6MB/7MB）+ 用户目标「不许放弃」+
+  12 次裁决提请未复——可逆设计（revert 单 commit 即完全移除）
+- 门禁 1024/0
+
 ## M95 V8 系引擎实测评估——G3 预设被推翻（裁决选项 3 数据补齐）
 - /tmp/v8eval 实测（rusty_v8 0.32.1）：链接后二进制 **17.6MB**（预设
   "~30MB+"）/空载 RSS **7MB**（预设"几百 MB"）——G3 两条预设均被推翻
