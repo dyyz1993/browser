@@ -1,3 +1,17 @@
+## M94.4 hasModifiedCanvas 完整因果链破译（vendor rquickjs-sys + eval dump）
+- ADR-0005：vendor rquickjs-sys，quickjs.c JS_EvalObject 加 eval 体 dump
+  （BROWSER_DUMP_EVAL 门控，默认零行为变化）——JS 层 wrap 不可达的根因：
+  裸 eval 在 QuickJS 是字节码级 OP_eval（编译期无条件特判）
+- dump 出 VM 完整明文体 841KB（Function 构造混淆 body）+ FSTACK 列号
+  直接映射 → 探测函数源码级定位
+- **hasModifiedCanvas 因果链闭环**：GgWjAt 防篡改壳（piFTVKR 校验函数链
+  toString 正则清洗结果）失败 → while(true){} 死循环 → 引擎 interrupt
+  打断 → VM catch(n){return A5sPdo} → ERROR；Chrome 校验通过故 false
+- 判定：跨引擎天花板（校验依赖 V8 级 toString 字节行为，QuickJS 无法
+  通过——与 toSourceError 同族）；#12 假说（toString 包装器自身）已用
+  BROWSER_NO_TS_WRAP 门控实验排除
+- 门禁见下；实弹终态不变（403）
+
 ## M94.2 栈行号定位 + 向量围猎（hasModifiedCanvas 仍未破，方法论沉淀）
 - FSTACK 引擎侧栈探针（fillText/toDataURL/getImageData，门控 trace）：
   页面级行号列号可靠——VM 探测代码栈帧定位到 eval 体内 3AP8yO@<input>:3:512333

@@ -2941,6 +2941,9 @@ try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3)
 // "function f() {\n    [native code]\n}"，Chrome 是 "function f() { [native code] }"
 // （单行）。VM 可哈希 native 函数的 toString 输出。
 (function() {
+    // M94.4 实验门控：VM 的 GgWjAt 防篡改壳校验 toString 原味性，包装器
+    // 存在本身可能触发死循环→interrupt→ERROR。BROWSER_NO_TS_WRAP=1 跳过安装。
+    if (typeof globalThis.__noTsWrap === 'boolean' && globalThis.__noTsWrap) return;
     var __origTS = Function.prototype.toString;
     // M94.2: canvas 方法族白名单——VM 的 hasModifiedCanvas 用
     // Function.prototype.toString.call(fn) 读真源码检测 hook（绕过 own

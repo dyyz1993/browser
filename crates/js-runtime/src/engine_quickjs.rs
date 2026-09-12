@@ -785,6 +785,9 @@ impl QuickJsEngine {
                     .map(|n| n.get())
                     .unwrap_or(8);
                 let _ = g.set("__hwCores", hw);
+                // M94.4-diag: 跳过 Function.prototype.toString 包装器安装
+                //（VM GgWjAt 防篡改壳校验实验开关）
+                let _ = g.set("__noTsWrap", std::env::var("BROWSER_NO_TS_WRAP").is_ok());
                 // M93.11-diag: crypto.subtle 方法访问追踪（shim 源码级，VM 不可见）
                 let _ = g.set("__ctrace", Function::new(ctx.clone(), |msg: String| {
                     if std::env::var("BROWSER_TRACE_FETCH").is_ok() {

@@ -59,3 +59,10 @@ strip = true
 [profile.dev]
 opt-level = 0
 debug = true
+
+# M94.4: rquickjs-sys 本地 vendor——quickjs.c 的 JS_EvalObject 加 eval 体
+# dump 钩子（BROWSER_DUMP_EVAL 门控）。VM 探测代码在运行时直接 eval 的
+# 明文体里（OP_eval 字节码级，JS 层 wrap 不可达）——破译 hasModifiedCanvas
+# 的唯一观测口。详见 docs/decisions/ADR-0005-js-eval-dump.md。
+[patch.crates-io]
+rquickjs-sys = { path = "vendor/rquickjs-sys" }
