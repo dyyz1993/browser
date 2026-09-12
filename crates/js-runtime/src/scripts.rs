@@ -2310,6 +2310,9 @@ fn pump_after_click_quickjs(engine: &mut crate::engine_quickjs::QuickJsEngine, m
 fn get_all_shim_js(_base_url: &Option<String>) -> Vec<(&'static str, String)> {
     vec![
         ("globals", QUICKJS_GLOBAL_SHIM.to_string()),
+        // M93.14: WebCrypto（P-256 ECDH + AES-256-GCM + HKDF）——依赖 globals 段的
+        // __sha256 与 __subtleTarget，须紧跟 globals 之后。
+        ("webcrypto", QUICKJS_WEBCRYPTO_SHIM.to_string()),
         ("element", QUICKJS_ELEMENT_SHIM.to_string()),
         ("document", QUICKJS_DOCUMENT_SHIM.to_string()),
         ("xhr", QUICKJS_XHR_SHIM.to_string()),
@@ -2657,14 +2660,18 @@ function __hwConcurrency() {
 
 // crypto.getRandomValues（uuid 库需要）+ M93.7 subtle.digest（cap.js PoW）
 // M93.11-diag: subtle 方法访问追踪（env 门控，shim 自身代码——VM 防篡改不可见）
+// M93.14: target 拆为具名 var __subtleTarget——webcrypto 段（QUICKJS_WEBCRYPTO_SHIM）
+// 在 install 期向 target 追加 generateKey/importKey/exportKey/deriveBits/deriveKey/
+// encrypt/decrypt（P-256 ECDH + AES-256-GCM + HKDF），Proxy 的兜底逻辑保持不变。
+var __subtleTarget = {
+    digest: function(algo, data) { return __subtleDigest(algo, data); }
+};
 window.crypto = {
     getRandomValues: function(arr) {
         for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
         return arr;
     },
-    subtle: new Proxy({
-        digest: function(algo, data) { return __subtleDigest(algo, data); }
-    }, {
+    subtle: new Proxy(__subtleTarget, {
         get: function(target, prop) {
             if (typeof prop !== 'string') return target[prop];
             if (typeof target[prop] !== 'undefined') return target[prop];
@@ -4965,6 +4972,740 @@ if (typeof HTMLScriptElement === 'undefined') {
 }
 
 undefined;
+"#;
+
+/// M93.14: 纯 JS WebCrypto 子集（G4 自研，零 Rust 依赖）——P-256 ECDH +
+/// AES-256-GCM + HMAC-SHA256/HKDF。挂载到 globals 段暴露的 __subtleTarget
+/// （window.crypto.subtle 的 Proxy target）。真实场景：xcancel 反自动化 VM 用
+/// ECDH P-256 派生共享密钥 → HKDF → AES-GCM 加密指纹上报。向量验证：
+/// RFC 5903 §8.1 / RFC 5114 A.6（ECDH）、NIST GCM App. B（AES-GCM）、
+/// RFC 5869 A.1/A.3（HKDF），另经 Python/OpenSSL 独立实现交叉核对
+/// （见 crates/cli/tests/integration_webcrypto.rs）。
+#[cfg(feature = "quickjs")]
+const QUICKJS_WEBCRYPTO_SHIM: &str = r#"
+// ============================================================
+// M93.14: 纯 JS WebCrypto 子集（G4 自研，零 Rust 依赖，二进制不涨）
+// - P-256（secp256r1/NIST）ECDH：Jacobian 坐标点运算 + 标量乘
+// - AES-GCM：AES 块加密（GF(2^8) 运行时生成 S-box，免手抄常量表）
+//   + GHASH（GF(2^128) 右移法）+ CTR + tag 校验
+// - HMAC-SHA256 / HKDF（RFC 5869）——复用 globals 段的 __sha256
+// 全部挂在 __subtleTarget（window.crypto.subtle 的 Proxy target，见 globals 段）。
+// 向量验证：RFC 5903 §8.1 / RFC 5114 A.6（ECDH）、NIST GCM Appendix B（AES-GCM）、
+// RFC 5869 A.1/A.3（HKDF），另经 Go/OpenSSL 交叉核对。
+// ============================================================
+(function() {
+    function err(name, msg) { var e = new Error(msg); e.name = name; return e; }
+    function toU8(data) {
+        if (data instanceof Uint8Array) return data;
+        if (data instanceof ArrayBuffer) return new Uint8Array(data);
+        if (data && data.buffer instanceof ArrayBuffer) {
+            return new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength);
+        }
+        throw err('TypeError', 'crypto.subtle: data must be BufferSource');
+    }
+    function hexToBytes(h) {
+        if (h.length % 2) h = '0' + h;
+        var out = new Uint8Array(h.length / 2);
+        for (var i = 0; i < out.length; i++) out[i] = parseInt(h.substr(2 * i, 2), 16);
+        return out;
+    }
+    function bytesToHex(b) {
+        var s = '';
+        for (var i = 0; i < b.length; i++) s += (b[i] & 255).toString(16).padStart(2, '0');
+        return s;
+    }
+    function biToBytes(bi, len) {
+        var out = new Uint8Array(len);
+        for (var i = len - 1; i >= 0; i--) { out[i] = Number(bi & 0xffn); bi >>= 8n; }
+        return out;
+    }
+    function bytesToBi(b) {
+        var v = 0n;
+        for (var i = 0; i < b.length; i++) v = (v << 8n) | BigInt(b[i] & 255);
+        return v;
+    }
+    function randBytes(n) {
+        var out = new Uint8Array(n);
+        if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
+            window.crypto.getRandomValues(out);
+        } else {
+            for (var i = 0; i < n; i++) out[i] = Math.floor(Math.random() * 256);
+        }
+        return out;
+    }
+    function concatBytes() {
+        var len = 0, i;
+        for (i = 0; i < arguments.length; i++) len += arguments[i].length;
+        var out = new Uint8Array(len), off = 0;
+        for (i = 0; i < arguments.length; i++) { out.set(arguments[i], off); off += arguments[i].length; }
+        return out;
+    }
+    function b64url(bytes) {
+        var s = '';
+        for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] & 255);
+        return (typeof window !== 'undefined' && window.btoa ? window.btoa : btoa)(s)
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function b64urlDecode(s) {
+        s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        var raw = (typeof window !== 'undefined' && window.atob ? window.atob : atob)(s);
+        var out = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+        return out;
+    }
+    function modPow(b, e, m) {
+        var r = 1n;
+        b %= m;
+        while (e > 0n) {
+            if (e & 1n) r = (r * b) % m;
+            b = (b * b) % m;
+            e >>= 1n;
+        }
+        return r;
+    }
+    function normName(algo) {
+        var n = (algo && algo.name) ? String(algo.name) : String(algo || '');
+        return n.replace(/-/g, '').toUpperCase();
+    }
+    function mkKey(type, extractable, algorithm, usages, material) {
+        return { type: type, extractable: !!extractable, algorithm: algorithm, usages: usages || [], __material: material };
+    }
+    function checkUsage(key, want) {
+        if (key && key.usages && key.usages.length && key.usages.indexOf(want) < 0) {
+            throw err('InvalidAccessError', 'crypto.subtle: key usages do not permit ' + want);
+        }
+    }
+
+    // ---------- P-256（secp256r1，RFC 5114 §2.6 域参数）----------
+    var Pp = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+    var Pa = 0xffffffff00000001000000000000000000000000fffffffffffffffffffffffcn;
+    var Pb = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+    var Pg = { x: 0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296n,
+               y: 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5n };
+    var Pn = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+
+    function modP(v) { var r = v % Pp; return r < 0n ? r + Pp : r; }
+    var INF = { x: 1n, y: 1n, z: 0n };
+
+    // Jacobian 倍点（a = -3 专用公式）
+    function ecDouble(pt) {
+        if (pt.z === 0n || pt.y === 0n) return INF;
+        var delta = modP(pt.z * pt.z);
+        var gamma = modP(pt.y * pt.y);
+        var beta = modP(pt.x * gamma);
+        var alpha = modP(3n * modP(pt.x - delta) * modP(pt.x + delta));
+        var x3 = modP(alpha * alpha - 8n * beta);
+        var ys = modP(pt.y + pt.z);
+        var z3 = modP(ys * ys - gamma - delta);
+        var y3 = modP(alpha * (4n * beta - x3) - 8n * modP(gamma * gamma));
+        return { x: x3, y: y3, z: z3 };
+    }
+    // Jacobian 一般加法（EFD add-1998-cmo；u1==u2 时转倍点/无穷远）
+    function ecAdd(p1, p2) {
+        if (p1.z === 0n) return p2;
+        if (p2.z === 0n) return p1;
+        var z1z1 = modP(p1.z * p1.z), z2z2 = modP(p2.z * p2.z);
+        var u1 = modP(p1.x * z2z2), u2 = modP(p2.x * z1z1);
+        var s1 = modP(p1.y * p2.z * z2z2), s2 = modP(p2.y * p1.z * z1z1);
+        if (u1 === u2) return (s1 === s2) ? ecDouble(p1) : INF;
+        var h = modP(u2 - u1);
+        var i = modP(4n * h * h);           // I = (2H)^2
+        var j = modP(h * i);                // J = H·I
+        var r = modP(2n * modP(s2 - s1));   // r = 2(S2−S1)
+        var v = modP(u1 * i);               // V = U1·I
+        var x3 = modP(r * r - j - 2n * v);
+        var y3 = modP(r * (v - x3) - 2n * modP(s1 * j));
+        var z3 = modP(2n * p1.z * p2.z * h);
+        return { x: x3, y: y3, z: z3 };
+    }
+    // 标量乘：LSB-first double-and-add（数据量小、恒定时间非目标——爬虫场景）
+    function ecMul(k, pt) {
+        var r = INF, q = { x: pt.x, y: pt.y, z: pt.z === undefined ? 1n : pt.z };
+        while (k > 0n) {
+            if (k & 1n) r = ecAdd(r, q);
+            q = ecDouble(q);
+            k >>= 1n;
+        }
+        return r;
+    }
+    function ecAffine(pt) {
+        if (pt.z === 0n) return null;
+        var zi = modPow(pt.z, Pp - 2n, Pp);
+        var z2 = modP(zi * zi);
+        return { x: modP(pt.x * z2), y: modP(modP(pt.y * z2) * zi) };
+    }
+    function onCurve(x, y) {
+        if (x < 0n || x >= Pp || y < 0n || y >= Pp) return false;
+        return modP(y * y) === modP((x * x + Pa) * x + Pb);
+    }
+    function randomScalar() {
+        for (var guard = 0; guard < 64; guard++) {
+            var k = bytesToBi(randBytes(32));
+            if (k >= 1n && k < Pn) return k;
+        }
+        return 1n; // 不可达（拒绝概率 2^-32 级），防御性兜底
+    }
+    function ecPubToRaw(m) {
+        var out = new Uint8Array(65);
+        out[0] = 4;
+        out.set(biToBytes(m.x, 32), 1);
+        out.set(biToBytes(m.y, 32), 33);
+        return out;
+    }
+    function rawToEcPub(raw) {
+        if (raw.length !== 65 || raw[0] !== 4) {
+            throw err('DataError', 'crypto.subtle: EC raw public key must be 65-byte uncompressed (0x04||X||Y)');
+        }
+        var x = bytesToBi(raw.subarray(1, 33)), y = bytesToBi(raw.subarray(33, 65));
+        if (!onCurve(x, y)) throw err('DataError', 'crypto.subtle: point is not on the P-256 curve');
+        return { x: x, y: y };
+    }
+
+    // ---------- AES（运行时生成 S-box/逆表 + 密钥扩展 + 块加密）----------
+    var AES_SBOX = (function() {
+        function xt(a) { return ((a << 1) ^ ((a & 0x80) ? 0x1b : 0)) & 0xff; }
+        var exp = new Array(256), log = new Array(256);
+        exp[0] = 1;
+        // 生成元 3（2 的阶只有 51，不能当生成元——exp/log 表会撞环）
+        for (var i = 1; i < 256; i++) { exp[i] = exp[i - 1] ^ xt(exp[i - 1]); log[exp[i]] = i; }
+        var s = new Uint8Array(256), inv = new Uint8Array(256);
+        for (var i = 0; i < 256; i++) {
+            var b = i ? exp[255 - log[i]] : 0;
+            var t = b ^ ((b << 1 | b >>> 7) & 255) ^ ((b << 2 | b >>> 6) & 255)
+                      ^ ((b << 3 | b >>> 5) & 255) ^ ((b << 4 | b >>> 4) & 255) ^ 0x63;
+            s[i] = t & 255;
+            inv[t & 255] = i;
+        }
+        return { s: s };
+    })();
+    function xt2(a) { return ((a << 1) ^ ((a & 0x80) ? 0x1b : 0)) & 0xff; }
+
+    function aesKeyExpansion(key) {
+        var nk = key.length >> 2, nr = nk + 6;
+        if (nk !== 4 && nk !== 6 && nk !== 8) {
+            throw err('DataError', 'crypto.subtle: AES key length must be 128/192/256 bits');
+        }
+        var w = [];
+        for (var i = 0; i < nk; i++) w.push([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]]);
+        var rcon = 1;
+        for (var i = nk; i < 4 * (nr + 1); i++) {
+            var t = w[i - 1].slice();
+            if (i % nk === 0) {
+                t = [AES_SBOX.s[t[1]], AES_SBOX.s[t[2]], AES_SBOX.s[t[3]], AES_SBOX.s[t[0]]];
+                t[0] ^= rcon;
+                rcon = xt2(rcon);
+            } else if (nk > 6 && i % nk === 4) {
+                for (var j = 0; j < 4; j++) t[j] = AES_SBOX.s[t[j]];
+            }
+            var p = w[i - nk];
+            w.push([t[0] ^ p[0], t[1] ^ p[1], t[2] ^ p[2], t[3] ^ p[3]]);
+        }
+        return { w: w, nr: nr };
+    }
+    function aesAddRoundKey(s, w, rd) {
+        for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++) s[c][r] ^= w[rd * 4 + c][r];
+    }
+    function aesSubBytes(s) {
+        for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++) s[c][r] = AES_SBOX.s[s[c][r]];
+    }
+    function aesShiftRows(s) {
+        for (var r = 1; r < 4; r++) {
+            var row = [s[0][r], s[1][r], s[2][r], s[3][r]];
+            for (var c = 0; c < 4; c++) s[c][r] = row[(c + r) % 4];
+        }
+    }
+    function aesMixColumns(s) {
+        for (var c = 0; c < 4; c++) {
+            var a = s[c], t = a[0] ^ a[1] ^ a[2] ^ a[3];
+            var a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+            a[0] = a0 ^ t ^ xt2(a0 ^ a1);
+            a[1] = a1 ^ t ^ xt2(a1 ^ a2);
+            a[2] = a2 ^ t ^ xt2(a2 ^ a3);
+            a[3] = a3 ^ t ^ xt2(a3 ^ a0);
+        }
+    }
+    function aesEncryptBlock(ctx, input) {
+        var s = [], c, r;
+        for (c = 0; c < 4; c++) s.push([input[4 * c], input[4 * c + 1], input[4 * c + 2], input[4 * c + 3]]);
+        aesAddRoundKey(s, ctx.w, 0);
+        for (var round = 1; round < ctx.nr; round++) {
+            aesSubBytes(s);
+            aesShiftRows(s);
+            aesMixColumns(s);
+            aesAddRoundKey(s, ctx.w, round);
+        }
+        aesSubBytes(s);
+        aesShiftRows(s);
+        aesAddRoundKey(s, ctx.w, ctx.nr);
+        var out = new Uint8Array(16);
+        for (c = 0; c < 4; c++) for (r = 0; r < 4; r++) out[4 * c + r] = s[c][r];
+        return out;
+    }
+
+    // ---------- GHASH：GF(2^128) 乘法（右移法，NIST SP 800-38D）----------
+    function bytesToWords(b) {
+        var w = [];
+        for (var i = 0; i < b.length; i += 4) {
+            w.push((((b[i] || 0) << 24) | ((b[i + 1] || 0) << 16) | ((b[i + 2] || 0) << 8) | (b[i + 3] || 0)) >>> 0);
+        }
+        return w;
+    }
+    function wordsToBytes(w) {
+        var out = new Uint8Array(4 * w.length);
+        for (var i = 0; i < w.length; i++) {
+            out[4 * i] = (w[i] >>> 24) & 255;
+            out[4 * i + 1] = (w[i] >>> 16) & 255;
+            out[4 * i + 2] = (w[i] >>> 8) & 255;
+            out[4 * i + 3] = w[i] & 255;
+        }
+        return out;
+    }
+    function xorWords(a, b) { return [a[0] ^ b[0], a[1] ^ b[1], a[2] ^ b[2], a[3] ^ b[3]]; }
+    function gfMul128(x, y) {
+        var z = [0, 0, 0, 0], v = y.slice();
+        for (var i = 0; i < 128; i++) {
+            if ((x[i >> 5] >>> (31 - (i & 31))) & 1) {
+                z = xorWords(z, v);
+            }
+            var lsb = v[3] & 1;
+            v[3] = (v[3] >>> 1) | ((v[2] & 1) << 31);
+            v[2] = (v[2] >>> 1) | ((v[1] & 1) << 31);
+            v[1] = (v[1] >>> 1) | ((v[0] & 1) << 31);
+            v[0] = v[0] >>> 1;
+            if (lsb) v[0] ^= 0xe1000000; // R = 0xE1 || 0^120
+        }
+        return z;
+    }
+    function ghashBlocks(h, parts) {
+        var y = [0, 0, 0, 0];
+        for (var pi = 0; pi < parts.length; pi++) {
+            var b = parts[pi];
+            var padded = (b.length % 16 === 0) ? b : concatBytes(b, new Uint8Array(16 - (b.length % 16)));
+            for (var off = 0; off < padded.length; off += 16) {
+                y = gfMul128(xorWords(y, bytesToWords(padded.subarray(off, off + 16))), h);
+            }
+        }
+        return y;
+    }
+    // J0：96-bit IV 直接拼接；其余长度 GHASH_H(IV||pad||0^64||len(IV)_64)
+    function gcmJ0(h, iv) {
+        if (iv.length === 12) {
+            var w = bytesToWords(iv);
+            return [w[0], w[1], w[2], 1];
+        }
+        if (iv.length < 1) throw err('DataError', 'crypto.subtle: AES-GCM iv must not be empty');
+        var lenBlock = new Uint8Array(16);
+        var bits = iv.length * 8;
+        lenBlock[12] = (bits >>> 24) & 255;
+        lenBlock[13] = (bits >>> 16) & 255;
+        lenBlock[14] = (bits >>> 8) & 255;
+        lenBlock[15] = bits & 255;
+        return ghashBlocks(h, [iv, lenBlock]);
+    }
+    function gcmCtx(keyRaw, iv) {
+        var ctx = aesKeyExpansion(keyRaw);
+        var h = bytesToWords(aesEncryptBlock(ctx, new Uint8Array(16)));
+        return { ctx: ctx, h: h, j0: gcmJ0(h, iv) };
+    }
+    function gcmKeystream(g, data) {
+        var out = new Uint8Array(data.length);
+        var cb = g.j0.slice();
+        for (var off = 0; off < data.length; off += 16) {
+            cb[3] = (cb[3] + 1) >>> 0; // inc32
+            var ks = aesEncryptBlock(g.ctx, wordsToBytes(cb));
+            var n = Math.min(16, data.length - off);
+            for (var i = 0; i < n; i++) out[off + i] = data[off + i] ^ ks[i];
+        }
+        return out;
+    }
+    function gcmTag(g, aad, ct, tagLenBytes) {
+        // GHASH 输入 = A||pad || C||pad || [len(A)]_64 || [len(C)]_64（SP 800-38D 7.1）
+        var lenBlock = new Uint8Array(16);
+        var aBits = aad.length * 8, cBits = ct.length * 8;
+        lenBlock[4] = (aBits >>> 24) & 255;
+        lenBlock[5] = (aBits >>> 16) & 255;
+        lenBlock[6] = (aBits >>> 8) & 255;
+        lenBlock[7] = aBits & 255;
+        lenBlock[12] = (cBits >>> 24) & 255;
+        lenBlock[13] = (cBits >>> 16) & 255;
+        lenBlock[14] = (cBits >>> 8) & 255;
+        lenBlock[15] = cBits & 255;
+        var s = ghashBlocks(g.h, [aad, ct, lenBlock]);
+        var ekJ0 = bytesToWords(aesEncryptBlock(g.ctx, wordsToBytes(g.j0)));
+        var t = xorWords(s, ekJ0);
+        return wordsToBytes(t).subarray(0, tagLenBytes);
+    }
+    function tagEqual(a, b) {
+        if (a.length !== b.length) return false;
+        var d = 0;
+        for (var i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+        return d === 0;
+    }
+
+    // ---------- HMAC-SHA256 / HKDF（RFC 5869）----------
+    function hmacSha256(key, msg) {
+        if (key.length > 64) key = __sha256(key);
+        var k = new Uint8Array(64);
+        k.set(key);
+        var ipad = new Uint8Array(64 + msg.length);
+        var opad = new Uint8Array(64 + 32);
+        for (var i = 0; i < 64; i++) { ipad[i] = k[i] ^ 0x36; opad[i] = k[i] ^ 0x5c; }
+        ipad.set(msg, 64);
+        opad.set(__sha256(ipad), 64);
+        return __sha256(opad);
+    }
+    function hkdfExtract(salt, ikm) { return hmacSha256(salt, ikm); }
+    function hkdfExpand(prk, info, L) {
+        var t = new Uint8Array(0), okm = new Uint8Array(0), i = 1;
+        while (okm.length < L) {
+            t = hmacSha256(prk, concatBytes(t, info, new Uint8Array([i])));
+            okm = concatBytes(okm, t);
+            i++;
+            if (i > 255) throw err('OperationError', 'crypto.subtle: HKDF-Expand length too large');
+        }
+        return okm.subarray(0, L);
+    }
+
+    // ---------- crypto.subtle 方法挂载（Proxy target 上）----------
+    function trace(method, detail) {
+        if (typeof __ctrace === 'function') {
+            try { __ctrace('subtle.' + method + ' ' + (detail || '')); } catch (eT) {}
+        }
+    }
+    var TAG_LENS = [32, 64, 96, 104, 112, 120, 128];
+
+    function isEcdh(alg) { return alg && alg.name && normName(alg) === 'ECDH'; }
+    function isAesGcm(alg) { var n = normName(alg); return n === 'AESGCM' || n === 'AES'; }
+    function aesAlgoName(len) { return { name: 'AES-GCM', length: len }; }
+
+    __subtleTarget.generateKey = function(algo, extractable, usages) {
+        return new Promise(function(resolve, reject) {
+            try {
+                var name = normName(algo);
+                if (name === 'ECDH') {
+                    trace('generateKey ECDH');
+                    if (!algo.namedCurve || String(algo.namedCurve).toUpperCase() !== 'P-256') {
+                        throw err('NotSupportedError', 'crypto.subtle.generateKey: only namedCurve P-256 is supported');
+                    }
+                    for (var i = 0; i < (usages || []).length; i++) {
+                        if (usages[i] !== 'deriveBits' && usages[i] !== 'deriveKey') {
+                            throw err('DataError', 'crypto.subtle.generateKey: invalid ECDH usage ' + usages[i]);
+                        }
+                    }
+                    if (usages && !usages.length) throw err('SyntaxError', 'crypto.subtle.generateKey: usages cannot be empty');
+                    var d = randomScalar();
+                    var pub = ecAffine(ecMul(d, Pg));
+                    resolve({
+                        publicKey: mkKey('public', true, { name: 'ECDH', namedCurve: 'P-256' }, [], { x: pub.x, y: pub.y }),
+                        privateKey: mkKey('private', extractable, { name: 'ECDH', namedCurve: 'P-256' }, usages || [], { d: d })
+                    });
+                    return;
+                }
+                if (name === 'AESGCM' || name === 'AES') {
+                    var len = algo && algo.length ? algo.length : 256;
+                    if (len !== 128 && len !== 192 && len !== 256) {
+                        throw err('DataError', 'crypto.subtle.generateKey: AES length must be 128/192/256');
+                    }
+                    trace('generateKey AES-' + len);
+                    resolve(mkKey('secret', extractable, aesAlgoName(len), usages || [], { raw: randBytes(len >> 3) }));
+                    return;
+                }
+                throw err('NotSupportedError', "crypto.subtle.generateKey: unsupported algorithm '" + name + "'");
+            } catch (e) { reject(e); }
+        });
+    };
+
+    __subtleTarget.exportKey = function(format, key) {
+        return new Promise(function(resolve, reject) {
+            try {
+                format = String(format).toLowerCase();
+                var alg = (key && key.algorithm) ? normName(key.algorithm) : '';
+                var m = key ? key.__material : null;
+                if (!m) throw err('InvalidAccessError', 'crypto.subtle.exportKey: not a CryptoKey');
+                if (format === 'raw') {
+                    if (alg === 'ECDH') {
+                        if (key.type !== 'public') {
+                            throw err('InvalidAccessError', 'crypto.subtle.exportKey(raw): only EC public keys are exportable (use jwk/pkcs8 for private)');
+                        }
+                        trace('exportKey ECDH raw');
+                        resolve(ecPubToRaw(m).buffer);
+                        return;
+                    }
+                    if (alg === 'AESGCM' || alg === 'AES') {
+                        trace('exportKey AES raw');
+                        resolve(m.raw.slice().buffer);
+                        return;
+                    }
+                } else if (format === 'jwk') {
+                    if (alg === 'ECDH') {
+                        trace('exportKey ECDH jwk');
+                        var jwk = { kty: 'EC', crv: 'P-256', key_ops: key.usages.slice(), ext: !!key.extractable };
+                        if (key.type === 'public') {
+                            jwk.x = b64url(biToBytes(m.x, 32));
+                            jwk.y = b64url(biToBytes(m.y, 32));
+                        } else {
+                            var pub = ecAffine(ecMul(m.d, Pg));
+                            jwk.x = b64url(biToBytes(pub.x, 32));
+                            jwk.y = b64url(biToBytes(pub.y, 32));
+                            jwk.d = b64url(biToBytes(m.d, 32));
+                        }
+                        resolve(jwk);
+                        return;
+                    }
+                    if (alg === 'AESGCM' || alg === 'AES') {
+                        trace('exportKey AES jwk');
+                        resolve({
+                            kty: 'oct', k: b64url(m.raw),
+                            key_ops: key.usages.slice(), ext: !!key.extractable
+                        });
+                        return;
+                    }
+                }
+                throw err('NotSupportedError', "crypto.subtle.exportKey: format '" + format + "' not supported for " + alg);
+            } catch (e) { reject(e); }
+        });
+    };
+
+    __subtleTarget.importKey = function(format, keyData, algo, extractable, usages) {
+        return new Promise(function(resolve, reject) {
+            try {
+                format = String(format).toLowerCase();
+                var name = normName(algo);
+                if (name === 'ECDH') {
+                    if (!algo.namedCurve || String(algo.namedCurve).toUpperCase() !== 'P-256') {
+                        throw err('NotSupportedError', 'crypto.subtle.importKey: only namedCurve P-256 is supported');
+                    }
+                    if (format === 'raw') {
+                        var pub = rawToEcPub(toU8(keyData));
+                        if (usages && usages.length) {
+                            throw err('DataError', 'crypto.subtle.importKey: EC public key usages must be empty');
+                        }
+                        trace('importKey ECDH raw public');
+                        resolve(mkKey('public', extractable, { name: 'ECDH', namedCurve: 'P-256' }, [], pub));
+                        return;
+                    }
+                    if (format === 'jwk') {
+                        var jwk = keyData;
+                        if (!jwk || jwk.kty !== 'EC' || String(jwk.crv || '').toUpperCase() !== 'P-256') {
+                            throw err('DataError', 'crypto.subtle.importKey: JWK must be {kty:EC, crv:P-256}');
+                        }
+                        if (jwk.d) {
+                            for (var i = 0; i < (usages || []).length; i++) {
+                                if (usages[i] !== 'deriveBits' && usages[i] !== 'deriveKey') {
+                                    throw err('DataError', 'crypto.subtle.importKey: invalid ECDH private usage ' + usages[i]);
+                                }
+                            }
+                            var d = bytesToBi(b64urlDecode(jwk.d));
+                            if (d < 1n || d >= Pn) throw err('DataError', 'crypto.subtle.importKey: JWK d out of range');
+                            trace('importKey ECDH jwk private');
+                            resolve(mkKey('private', extractable, { name: 'ECDH', namedCurve: 'P-256' }, usages || [], { d: d }));
+                            return;
+                        }
+                        if (jwk.x && jwk.y) {
+                            var x = bytesToBi(b64urlDecode(jwk.x)), y = bytesToBi(b64urlDecode(jwk.y));
+                            if (!onCurve(x, y)) throw err('DataError', 'crypto.subtle.importKey: JWK point is not on the P-256 curve');
+                            if (usages && usages.length) {
+                                throw err('DataError', 'crypto.subtle.importKey: EC public key usages must be empty');
+                            }
+                            trace('importKey ECDH jwk public');
+                            resolve(mkKey('public', extractable, { name: 'ECDH', namedCurve: 'P-256' }, [], { x: x, y: y }));
+                            return;
+                        }
+                        throw err('DataError', 'crypto.subtle.importKey: EC JWK must contain d (private) or x/y (public)');
+                    }
+                    throw err('NotSupportedError', "crypto.subtle.importKey: format '" + format + "' not supported for ECDH");
+                }
+                if (name === 'AESGCM' || name === 'AES') {
+                    var raw;
+                    if (format === 'raw') raw = toU8(keyData).slice();
+                    else if (format === 'jwk') {
+                        if (!keyData || keyData.kty !== 'oct' || !keyData.k) {
+                            throw err('DataError', 'crypto.subtle.importKey: AES JWK must be {kty:oct, k:base64url}');
+                        }
+                        raw = b64urlDecode(keyData.k);
+                    } else {
+                        throw err('NotSupportedError', "crypto.subtle.importKey: format '" + format + "' not supported for AES-GCM");
+                    }
+                    var len = raw.length * 8;
+                    if (len !== 128 && len !== 192 && len !== 256) {
+                        throw err('DataError', 'crypto.subtle.importKey: AES key length must be 128/192/256 bits');
+                    }
+                    for (var j = 0; j < (usages || []).length; j++) {
+                        if (usages[j] !== 'encrypt' && usages[j] !== 'decrypt') {
+                            throw err('DataError', 'crypto.subtle.importKey: invalid AES-GCM usage ' + usages[j]);
+                        }
+                    }
+                    if (usages && !usages.length) {
+                        throw err('SyntaxError', 'crypto.subtle.importKey: usages cannot be empty for secret keys');
+                    }
+                    trace('importKey AES-' + len);
+                    resolve(mkKey('secret', extractable, aesAlgoName(len), usages || [], { raw: raw }));
+                    return;
+                }
+                if (name === 'HKDF') {
+                    if (format !== 'raw') {
+                        throw err('NotSupportedError', "crypto.subtle.importKey: format '" + format + "' not supported for HKDF");
+                    }
+                    for (var k = 0; k < (usages || []).length; k++) {
+                        if (usages[k] !== 'deriveBits' && usages[k] !== 'deriveKey') {
+                            throw err('DataError', 'crypto.subtle.importKey: invalid HKDF usage ' + usages[k]);
+                        }
+                    }
+                    if (usages && !usages.length) {
+                        throw err('SyntaxError', 'crypto.subtle.importKey: usages cannot be empty for HKDF keys');
+                    }
+                    trace('importKey HKDF raw ' + toU8(keyData).length + 'B');
+                    // 标准语义：keyData 本身是 IKM 材料；salt 在 deriveKey 的参数里
+                    resolve(mkKey('secret', false, { name: 'HKDF' }, usages || [], { ikm: toU8(keyData).slice() }));
+                    return;
+                }
+                throw err('NotSupportedError', "crypto.subtle.importKey: unsupported algorithm '" + name + "'");
+            } catch (e) { reject(e); }
+        });
+    };
+
+    function deriveEcdhBits(algo, baseKey, length) {
+        if (!baseKey || baseKey.type !== 'private' || !isEcdh(baseKey.algorithm)) {
+            throw err('InvalidAccessError', 'crypto.subtle.deriveBits: baseKey must be an ECDH private key');
+        }
+        checkUsage(baseKey, 'deriveBits');
+        var peer = algo && algo.public;
+        if (!peer || !peer.__material || (peer.type !== 'public')) {
+            throw err('InvalidAccessError', 'crypto.subtle.deriveBits: algo.public must be an ECDH public key');
+        }
+        var shared = ecAffine(ecMul(baseKey.__material.d, peer.__material));
+        if (!shared) throw err('OperationError', 'crypto.subtle.deriveBits: shared point at infinity');
+        if (length % 8 !== 0) throw err('DataError', 'crypto.subtle.deriveBits: length must be a multiple of 8');
+        if (length > 256) throw err('DataError', 'crypto.subtle.deriveBits: ECDH P-256 yields at most 256 bits');
+        return biToBytes(shared.x, 32).subarray(0, length >> 3);
+    }
+
+    __subtleTarget.deriveBits = function(algo, baseKey, length) {
+        return new Promise(function(resolve, reject) {
+            try {
+                var name = normName(algo);
+                if (name === 'HKDF') checkUsage(baseKey, 'deriveBits');
+                if (name === 'ECDH') {
+                    trace('deriveBits ECDH ' + length);
+                    resolve(deriveEcdhBits(algo, baseKey, length).buffer);
+                    return;
+                }
+                if (name === 'HKDF') {
+                    trace('deriveBits HKDF ' + length);
+                    var salt = algo.salt ? toU8(algo.salt) : new Uint8Array(0);
+                    var info = algo.info ? toU8(algo.info) : new Uint8Array(0);
+                    var prk = hkdfExtract(salt, baseKey.__material.ikm);
+                    resolve(hkdfExpand(prk, info, length >> 3).slice().buffer);
+                    return;
+                }
+                throw err('NotSupportedError', "crypto.subtle.deriveBits: unsupported algorithm '" + name + "'");
+            } catch (e) { reject(e); }
+        });
+    };
+
+    __subtleTarget.deriveKey = function(algo, baseKey, derivedAlgo, extractable, usages) {
+        return new Promise(function(resolve, reject) {
+            try {
+                var name = normName(algo);
+                var dname = normName(derivedAlgo);
+                if (name === 'ECDH') checkUsage(baseKey, 'deriveKey');
+                if (name === 'HKDF') checkUsage(baseKey, 'deriveKey');
+                var bits;
+                if (name === 'ECDH') {
+                    trace('deriveKey ECDH -> ' + dname);
+                    bits = deriveEcdhBits(algo, baseKey, 256);
+                } else if (name === 'HKDF') {
+                    trace('deriveKey HKDF -> ' + dname);
+                    var salt = algo.salt ? toU8(algo.salt) : new Uint8Array(0);
+                    var info = algo.info ? toU8(algo.info) : new Uint8Array(0);
+                    var prk = hkdfExtract(salt, baseKey.__material.ikm);
+                    var len = (derivedAlgo && derivedAlgo.length) ? derivedAlgo.length : 256;
+                    if (len !== 128 && len !== 192 && len !== 256) {
+                        throw err('DataError', 'crypto.subtle.deriveKey: AES length must be 128/192/256');
+                    }
+                    bits = hkdfExpand(prk, info, len >> 3);
+                } else {
+                    throw err('NotSupportedError', "crypto.subtle.deriveKey: unsupported algorithm '" + name + "'");
+                }
+                if (dname === 'AESGCM' || dname === 'AES') {
+                    resolve(mkKey('secret', extractable, aesAlgoName(bits.length * 8), usages || [], { raw: bits.slice() }));
+                    return;
+                }
+                if (name === 'HKDF' && dname === 'HKDF') {
+                    resolve(mkKey('secret', false, { name: 'HKDF' }, usages || [], { ikm: bits.slice() }));
+                    return;
+                }
+                throw err('NotSupportedError', "crypto.subtle.deriveKey: unsupported derived algorithm '" + dname + "'");
+            } catch (e) { reject(e); }
+        });
+    };
+
+    function gcmParams(algo) {
+        if (!algo || !algo.iv) throw err('TypeError', 'crypto.subtle: AES-GCM requires iv');
+        var iv = toU8(algo.iv);
+        if (iv.length < 1) throw err('DataError', 'crypto.subtle: AES-GCM iv must not be empty');
+        var aad = algo.additionalData ? toU8(algo.additionalData) : new Uint8Array(0);
+        var tagLen = (algo.tagLength === undefined || algo.tagLength === null) ? 128 : algo.tagLength;
+        if (TAG_LENS.indexOf(tagLen) < 0) {
+            throw err('OperationError', 'crypto.subtle: AES-GCM tagLength ' + tagLen + ' not supported');
+        }
+        return { iv: iv, aad: aad, tagLenBytes: tagLen >> 3 };
+    }
+
+    __subtleTarget.encrypt = function(algo, key, data) {
+        return new Promise(function(resolve, reject) {
+            try {
+                var name = normName(algo);
+                if (name === 'AESGCM' || name === 'AES') {
+                    checkUsage(key, 'encrypt');
+                    if (!key || key.type !== 'secret' || !key.__material || !key.__material.raw) {
+                        throw err('InvalidAccessError', 'crypto.subtle.encrypt: key must be an AES secret key');
+                    }
+                    var p = gcmParams(algo);
+                    var g = gcmCtx(key.__material.raw, p.iv);
+                    var plain = toU8(data);
+                    var ct = gcmKeystream(g, plain);
+                    var tag = gcmTag(g, p.aad, ct, p.tagLenBytes);
+                    trace('encrypt AES-GCM ' + plain.length + 'B iv=' + p.iv.length + 'B');
+                    resolve(concatBytes(ct, tag).buffer);
+                    return;
+                }
+                throw err('NotSupportedError', "crypto.subtle.encrypt: unsupported algorithm '" + name + "'");
+            } catch (e) { reject(e); }
+        });
+    };
+
+    __subtleTarget.decrypt = function(algo, key, data) {
+        return new Promise(function(resolve, reject) {
+            try {
+                var name = normName(algo);
+                if (name === 'AESGCM' || name === 'AES') {
+                    checkUsage(key, 'decrypt');
+                    if (!key || key.type !== 'secret' || !key.__material || !key.__material.raw) {
+                        throw err('InvalidAccessError', 'crypto.subtle.decrypt: key must be an AES secret key');
+                    }
+                    var p = gcmParams(algo);
+                    var all = toU8(data);
+                    if (all.length < p.tagLenBytes) {
+                        throw err('OperationError', 'crypto.subtle.decrypt: data shorter than tag');
+                    }
+                    var g = gcmCtx(key.__material.raw, p.iv);
+                    var ct = all.subarray(0, all.length - p.tagLenBytes);
+                    var tag = all.subarray(all.length - p.tagLenBytes);
+                    if (!tagEqual(gcmTag(g, p.aad, ct, p.tagLenBytes), tag)) {
+                        throw err('OperationError', 'crypto.subtle.decrypt: authentication tag mismatch');
+                    }
+                    var pt = gcmKeystream(g, ct);
+                    trace('decrypt AES-GCM ' + pt.length + 'B');
+                    resolve(pt.slice().buffer);
+                    return;
+                }
+                throw err('NotSupportedError', "crypto.subtle.decrypt: unsupported algorithm '" + name + "'");
+            } catch (e) { reject(e); }
+        });
+    };
+})();
 "#;
 
 /// M66-B: QuickJS Element shim（和 boa element_shim 的核心逻辑相同）。

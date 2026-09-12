@@ -11,9 +11,9 @@
 
 | 指标 | 值 |
 |------|-----|
-| HEAD | **M93.6**（M93.4/5/6 worktree 智能体并行合并：导航 storage 持久化 / 资产缓存去重 / cookie 铁证测试） |
-| 总 commits | ~268 |
-| 测试 | 1010 pass, 0 failed, 0 clippy warnings |
+| HEAD | **M93.14**（纯 JS WebCrypto 子集：P-256 ECDH + AES-256-GCM + HKDF，NIST 向量验证） |
+| 总 commits | ~269 |
+| 测试 | 1019 pass, 0 failed, 0 clippy warnings |
 | Crates | 16 |
 | CLI 子命令 | 10 + `--js-engine boa\|quickjs`（含 `serve` HTTP API 服务） |
 | JS 引擎 | **QuickJS（默认，9.4M）**；boa 改为 `--features boa` 可选（17M，纯 CSR 站天花板，保留备用） |
@@ -30,6 +30,54 @@
 ---
 
 ## 最近变更（倒序）
+
+### M93.14 —— 纯 JS WebCrypto 子集：P-256 ECDH + AES-256-GCM + HKDF（NIST 向量验证）
+
+**背景**：xcancel 反自动化 VM 的指纹上报用 WebCrypto 全链路加密：
+`generateKey({ECDH,P-256})` → `exportKey/importKey('raw')` → `deriveBits` →
+`importKey(HKDF)` → `deriveKey({HKDF,SHA-256,salt}) → AES-GCM` → `encrypt`。
+此前 subtle 只有 digest（M93.7），其余方法走 Proxy 兜底"记参数后抛"。
+
+**改动**（`js-runtime/src/scripts.rs`，新增 `QUICKJS_WEBCRYPTO_SHIM` 常量，
+纯 JS 零 Rust 依赖——G4 自研，二进制不涨；挂在 globals 段暴露的
+`__subtleTarget`（subtle Proxy target），install 期追加方法，Proxy 兜底不变）：
+1. **P-256（secp256r1）**：Jacobian 坐标点运算（a=-3 专用倍点公式 +
+   EFD add-1998-cmo 一般加法）+ LSB double-and-add 标量乘 + Fermat 模逆；
+   密钥对生成（crypto.getRandomValues 拒绝采样 ∈ [1,n)）；ECDH 取共享点
+   x 坐标 32B；公钥 65B 未压缩序列化 + 曲线上点校验（非法点拒导入）。
+2. **AES-GCM**：S-box/exp-log 表运行时生成（**生成元必须用 3**——2 的阶
+   只有 51，用它 exp/log 表撞环，曾致全表错）；AES-128/192/256 密钥扩展
+   + 块加密；GHASH GF(2^128) 右移法（R=0xE1‖0¹²⁰）；J0 双分支（96-bit IV
+   直拼 / 其余 GHASH_H(IV‖pad‖len)）；tag = E_K(J0)⊕GHASH(A‖pad‖C‖pad‖
+   **[len(A)]₆₄‖[len(C)]₆₄**——len 块是 64 位大端，曾放错 4 字节）；解密
+   tag 恒时比较，错抛 OperationError。
+3. **HMAC-SHA256/HKDF（RFC 5869）**：复用 globals 的 `__sha256`
+   （ipad/opad 64B）；importKey(HKDF) 存 keyData 为 IKM，deriveBits/
+   deriveKey 用 params.salt 做 extract（标准语义，无特殊适配）。
+4. **subtle API**：generateKey（ECDH→CryptoKeyPair / AES-GCM）/ exportKey
+   （raw 65B、jwk）/ importKey（raw/jwk，EC 公私钥 + AES + HKDF）/
+   deriveBits / deriveKey（HKDF→AES-GCM，ECDH→AES）/ encrypt / decrypt；
+   用法门禁（deriveBits 未授权抛 InvalidAccessError）。
+
+**踩坑记录**（开发期 node 原型 + Python/OpenSSL 独立实现交叉定位）：
+- EC：Jacobian 加法混用两种坐标约定（r=2(S2−S1)、I=(2H)²、J=H·I 缺一）
+  会得到"自洽但错误"的结果——必须用完整 EFD 公式；
+- RFC 5114 A.6 印刷版 dB 与 qB 不自洽（dB·G ≠ qB，Python 参考实现核实），
+  dB 方向向量不纳入测试；RFC 5903 §8.1 双向全对。
+
+**测试**（`crates/cli/tests/integration_webcrypto.rs`，5 个测试全绿，
+render-script 真实引擎端到端，HTML 内嵌 script 断言 `OUT:OK/FAIL` 标记）：
+- ECDH：RFC 5903 §8.1 双向 + RFC 5114 A.6 dA×qB（共享密钥逐字节断言）；
+- AES-GCM：NIST GCM App.B TC13（96-bit IV+AAD）+ Go crypto/cipher 同源
+  pt=13 / 1-byte IV（GHASH J0 分支）/ pt=51+AAD=100，全部
+  Python `cryptography`（OpenSSL 后端）交叉核对；篡改 tag → OperationError；
+- HKDF：RFC 5869 A.1/A.3 逐字节 + deriveKey→AES-GCM 加解密闭环；
+- generateKey/exportKey('raw') 65B 0x04 往返 + JWK 往返 + 派生对称性 +
+  用法门禁 + 非法点拒导入 + digest 回归。
+- **性能（QuickJS 引擎内粗测）**：一次 generateKey ≈ 8ms、一次 deriveBits
+  ≈ 8ms（release 构建，Darwin arm64）。
+
+**三门禁**：fmt 0 diff / clippy 0 warning / workspace 1019 pass 0 failed。
 
 ### M93.5 —— fetch() 静态资产 GET 缓存去重（Worker 源码双取修复）
 
