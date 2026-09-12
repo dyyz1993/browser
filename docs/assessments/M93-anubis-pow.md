@@ -242,3 +242,31 @@ main 在 DCL 以 Chrome 完全相同的方式运行、返回、**零可观测副
 ### 本轮沉淀（与判定墙无关，永久有效）
 M93.8 readyState 真语义（全 Web 受益的 spec 正确性修复）、M93.9 BROWSER_TRACE_FETCH、
 工厂钩子/双引擎差分诊断法（本文件 + /tmp/xc_srv/ 基建）。
+
+## 10. M93.10：终局突破——挑战链路全通
+
+### 解码器 dump 法（本轮关键武器）
+闭包内包装 VM 自带的字符串解码函数 hik8ew（`var __hikO=hik8ew; hik8ew=function(){...__vmStr(r)...}`），
+VM 每解码一个字符串即显形——检查清单直接可读：媒体 codec 全表、visibilityState、
+fp-aes-256-gcm 指纹加密、overpoweredjs.bot 外部检测引擎（opjs.js 加载器 1.2KB +
+release 248KB 同族混淆 VM）。
+
+### 第四道功能墙：Page Visibility
+- `document.visibilityState` 返回 undefined ≠ 'visible' → VM 判"页面不可见"→
+  静默等待 → 挑战永不发起（这正是八假设排除后剩余的零副作用停滞）
+- 修复：visibilityState='visible'/hidden=false（诚实值：引擎主动渲染中）+
+  sendBeacon 真实现 + canPlayType 平台编解码应答表
+- 踩坑记录：首版插桩位置在 document 占位对象创建**之前**，defineProperty
+  抛错被 try/catch 静默吞掉——重放无效；移到占位后立即生效
+
+### 实证
+- 重放：`POST /antibot/api/cap/challenge` 发出（历史首次）
+- **实弹（xcancel.com/nim_lang）：挑战全流程贯通——VM 启动→取真挑战→
+  Worker PoW 解题→verify 提交→显式 'Automated verification failed'**
+  （与无头 Chrome 得到的响应完全相同：引擎层已无任何阻断，到达同一判定线）
+
+### 剩余：服务端指纹判定层（定性不变）
+fp 经 AES-256-GCM 加密上报（/antibot/api/dx 或 client-report），opjs 引擎
+（248KB）采集深层指纹。通过判定 = 呈现"真人浏览器"完整指纹身份——宪法
+原则 4 禁区。获取 xcancel 数据的可行路径：用户 Chrome 会话 cookie 复用
+（M93.6 已证机制），或 netbub 等无挑战实例（已交付）。
