@@ -1,3 +1,10 @@
+## M93.19 双引擎探针攻坚：fp diff 28→6，实弹 verify 403（评分线）
+- 双引擎探针页 + 页面望远镜 + 真Chrome CDP 三武器：12+ 根因铁证定位
+- fp worker 自启动模式修复（WCTOR→OSET→AUTO→WERR 四级日志链）→ webWorker×7 全绿
+- Intl 完整命名空间 / keyboard Chrome序 / codec 真Chrome全表 / Error-stack 形状
+- 剩 5 实质 diff 全部判定天花板（canvas 像素/toSource C层/rtcVideo序列化）
+- 详见 docs/assessments/M93-anubis-pow.md §18
+
 # 自研浏览器项目 — 进度日志（活跃）
 
 > 本文档记录每次重要变更，每 commit 后更新。

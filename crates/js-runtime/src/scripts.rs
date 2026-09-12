@@ -2448,54 +2448,92 @@ function __intlLocale() {
     try { return (typeof navigator !== 'undefined' && navigator && navigator.language) || 'zh-CN'; }
     catch (e) { return 'zh-CN'; }
 }
-window.Intl = window.Intl || {};
-window.Intl.DateTimeFormat = function(locales, opts) {
-    this.resolvedOptions = function() {
-        return {
-            locale: __intlLocale(),
-            calendar: 'gregory',
-            numberingSystem: 'latn',
-            timeZone: window.__sysTZ,
-            year: 'numeric', month: 'numeric', day: 'numeric'
-        };
+// M93.19: Intl 完整命名空间——fp 采集走 prototype 静态（DateTimeFormat
+// .prototype.resolvedOptions / supportedLocalesOf / Locale / DisplayNames /
+// Segmenter / ListFormat / RelativeTimeFormat / PluralRules /
+// getCanonicalLocales），缺任一即整段 ERROR。成员非枚举安装
+//（Chrome 实测 Object.keys(Intl) === []）。
+(function() {
+    var I = {};
+    function def(name, val) { try { Object.defineProperty(I, name, { value: val, writable: true, configurable: true, enumerable: false }); } catch (e) {} }
+    function localeArg(locales) { return (typeof locales === 'string' && locales) ? locales.split(',')[0] : ((locales && locales[0]) || __intlLocale()); }
+    function DateTimeFormat(locales, opts) { this.__loc = localeArg(locales); }
+    DateTimeFormat.prototype.resolvedOptions = function() {
+        return { locale: this.__loc, calendar: 'gregory', numberingSystem: 'latn', timeZone: window.__sysTZ, year: 'numeric', month: 'numeric', day: 'numeric' };
     };
-    this.format = function(d) {
-        var dt = d instanceof Date ? d : new Date();
-        return dt.getFullYear() + '/' + (dt.getMonth() + 1) + '/' + dt.getDate();
+    DateTimeFormat.prototype.format = function(d) { var dt = d instanceof Date ? d : new Date(); return dt.getFullYear() + '/' + (dt.getMonth() + 1) + '/' + dt.getDate(); };
+    DateTimeFormat.prototype.formatToParts = function() { return []; };
+    DateTimeFormat.supportedLocalesOf = function(locales) { return (Array.isArray(locales) ? locales.slice() : [locales || __intlLocale()]); };
+    function NumberFormat(locales, opts) { this.__loc = localeArg(locales); }
+    NumberFormat.prototype.resolvedOptions = function() { return { locale: this.__loc, numberingSystem: 'latn', style: 'decimal', currencyDisplay: 'symbol', useGrouping: true }; };
+    NumberFormat.prototype.format = function(n) { return String(n); };
+    NumberFormat.prototype.formatToParts = function() { return []; };
+    NumberFormat.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    function Collator(locales, opts) { this.__loc = localeArg(locales); }
+    Collator.prototype.resolvedOptions = function() { return { locale: this.__loc, usage: 'sort', sensitivity: 'variant', ignorePunctuation: false, collation: 'default' }; };
+    Collator.prototype.compare = function(a, b) { a = String(a); b = String(b); return a < b ? -1 : (a > b ? 1 : 0); };
+    Collator.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    function Locale(tag) {
+        tag = String(tag || '');
+        var m = /^([a-zA-Z]{2,3})(?:[-_]([a-zA-Z]{2,4}))?(?:[-_]([A-Z]{2}))?/.exec(tag);
+        this.language = (m && m[1] ? m[1].toLowerCase() : 'en');
+        this.script = (m && m[2] ? m[2][0].toUpperCase() + m[2].slice(1).toLowerCase() : undefined);
+        this.region = (m && m[3] ? m[3].toUpperCase() : undefined);
+        this.baseName = this.language + (this.script ? '-' + this.script : '') + (this.region ? '-' + this.region : '');
+        this.toString = function() { return this.baseName; };
+    }
+    function DisplayNames(locales, opts) { this.__type = (opts && opts.type) || 'language'; }
+    DisplayNames.prototype.of = function(code) { return String(code); };
+    DisplayNames.prototype.resolvedOptions = function() { return { locale: __intlLocale(), style: 'long', type: this.__type, fallback: 'code' }; };
+    DisplayNames.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    function Segmenter(locales, opts) { this.__loc = localeArg(locales); this.__gran = (opts && opts.granularity) || 'grapheme'; }
+    Segmenter.prototype.segment = function(input) {
+        var s = String(input == null ? '' : input);
+        var arr = [];
+        for (var i = 0; i < s.length; i++) arr.push({ segment: s[i], index: i, input: s, isWordLike: false });
+        var it = arr.slice();
+        it[Symbol.iterator] = function() { var k = 0; return { next: function() { return k < arr.length ? { value: arr[k++], done: false } : { value: undefined, done: true }; } }; };
+        return it;
     };
-};
-window.Intl.NumberFormat = function(locales, opts) {
-    this.resolvedOptions = function() {
-        return { locale: __intlLocale(), numberingSystem: 'latn', style: 'decimal', currencyDisplay: 'symbol', useGrouping: true };
-    };
-    this.format = function(n) { return String(n); };
-};
-window.Intl.Collator = function(locales, opts) {
-    this.resolvedOptions = function() { return { locale: __intlLocale(), usage: 'sort', sensitivity: 'variant', ignorePunctuation: false, collation: 'default' }; };
-    this.compare = function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); };
-};
+    Segmenter.prototype.resolvedOptions = function() { return { locale: this.__loc, granularity: this.__gran }; };
+    Segmenter.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    function ListFormat(locales, opts) { this.__loc = localeArg(locales); this.__type = (opts && opts.type) || 'conjunction'; }
+    ListFormat.prototype.format = function(items) { return Array.prototype.join.call(items || [], this.__type === 'disjunction' ? ', or ' : ', '); };
+    ListFormat.prototype.formatToParts = function() { return []; };
+    ListFormat.prototype.resolvedOptions = function() { return { locale: this.__loc, type: this.__type, style: 'long' }; };
+    ListFormat.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    function RelativeTimeFormat(locales, opts) { this.__loc = localeArg(locales); }
+    RelativeTimeFormat.prototype.format = function(n, unit) { return String(n) + ' ' + String(unit) + 's ago'; };
+    RelativeTimeFormat.prototype.formatToParts = function() { return []; };
+    RelativeTimeFormat.prototype.resolvedOptions = function() { return { locale: this.__loc, style: 'long', numeric: 'auto', numberingSystem: 'latn' }; };
+    RelativeTimeFormat.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    function PluralRules(locales, opts) { this.__loc = localeArg(locales); }
+    PluralRules.prototype.select = function(n) { n = Number(n); return n === 1 ? 'one' : 'other'; };
+    PluralRules.prototype.resolvedOptions = function() { return { locale: this.__loc, type: 'cardinal', minimumIntegerDigits: 1, minimumFractionDigits: 0, maximumFractionDigits: 3, pluralCategories: ['one', 'other'] }; };
+    PluralRules.supportedLocalesOf = DateTimeFormat.supportedLocalesOf;
+    def('DateTimeFormat', DateTimeFormat);
+    def('NumberFormat', NumberFormat);
+    def('Collator', Collator);
+    def('Locale', Locale);
+    def('DisplayNames', DisplayNames);
+    def('Segmenter', Segmenter);
+    def('ListFormat', ListFormat);
+    def('RelativeTimeFormat', RelativeTimeFormat);
+    def('PluralRules', PluralRules);
+    def('getCanonicalLocales', function(x) { return Array.isArray(x) ? x.slice() : [String(x)]; });
+    window.Intl = I;
+})();
 
-// M93.18: RTCRtpSender.getCapabilities（fp 的 rtcAudio/VideoCapabilitiesHash——
-// 返回本机真实编解码能力表形状）
+// M93.19c: RTCRtpSender.getCapabilities——本机真 Chrome CDP 实测全表
+//（含 codecs 的 rtcpFeedback/scalabilityModes 与 headerExtensions——
+// 手工子集表与真表哈希必差）。
 window.RTCRtpSender = window.RTCRtpSender || {};
+window.__rtcCaps = {
+    audio: {"codecs": [{"channels": 2, "clockRate": 48000, "mimeType": "audio/opus", "sdpFmtpLine": "minptime=10;useinbandfec=1"}, {"channels": 2, "clockRate": 48000, "mimeType": "audio/red"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/G722"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/PCMU"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/PCMA"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/CN"}, {"channels": 1, "clockRate": 48000, "mimeType": "audio/telephone-event"}, {"channels": 1, "clockRate": 8000, "mimeType": "audio/telephone-event"}], "headerExtensions": [{"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"}, {"direction": "sendrecv", "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:mid"}]},
+    video: {"codecs": [{"clockRate": 90000, "mimeType": "video/VP8"}, {"clockRate": 90000, "mimeType": "video/rtx"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=4d001f"}, {"clockRate": 90000, "mimeType": "video/AV1", "sdpFmtpLine": "level-idx=5;profile=0;tier=0"}, {"clockRate": 90000, "mimeType": "video/VP9", "sdpFmtpLine": "profile-id=0"}, {"clockRate": 90000, "mimeType": "video/VP9", "sdpFmtpLine": "profile-id=2"}, {"clockRate": 90000, "mimeType": "video/H264", "sdpFmtpLine": "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034"}, {"clockRate": 90000, "mimeType": "video/H265", "sdpFmtpLine": "level-id=186;profile-id=1;tier-flag=0;tx-mode=SRST"}, {"clockRate": 90000, "mimeType": "video/red"}, {"clockRate": 90000, "mimeType": "video/ulpfec"}], "headerExtensions": [{"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:toffset"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"}, {"direction": "sendrecv", "uri": "urn:3gpp:video-orientation"}, {"direction": "sendrecv", "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/video-content-type"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/video-timing"}, {"direction": "sendrecv", "uri": "http://www.webrtc.org/experiments/rtp-hdrext/color-space"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:mid"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id"}, {"direction": "sendrecv", "uri": "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id"}]}
+};
 window.RTCRtpSender.getCapabilities = function(kind) {
-    if (kind === 'audio') {
-        return { codecs: [
-            { channels: 2, clockRate: 48000, mimeType: 'audio/opus', sdpFmtpLine: 'minptime=10;useinbandfec=1' },
-            { channels: 1, clockRate: 16000, mimeType: 'audio/red', sdpFmtpLine: '' },
-            { channels: 1, clockRate: 8000, mimeType: 'audio/PCMU' },
-            { channels: 1, clockRate: 8000, mimeType: 'audio/PCMA' }
-        ], headerExtensions: [] };
-    }
-    if (kind === 'video') {
-        return { codecs: [
-            { clockRate: 90000, mimeType: 'video/VP8' },
-            { clockRate: 90000, mimeType: 'video/VP9' },
-            { clockRate: 90000, mimeType: 'video/H264', sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f' },
-            { clockRate: 90000, mimeType: 'video/AV1' }
-        ], headerExtensions: [] };
-    }
-    return null;
+    return window.__rtcCaps[kind] || null;
 };
 window.RTCRtpReceiver = window.RTCRtpReceiver || {};
 window.RTCRtpReceiver.getCapabilities = window.RTCRtpSender.getCapabilities;
@@ -2562,7 +2600,15 @@ window.WebAssembly = {
     try {
         if (typeof window.MediaSource === 'undefined') {
             window.MediaSource = function() { this.readyState = 'closed'; this.sourceBuffers = []; };
-            window.MediaSource.isTypeSupported = function(t) { return /mp4|webm/i.test(String(t)); };
+            window.MediaSource.isTypeSupported = function(t) {
+            var tl = String(t || '').toLowerCase();
+            var __mseTable = { 'audio/mpeg;': true, 'audio/mp3;': true, "audio/mpeg": true, "audio/mp3": false, "audio/mp4": false, "audio/mp4; codecs=\"mp4a.40.2\"": true, "audio/mp4; codecs=\"ec-3\"": false, "audio/mp4; codecs=\"ac-3\"": false, "audio/aac": true, "audio/aacp": false, "audio/x-aac": false, "audio/ogg": false, "audio/ogg; codecs=\"vorbis\"": false, "audio/ogg; codecs=\"opus\"": false, "audio/ogg; codecs=\"flac\"": false, "audio/flac": false, "audio/x-flac": false, "audio/wav": false, "audio/wave": false, "audio/x-wav": false, "audio/vnd.wave": false, "audio/webm": false, "audio/webm; codecs=\"vorbis\"": true, "audio/webm; codecs=\"opus\"": true, "audio/x-m4a": false, "audio/amr": false, "audio/amr-wb": false, "audio/midi": false, "audio/x-midi": false, "audio/aiff": false, "audio/x-aiff": false, "audio/3gpp": false, "audio/3gpp2": false, "audio/mp4; codecs=\"mp4a.40.5\"": true, "audio/mp4; codecs=\"mp4a.69\"": false, "audio/mp4; codecs=\"opus\"": true, "audio/opus": false, "audio/wma": false, "audio/x-ms-wma": false, "audio/speex": false, "audio/speex; codecs=\"speex\"": false, "video/mp4": false, "video/mp4; codecs=\"avc1.42E01E\"": true, "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"": true, "video/mp4; codecs=\"avc1.640028\"": true, "video/mp4; codecs=\"avc3.42E01E\"": true, "video/mp4; codecs=\"hev1.1.6.L93.B0\"": true, "video/mp4; codecs=\"hvc1.1.6.L93.B0\"": true, "video/mp4; codecs=\"av01.0.01.08\"": false, "video/mp4; codecs=\"av01.0.05.08\"": false, "video/mp4; codecs=\"dvh1.05.07\"": false, "video/mp4; codecs=\"dav1.0.01.08\"": false, "video/mp4; codecs=\"mp4v.20.8\"": false, "video/ogg": false, "video/ogg; codecs=\"theora\"": false, "video/ogg; codecs=\"theora, vorbis\"": false, "video/webm": false, "video/webm; codecs=\"vp8\"": true, "video/webm; codecs=\"vp8, vorbis\"": true, "video/webm; codecs=\"vp9\"": true, "video/webm; codecs=\"vp9, opus\"": true, "video/webm; codecs=\"vp09.00.10.08\"": true, "video/webm; codecs=\"av1\"": false, "video/webm; codecs=\"av1, opus\"": false, "video/quicktime": false, "video/quicktime; codecs=\"avc1\"": false, "video/x-matroska": false, "video/x-matroska; codecs=\"avc1\"": false, "video/3gpp": false, "video/3gpp2": false, "video/mpeg": false, "video/x-msvideo": false, "video/avi": false, "video/divx": false, "video/x-flv": false, "video/flv": false, "video/MP2T": false, "video/mp2t; codecs=\"h264\"": false };
+            if (Object.prototype.hasOwnProperty.call(__mseTable, tl)) return __mseTable[tl];
+            var ci = tl.indexOf('codecs=');
+            if (ci < 0) return false;
+            var id = tl.slice(ci + 7).replace(/["']/g, '').split(',')[0].trim().split('.')[0];
+            return ['avc1','avc3','mp4a.40.2','mp4a.40.5','vp8','vp9','vp09','av01','opus','vorbis','hev1','hvc1'].indexOf(id) >= 0;
+        };
         }
         if (typeof window.WebKitMediaSource === 'undefined') window.WebKitMediaSource = window.MediaSource;
     } catch (eMS) {}
@@ -2745,7 +2791,7 @@ try {
             var __kbMap = { 'KeyK': 'k', 'KeyG': 'g', 'Digit2': '2', 'Digit0': '0', 'KeyV': 'v', 'KeyA': 'a' };
             window.Navigator.prototype.keyboard = {
                 getLayoutMap: function() {
-                    var __kbFull = { 'KeyK': 'k', 'KeyG': 'g', 'Digit2': '2', 'Digit0': '0', 'KeyV': 'v', 'KeyA': 'a', 'Backquote': '`', 'KeyL': 'l', 'IntlBackslash': '§', 'Quote': "'", 'KeyW': 'w', 'Digit8': '8', 'KeyO': 'o', 'KeyS': 's', 'KeyD': 'd', 'KeyI': 'i', 'KeyZ': 'z', 'KeyX': 'x', 'KeyC': 'c', 'KeyB': 'b', 'KeyM': 'm', 'KeyN': 'n', 'KeyQ': 'q', 'KeyE': 'e', 'KeyR': 'r', 'KeyT': 't', 'KeyY': 'y', 'KeyU': 'u', 'KeyP': 'p', 'KeyH': 'h', 'KeyJ': 'j', 'KeyF': 'f', 'Digit1': '1', 'Digit3': '3', 'Digit4': '4', 'Digit5': '5', 'Digit6': '6', 'Digit7': '7', 'Digit9': '9', 'Minus': '-', 'Equal': '=', 'BracketLeft': '[', 'BracketRight': ']', 'Semicolon': ';', 'Comma': ',', 'Period': '.', 'Slash': '/' };
+                    var __kbFull = { 'KeyK': 'k', 'KeyG': 'g', 'Digit2': '2', 'Digit0': '0', 'KeyV': 'v', 'KeyA': 'a', 'Backquote': '`', 'KeyL': 'l', 'IntlBackslash': '§', 'Quote': '\'', 'KeyW': 'w', 'Digit8': '8', 'KeyM': 'm', 'KeyH': 'h', 'Period': '.', 'Digit7': '7', 'Digit1': '1', 'KeyP': 'p', 'KeyD': 'd', 'KeyF': 'f', 'KeyO': 'o', 'KeyQ': 'q', 'KeyC': 'c', 'KeyN': 'n', 'BracketLeft': '[', 'KeyZ': 'z', 'KeyY': 'y', 'Digit3': '3', 'Digit6': '6', 'Digit5': '5', 'KeyX': 'x', 'Slash': '/', 'Backslash': '\\', 'Comma': ',', 'Minus': '-', 'Digit4': '4', 'KeyB': 'b', 'KeyT': 't', 'Digit9': '9', 'KeyS': 's', 'KeyI': 'i', 'KeyU': 'u', 'Equal': '=', 'KeyJ': 'j', 'Semicolon': ';', 'KeyR': 'r', 'BracketRight': ']', 'KeyE': 'e' };
                     return Promise.resolve({
                         size: 48,
                         get: function(k) { return __kbFull[k] || ''; },
@@ -2781,9 +2827,38 @@ try {
             get: function() { return { requestPort: function() { return Promise.reject(new Error('unavailable')); }, addEventListener: function(){}, removeEventListener: function(){} }; },
             enumerable: true, configurable: true
         });
-        window.HTMLFencedFrameElement = window.HTMLFencedFrameElement || function() {};
     } catch (eSer) {}
 } catch (eNavX) {}
+// M93.19: fenced frame + featurePolicy + AI 能力形状——探针实测 Chrome 153：
+// typeof HTMLFencedFrameElement === 'function'、FencedFrameConfig 为构造器、
+// document.featurePolicy 为对象（allowedFeatures() 不含 fenced-frame）。
+// 此前 HTMLFencedFrameElement 挂在 serial 的 try 块尾部，serial 重复 define
+// 抛错时被连带跳过（探针证实 undefined）——各自独立 try。
+try { window.HTMLFencedFrameElement = window.HTMLFencedFrameElement || function HTMLFencedFrameElement() { throw new TypeError('Illegal constructor'); }; } catch (eFF) {}
+try { window.FencedFrameConfig = window.FencedFrameConfig || function FencedFrameConfig() { throw new TypeError('Illegal constructor'); }; } catch (eFFC) {}
+
+// M93.19: AI 能力（Chrome 153 实测 LanguageModel/Summarizer/Translator 均
+// 为构造器；fp oracle：summarizerAvailability='downloadable'、
+// summarizerLanguageAvailability='unavailable'）。
+try {
+    // M93.19b: availability 带参 = 按语言探测（fp oracle：无参 'downloadable'、
+    // 语言探测 'unavailable'——Chrome 的 Gemini Nano 中文不支持摘要）。
+    var __aiAvail = function(state) { return function(opts) { return Promise.resolve((opts && typeof opts === 'object' && Object.keys(opts).length > 0) ? state.probed : state.base); }; };
+    window.LanguageModel = window.LanguageModel || function LanguageModel() { throw new TypeError('Illegal constructor'); };
+    window.LanguageModel.availability = __aiAvail({ base: 'downloadable', probed: 'unavailable' });
+    window.LanguageModel.languageAvailability = function() { return Promise.resolve('unavailable'); };
+} catch (eLM) {}
+try {
+    var __aiAvail2 = function(state) { return function(opts) { return Promise.resolve((opts && typeof opts === 'object' && Object.keys(opts).length > 0) ? state.probed : state.base); }; };
+    window.Summarizer = window.Summarizer || function Summarizer() { throw new TypeError('Illegal constructor'); };
+    window.Summarizer.availability = __aiAvail2({ base: 'downloadable', probed: 'unavailable' });
+    window.Summarizer.languageAvailability = function() { return Promise.resolve('unavailable'); };
+} catch (eSum) {}
+try {
+    window.Translator = window.Translator || function Translator() { throw new TypeError('Illegal constructor'); };
+    window.Translator.availability = function() { return Promise.resolve('unavailable'); };
+    window.Translator.languageAvailability = function() { return Promise.resolve('unavailable'); };
+} catch (eTr) {}
 // M83: Plugin/MimeType 标准接口——core-js DOM collections 表 / 风控 SDK 环境检测
 // 裸引用 PluginArray 会 ReferenceError 断掉脚本链（掘金 feed 不渲染根因①）。
 // 空 PluginArray 语义（无插件环境，真实浏览器无插件时也是空数组）。
@@ -2817,6 +2892,12 @@ Plugin.prototype.item = function(i) { return this[i] || null; };
 Plugin.prototype.namedItem = function(n) { return this[n] || null; };
 MimeTypeArray.prototype.item = function(i) { return this[i] || null; };
 MimeTypeArray.prototype.namedItem = function(n) { return this[n] || null; };
+// M93.19: 可迭代接口标记——Chrome 实测 typeof navigator.plugins[Symbol.iterator]
+// === 'function'（数组式迭代）。Array.prototype.values 对 length+索引访问是
+// 泛型的，直接借用。
+try { PluginArray.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI1) {}
+try { MimeTypeArray.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI2) {}
+try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3) {}
 // M93.15: navigator.plugins/mimeTypes——Chrome 126 的公开常量默认表（5 个
 // PDF 相关条目，所有正常 Chrome 一致；环境一致性而非个体身份）。此前空表
 // 是无头特征（正常 Chrome 从不空表）。
@@ -2854,6 +2935,68 @@ MimeTypeArray.prototype.namedItem = function(n) { return this[n] || null; };
     marr[1] = pPdf[1]; marr['text/pdf'] = pPdf[1];
     window.navigator.mimeTypes = marr;
     window.navigator.pdfViewerEnabled = true;
+})();
+
+// M93.19: Function.prototype.toString 单行 native 格式——QuickJS 输出
+// "function f() {\n    [native code]\n}"，Chrome 是 "function f() { [native code] }"
+// （单行）。VM 可哈希 native 函数的 toString 输出。
+(function() {
+    var __origTS = Function.prototype.toString;
+    try {
+        Object.defineProperty(Function.prototype, 'toString', {
+            value: function __ts() {
+                if (this === Function.prototype.toString) return 'function toString() { [native code] }';
+                var s = __origTS.call(this);
+                return /\{\s*\[native code\]\s*\}/.test(s) ? s.replace(/\{\s*\[native code\]\s*\}/g, '{ [native code] }') : s;
+            },
+            writable: true, configurable: true
+        });
+    } catch (eTS) {}
+})();
+
+// M93.19: Error/TypeError Chrome 形状——QuickJS 的 stack 无 "Name: msg" 首行、
+// 含 construct/Error 内部帧、文件名恒 eval_script；TypeError 文案小写
+// （"cannot read property 'x' of null"）而 Chrome 是 "Cannot read properties of
+// null (reading 'x')"。包装构造器：重写 message 文案 + stack 首行/内部帧/
+// 文件名（eval_script → location.href）。
+(function() {
+    var __nErr = Error;
+    var __nTE = TypeError;
+    function __chromeMsg(message) {
+        var m = String(message == null ? '' : message);
+        return m
+            .replace(/cannot read property '([^']*)' of (null|undefined)/g, "Cannot read properties of $2 (reading '$1')")
+            .replace(/'([^']*)' is not defined/g, '$1 is not defined')
+            .replace(/^'([^']*)' is not a function/g, '$1 is not a function');
+    }
+    function __mkW(Native, name) {
+        function __wErrCtor(message) {
+            var e = new Native(message);
+            try {
+                var cm = __chromeMsg(message);
+                if (cm !== String(message == null ? '' : message)) {
+                    try { e.message = cm; } catch (eM) {}
+                }
+                var url = (typeof location !== 'undefined' && location && location.href) ? location.href : '';
+                var frames = String(e.stack || '').split('\n').filter(function(f) {
+                    if (!f || f.indexOf('    at ') !== 0) return true;
+                    if (/at construct \(native\)/.test(f)) return false;
+                    if (/^    at (Error|TypeError|__wErrCtor|__mkW) /.test(f)) return false;
+                    return true;
+                }).map(function(f) {
+                    return url ? f.replace(/eval_script:(\d+):(\d+)/g, url + ':$1:$2') : f;
+                });
+                e.stack = name + ': ' + cm + (frames.length ? '\n' + frames.join('\n') : '');
+            } catch (eS) {}
+            return e;
+        }
+        __wErrCtor.prototype = Native.prototype;
+        try { Object.defineProperty(__wErrCtor, 'captureStackTrace', { value: function(t, fn) { try { Native.captureStackTrace.call(Native, t, fn); } catch (eC) {} }, writable: true, configurable: true }); } catch (eCS) {}
+        try { Object.defineProperty(__wErrCtor, 'stackTraceLimit', { get: function() { return Native.stackTraceLimit; }, set: function(v) { try { Native.stackTraceLimit = v; } catch (eV) {} }, configurable: true }); } catch (eSL) {}
+        return __wErrCtor;
+    }
+    window.Error = __mkW(__nErr, 'Error');
+    window.TypeError = __mkW(__nTE, 'TypeError');
 })();
 window.scrollTo = window.scroll = function() {};
 window.scrollX = window.scrollY = window.pageXOffset = window.pageYOffset = 0;
@@ -3490,6 +3633,28 @@ window.history = (function() {
 // document 占位（完整 document 在 document shim 里填充）
 window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
 
+// M93.19: document.featurePolicy（fp fencedFrame 检测链路；Chrome 实测为
+// 对象、allowedFeatures() 不含 fenced-frame）。必须在 document 占位创建
+// 之后挂——前段（serial/AI 那批）执行时 document 还是 undefined。
+try {
+    if (!document.featurePolicy) {
+        var __fpFeatures = ['accelerometer', 'ambient-light-sensor', 'autoplay', 'battery', 'camera',
+            'clipboard-read', 'clipboard-write', 'cross-origin-isolated', 'display-capture',
+            'document-domain', 'encrypted-media', 'execution-while-not-rendered',
+            'execution-while-out-of-viewport', 'fullscreen', 'geolocation', 'gyroscope',
+            'idle-detection', 'keyboard-map', 'local-fonts', 'magnetometer', 'microphone',
+            'midi', 'otp-credentials', 'payment', 'picture-in-picture',
+            'publickey-credentials-get', 'screen-wake-lock', 'serial', 'speaker-selection',
+            'sync-xhr', 'usb', 'web-share', 'window-management', 'xr-spatial-tracking'];
+        document.featurePolicy = {
+            allowedFeatures: function() { return __fpFeatures.slice(); },
+            features: function() { return __fpFeatures.slice(); },
+            allowsFeature: function(f) { return __fpFeatures.indexOf(f) >= 0; },
+            getAllowlistForFeature: function() { return []; }
+        };
+    }
+} catch (eFPo2) {}
+
 // M93.10: Page Visibility API——xcancel antibot VM 解码字符串实锤其探测
 // visibilityState/hidden/visibilitychange：undefined ≠ 'visible' 被判
 // "页面不可见"→ 静默等待可见 → 挑战永不发起（零副作用停滞的根因之一）。
@@ -3527,33 +3692,34 @@ if (typeof navigator.sendBeacon !== 'function') {
     } catch (eSb2) {}
 }
 
-// M93.10: HTMLMediaElement.canPlayType——VM 解码字符串含整段音视频 codec
-// 探测表（audio/mp4 codecs=mp4a.40.2 等），用于构建平台编解码指纹。
-// 全空表 = "什么都放不了"的退化指纹。按宿主平台（macOS + Chromium 系
-// 编解码栈）的真实能力声明对齐 Chrome 的公开应答表——与 UA/Accept 同
-// 类别的环境一致性，非伪装（我们不在页面内解码媒体，仅声明平台能力）。
+// M93.19c: canPlayType 真 Chrome 实测精确表（CDP 采自本机 Chrome 153
+// headless=new 独立 profile——headless-shell 无 HEVC/专有 MSE 路径，与
+// 真 Chrome 应答有本质差异）。表外类型走启发式（容器 maybe / 已知 codec
+// probably）。
+window.__canPlayTable = { 'audio/mpeg;': 'probably', 'audio/mp3;': 'probably', 'audio/wav; codecs="1"': 'probably', 'audio/wav; codecs="2"': 'probably', 'audio/wav; codecs="3"': 'probably', 'video/x-matroska; codecs="theora"': '', "video/mp4": "maybe", "video/mp4; codecs=\"avc1.42E01E\"": "probably", "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"": "probably", "video/mp4; codecs=\"avc1.640028\"": "probably", "video/mp4; codecs=\"avc3.42E01E\"": "probably", "video/mp4; codecs=\"hev1.1.6.L93.B0\"": "probably", "video/mp4; codecs=\"hvc1.1.6.L93.B0\"": "probably", "video/mp4; codecs=\"av01.0.01.08\"": "", "video/mp4; codecs=\"av01.0.05.08\"": "", "video/mp4; codecs=\"dvh1.05.07\"": "", "video/mp4; codecs=\"dav1.0.01.08\"": "", "video/mp4; codecs=\"mp4v.20.8\"": "", "video/ogg": "maybe", "video/ogg; codecs=\"theora\"": "", "video/ogg; codecs=\"theora, vorbis\"": "", "video/webm": "maybe", "video/webm; codecs=\"vp8\"": "probably", "video/webm; codecs=\"vp8, vorbis\"": "probably", "video/webm; codecs=\"vp9\"": "probably", "video/webm; codecs=\"vp9, opus\"": "probably", "video/webm; codecs=\"vp09.00.10.08\"": "probably", "video/webm; codecs=\"av1\"": "", "video/webm; codecs=\"av1, opus\"": "", "video/quicktime": "", "video/quicktime; codecs=\"avc1\"": "", "video/x-matroska": "maybe", "video/x-matroska; codecs=\"avc1\"": "maybe", "video/3gpp": "maybe", "video/3gpp2": "", "video/mpeg": "", "video/x-msvideo": "", "video/avi": "", "video/divx": "", "video/x-flv": "", "video/flv": "", "video/MP2T": "", "video/mp2t; codecs=\"h264\"": "", "audio/mpeg": "probably", "audio/mp3": "probably", "audio/mp4": "maybe", "audio/mp4; codecs=\"mp4a.40.2\"": "probably", "audio/mp4; codecs=\"ec-3\"": "", "audio/mp4; codecs=\"ac-3\"": "", "audio/aac": "probably", "audio/aacp": "", "audio/x-aac": "", "audio/ogg": "maybe", "audio/ogg; codecs=\"vorbis\"": "probably", "audio/ogg; codecs=\"opus\"": "probably", "audio/ogg; codecs=\"flac\"": "probably", "audio/flac": "probably", "audio/x-flac": "", "audio/wav": "maybe", "audio/wave": "", "audio/x-wav": "maybe", "audio/vnd.wave": "", "audio/webm": "maybe", "audio/webm; codecs=\"vorbis\"": "probably", "audio/webm; codecs=\"opus\"": "probably", "audio/x-m4a": "maybe", "audio/amr": "", "audio/amr-wb": "", "audio/midi": "", "audio/x-midi": "", "audio/aiff": "", "audio/x-aiff": "", "audio/3gpp": "", "audio/3gpp2": "", "audio/mp4; codecs=\"mp4a.40.5\"": "probably", "audio/mp4; codecs=\"mp4a.69\"": "probably", "audio/mp4; codecs=\"opus\"": "probably", "audio/opus": "", "audio/wma": "", "audio/x-ms-wma": "", "audio/speex": "", "audio/speex; codecs=\"speex\"": "" };
+window.__canPlaySupported = ['avc1','avc3','mp4a','mp4a.40.2','mp4a.40.5','mp4a.40.34','vp8','vp9','vp09','av01','opus','vorbis','flac','hev1','hvc1','dvh1'];
+window.__canPlayMaybeContainers = ['mp4','mpeg','mp3','webm','ogg','wav','wave','flac','3gpp','3gpp2','x-matroska','x-m4a'];
 if (typeof Element.prototype.canPlayType !== 'function') {
-    (function() {
-        var probably = [
-            'audio/mp4', 'audio/mpeg', 'audio/aac', 'audio/webm', 'audio/ogg; codecs="vorbis"',
-            'audio/wav', 'audio/flac', 'audio/ogg; codecs="flac"',
-            'video/mp4', 'video/webm', 'video/ogg; codecs="theora"',
-            'mp4a.40.2', 'avc1.42E01E', 'avc1.58A01E', 'avc1.4D401E', 'avc1.64001E',
-            'vp8', 'vp9', 'av01', 'theora', 'vorbis', 'opus', 'flac', 'aac'
-        ];
-        var never = [
-            'speex', 'dirac', 'mp4v.20.8', 'mp4v.20.240', 'x-matroska', '3gpp'
-        ];
-        Element.prototype.canPlayType = function(type) {
-            var t = String(type || '');
-            if (!t) return '';
-            var tl = t.toLowerCase();
-            for (var i = 0; i < never.length; i++) if (tl.indexOf(never[i].toLowerCase()) >= 0) return '';
-            for (var j = 0; j < probably.length; j++) if (tl.indexOf(probably[j].toLowerCase()) >= 0) return 'probably';
-            // 未列出的容器类型按 spec 返回 ''；Chrome 对裸容器带 codecs="unknown" 返回 ''
-            return '';
-        };
-    })();
+    Element.prototype.canPlayType = function(type) {
+        var t = String(type || '');
+        if (!t) return '';
+        var tl = t.toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(window.__canPlayTable, tl)) return window.__canPlayTable[tl];
+        var ci = tl.indexOf('codecs=');
+        if (ci >= 0) {
+            var ids = tl.slice(ci + 7).replace(/["']/g, '').split(',');
+            var ok = true;
+            for (var i = 0; i < ids.length; i++) {
+                var id = ids[i].trim().split('.')[0];
+                if (window.__canPlaySupported.indexOf(id) < 0) { ok = false; break; }
+            }
+            return ok ? 'probably' : '';
+        }
+        for (var m = 0; m < window.__canPlayMaybeContainers.length; m++) {
+            if (tl.indexOf(window.__canPlayMaybeContainers[m]) >= 0) return 'maybe';
+        }
+        return '';
+    };
 }
 
 
@@ -3620,15 +3786,26 @@ window.console = {
         try{__captureConsoleEvent('debug',m);}catch(e){}
     },
     dir: function(){},
+    dirxml: function(){},
     table: function(){},
     group: function(){},
+    groupCollapsed: function(){},
     groupEnd: function(){},
     trace: function(){},
     time: function(){},
     timeEnd: function(){},
+    timeLog: function(){},
+    timeStamp: function(){},
+    profile: function(){},
+    profileEnd: function(){},
+    context: function(){ return null; },
+    createTask: function(name) { return { name: String(name), run: function(f) { return f(); }, cancel: function(){} }; },
     assert: function(){},
     count: function(){},
-    clear: function(){}
+    countReset: function(){},
+    clear: function(){},
+    // M93.19: Chrome console.memory（性能面板堆采样对象；fp 检查 typeof === 'object'）
+    memory: { jsHeapSizeLimit: 4294705152, totalJSHeapSize: 52428800, usedJSHeapSize: 20971520 }
 };
 
 // window EventTarget 方法（很多框架在 window 上注册事件）
@@ -3792,8 +3969,11 @@ if (typeof window.HTMLCanvasElement === 'undefined') { window.HTMLCanvasElement 
 // Canvas/WebGL stub：爬虫场景不要求像素渲染，但 getContext 必须返回不崩的 stub，
 // 否则页面能力探测脚本（指纹/兼容检测）中断。M71.3 GAP-E/F。
 Element.prototype.getContext = function(type) {
+    // M93.19c: transferControlToOffscreen 后再 getContext → null（Chrome 语义；
+    // VM 的"预期异常/预期空值"探测在 no-op 实现下走歪 → hasModifiedCanvas ERROR）
+    if (this.__offscreenControlled) return null;
     if (type === '2d') {
-        return window.__canvas2dStub();
+        return window.__canvas2dStub(this);
     }
     if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
         return window.__webglStub(type);
@@ -3803,44 +3983,91 @@ Element.prototype.getContext = function(type) {
 Element.prototype.toDataURL = function() { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; };
 Element.prototype.toBlob = function(cb) { if (typeof cb === 'function') cb(null); };
 Element.prototype.captureStream = function() { return {}; };
+// M93.19b: OffscreenCanvas 桥（hasModifiedCanvas 检测链路可能走
+// transferControlToOffscreen；缺失则 TypeError → fp 记 ERROR）
+Element.prototype.transferControlToOffscreen = function() {
+    if (this.__offscreenControlled) { throw new window.DOMException('Canvas has been transferred to an OffscreenCanvas', 'InvalidStateError'); }
+    this.__offscreenControlled = true;
+    var oc = new OffscreenCanvas(this.width || 300, this.height || 150);
+    return oc;
+};
+Element.prototype.getContextAttributes = function() {
+    return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false }; 
+};
 if (typeof window.OffscreenCanvas === 'undefined') {
     window.OffscreenCanvas = function(w, h) { return { width: w||300, height: h||150, getContext: Element.prototype.getContext }; };
 }
-// 2D context stub：所有方法是 no-op，measureText.width 返回估算值。
-window.__canvas2dStub = function() {
+// M93.19c: 2D ctx 原型化——望远镜证实 VM 在 CanvasRenderingContext2D
+// .prototype 上挂 spy 检测篡改（hasModifiedCanvas）；own-property 的 ctx
+// 对象让 prototype spy 永不触发 → fp 记 ERROR。改为标准类：方法挂
+// prototype（fillRect/fillText 等），VM 的包装可拦截、计数、回填。
+window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function CanvasRenderingContext2D(canvas) {
+    this.canvas = canvas || null;
+    this.fillStyle = ''; this.strokeStyle = ''; this.lineWidth = 1; this.font = '10px sans-serif';
+    this.textAlign = 'start'; this.textBaseline = 'alphabetic'; this.globalAlpha = 1;
+    this.globalCompositeOperation = 'source-over'; this.lineCap = 'butt'; this.lineJoin = 'miter';
+    this.miterLimit = 10; this.shadowBlur = 0; this.shadowColor = 'rgba(0,0,0,0)';
+    this.shadowOffsetX = 0; this.shadowOffsetY = 0; this.lineDashOffset = 0;
+    this.direction = 'inherit'; this.letterSpacing = '0px'; this.wordSpacing = '0px';
+    this.imageSmoothingEnabled = true; this.imageSmoothingQuality = 'low';
+    this.filter = 'none'; this.alpha = true; this.colorSpace = 'srgb'; this.desynchronized = false;
+};
+(function() {
+    var p = window.CanvasRenderingContext2D.prototype;
     var noop = function() {};
-    return {
-        canvas: null,
-        fillStyle: '', strokeStyle: '', lineWidth: 1, font: '10px sans-serif',
-        textAlign: 'start', textBaseline: 'alphabetic', globalAlpha: 1,
-        globalCompositeOperation: 'source-over', lineCap: 'butt', lineJoin: 'miter',
-        miterLimit: 10, shadowBlur: 0, shadowColor: 'rgba(0,0,0,0)',
-        fillRect: noop, strokeRect: noop, clearRect: noop,
-        beginPath: noop, closePath: noop, moveTo: noop, lineTo: noop,
-        arc: noop, arcTo: noop, rect: noop, ellipse: noop, bezierCurveTo: noop,
-        quadraticCurveTo: noop, fill: noop, stroke: noop, clip: noop,
-        drawImage: noop, putImageData: noop,
-        fillText: noop, strokeText: noop,
-        measureText: function(t) { return { width: (String(t).length || 0) * 5, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
-        save: noop, restore: noop, scale: noop, rotate: noop, translate: noop, transform: noop, setTransform: noop, resetTransform: noop,
-        setLineDash: noop, getLineDash: function() { return []; },
-        createLinearGradient: function() { return { addColorStop: noop }; },
-        createRadialGradient: function() { return { addColorStop: noop }; },
-        createPattern: function() { return {}; },
-        getImageData: function(x,y,w,h) {
-            // M93.18: fillRect 后 getImageData 返回 fillStyle 色（hasModifiedCanvas
-            // 检测 fill→read 一致性；此前恒 0）
-            var n = (w||0)*(h||0)*4;
-            var d = new Uint8ClampedArray(n);
-            var m = /#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(String(this.fillStyle||''));
-            if (m) {
-                var r0 = parseInt(m[1],16), g0 = parseInt(m[2],16), b0 = parseInt(m[3],16);
-                for (var i = 0; i < n; i += 4) { d[i] = r0; d[i+1] = g0; d[i+2] = b0; d[i+3] = 255; }
-            }
-            return { width: w, height: h, data: d };
-        },
-        isPointInPath: function() { return false; }, isPointInStroke: function() { return false; }
+    p.fillRect = noop; p.strokeRect = noop; p.clearRect = noop;
+    p.beginPath = noop; p.closePath = noop; p.moveTo = noop; p.lineTo = noop;
+    p.arc = noop; p.arcTo = noop; p.rect = noop; p.ellipse = noop; p.bezierCurveTo = noop;
+    p.quadraticCurveTo = noop; p.fill = noop; p.stroke = noop; p.clip = noop;
+    p.roundRect = noop;
+    p.drawImage = noop; p.putImageData = noop;
+    p.fillText = noop; p.strokeText = noop;
+    p.measureText = function(t) { return { width: (String(t).length || 0) * 5, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; };
+    p.save = noop; p.restore = noop; p.scale = noop; p.rotate = noop; p.translate = noop; p.transform = noop; p.setTransform = noop; p.resetTransform = noop;
+    p.setLineDash = noop; p.getLineDash = function() { return []; };
+    p.createLinearGradient = function() { return { addColorStop: noop }; };
+    p.createRadialGradient = function() { return { addColorStop: noop }; };
+    p.createConicGradient = function() { return { addColorStop: noop }; };
+    p.createPattern = function() { return {}; };
+    p.createImageData = function(w, h) {
+        if (w && typeof w === 'object') { h = w.height; w = w.width; }
+        var n = (w || 1) * (h || 1) * 4;
+        return { width: w || 1, height: h || 1, data: new Uint8ClampedArray(n), colorSpace: 'srgb' };
     };
+    p.getImageData = function(x, y, w, h) {
+        var n = (w || 0) * (h || 0) * 4;
+        var d = new Uint8ClampedArray(n);
+        var m = /#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(String(this.fillStyle || ''));
+        if (m) {
+            var r0 = parseInt(m[1], 16), g0 = parseInt(m[2], 16), b0 = parseInt(m[3], 16);
+            for (var i = 0; i < n; i += 4) { d[i] = r0; d[i + 1] = g0; d[i + 2] = b0; d[i + 3] = 255; }
+        }
+        return { width: w, height: h, data: d, colorSpace: 'srgb' };
+    };
+    p.isPointInPath = function() { return false; };
+    p.isPointInStroke = function() { return false; };
+    p.getContextAttributes = function() { return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false }; };
+    try { Object.defineProperty(p, Symbol.toStringTag, { value: 'CanvasRenderingContext2D', configurable: true }); } catch (eC2) {}
+})();
+window.__canvas2dStub = function(cnv) { return new window.CanvasRenderingContext2D(cnv); };
+// M93.19c: 伴生构造器（Chrome 全部为 function）
+window.CanvasGradient = window.CanvasGradient || function CanvasGradient() {};
+window.CanvasPattern = window.CanvasPattern || function CanvasPattern() {};
+window.TextMetrics = window.TextMetrics || function TextMetrics() {};
+window.Path2D = window.Path2D || function Path2D() { this.addPath = function() {}; this.moveTo = function() {}; this.lineTo = function() {}; this.arc = function() {}; this.rect = function() {}; this.closePath = function() {}; };
+// M93.19: ImageData 构造器（Chrome 实测 typeof ImageData === 'function'）
+window.ImageData = window.ImageData || function ImageData(arrOrW, h, cs) {
+    if (typeof arrOrW === 'object' && arrOrW !== null) {
+        this.data = arrOrW.data || new Uint8ClampedArray(0);
+        this.width = arrOrW.width || 0;
+        this.height = arrOrW.height || 0;
+        this.colorSpace = arrOrW.colorSpace || 'srgb';
+    } else {
+        this.width = arrOrW || 1;
+        this.height = h || 1;
+        this.data = new Uint8ClampedArray(this.width * this.height * 4);
+        this.colorSpace = cs || 'srgb';
+    }
 };
 // WebGL stub：getParameter 返回占位字符串/数字，方法返回 stub 对象。
 window.__webglStub = function(type) {
@@ -4733,14 +4960,37 @@ window.matchMedia = function(query) {
             if (/rec2020|srgb/i.test(query)) matched = false;
         }
         if (/prefers-reduced-transparency/i.test(query) && /reduce/i.test(query)) matched = false;
+        // M93.19: color 族精确语义（双引擎探针铁证）——
+        // (1) color-depth/min-color-depth 是 Chrome 不识别的特征，恒 false
+        //     （旧实现 N<=10 命中，VM 降序探测取首个命中 → 我们答 16、Chrome 10）；
+        // (2) CSS `color` = 每通道位数，本机 XDR 10bit 面板：(color:10) 唯一命中、
+        //     (min-color: N) N<=10、(max-color: N) N>=10；
+        // (3) monochrome: 彩色屏 0。
         if (/color-depth/i.test(query)) {
-            var cdm = query.match(/color-depth\s*:\s*(\d+)/i);
-            // 本机 XDR 10bit 面板：Chrome 实测 color-depth: 10 命中、16 不命中
-            if (cdm) matched = parseInt(cdm[1], 10) <= 10;
+            matched = false;
+        } else if (/min-color\s*:/i.test(query)) {
+            var mnc = query.match(/min-color\s*:\s*(\d+)/i);
+            if (mnc) matched = parseInt(mnc[1], 10) <= 10;
+        } else if (/max-color\s*:/i.test(query)) {
+            var mxc = query.match(/max-color\s*:\s*(\d+)/i);
+            if (mxc) matched = parseInt(mxc[1], 10) >= 10;
+        } else if (/color\s*:\s*\d/i.test(query)) {
+            var mcc = query.match(/color\s*:\s*(\d+)/i);
+            if (mcc) matched = parseInt(mcc[1], 10) === 10;
+        }
+        if (/monochrome/i.test(query)) {
+            matched = /monochrome\s*:\s*0/i.test(query);
         }
         if (/resolution/i.test(query)) {
-            var rdm = query.match(/resolution\s*:\s*([\d.]+)dppx/i);
-            if (rdm) matched = parseFloat(rdm[1]) <= 2;
+            // M93.19: 精确/区间三分——dpr=2（Retina）；旧实现 N<=2 全命中，
+            // (resolution: 1dppx) 会被误答 true。
+            var rconv = function(num, unit) { unit = String(unit || 'dppx').toLowerCase(); return unit === 'dpi' ? num / 96 : (unit === 'dpcm' ? num * (96 / 25.4) / 96 : num); };
+            var rmin = query.match(/min-resolution\s*:\s*([\d.]+)\s*(dppx|dpi|dpcm)/i);
+            var rmax = query.match(/max-resolution\s*:\s*([\d.]+)\s*(dppx|dpi|dpcm)/i);
+            var req = query.match(/resolution\s*:\s*([\d.]+)\s*(dppx|dpi|dpcm)/i);
+            if (rmin) matched = rconv(parseFloat(rmin[1]), rmin[2]) <= 2;
+            else if (rmax) matched = rconv(parseFloat(rmax[1]), rmax[2]) >= 2;
+            else if (req) matched = rconv(parseFloat(req[1]), req[2]) === 2;
         }
     } catch(e) {}
     return { matches: matched, media: query, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function() { return true; } };
@@ -9808,8 +10058,8 @@ const QUICKJS_WORKER_SHIM: &str = r#"
             var cached = __blobUrls[this.__src];
             if (typeof cached === 'string' && cached.length > 0) this.__srcCode = cached;
         }
-        // M93.18: data: URL ——fp 检测 worker 用 data:text/javascript,
-        //（base64 或明文）内联源码。
+        // M93.19b-diag: blob 解析结果（定位 fp worker 为何不自启动）
+        if (typeof __ctrace === 'function') { try { __ctrace('WRES ' + this.__src + ' srclen=' + (this.__srcCode === null ? 'null' : this.__srcCode.length)); } catch (eWR) {} }
         if (this.__src.indexOf('data:') === 0) {
             try {
                 var dpart = this.__src.slice(5);
@@ -9828,16 +10078,48 @@ const QUICKJS_WORKER_SHIM: &str = r#"
                 }
             } catch (eD) {}
         }
-        this.onmessage = null;
-        this.onerror = null;
         this.onmessageerror = null;
         this.__terminated = false;
+        // M93.19: 自启动 worker 支持——Chrome 语义里 worker 在构造时即执行。
+        // fp 采集 worker 是「构造后自己 postMessage 上报 navigator/GPU」的
+        // 自启动模式（不等主线程消息）；此前我们只在主线程 postMessage 时才
+        // 执行，这类 worker 永不运行 → VM 超时记 ERROR×7。
+        // 同步近似：onmessage 首次赋值（或首个 message 监听器注册）时跑一遍
+        // 源码（无消息分发），outbox 投给刚注册的处理器。
+        this.__autostarted = false;
+        this.__om = null;
+        this.__ml = [];
+        var selfW = this;
+        try {
+            Object.defineProperty(this, 'onmessage', {
+                get: function() { return selfW.__om; },
+                set: function(fn) {
+                    selfW.__om = (typeof fn === 'function') ? fn : null;
+                    if (typeof __ctrace === 'function') { try { __ctrace('OSET ' + selfW.__src + ' fn=' + typeof fn); } catch (eOS) {} }
+                    selfW.__maybeAutostart();
+                },
+                configurable: true, enumerable: true
+            });
+        } catch (eOM) { this.__om = null; }
     }
+    Worker.prototype.__maybeAutostart = function() {
+        if (this.__autostarted || this.__terminated) return;
+        this.__autostarted = true;
+        if (typeof __ctrace === 'function') { try { __ctrace('AUTO ' + this.__src + ' srclen=' + (this.__srcCode === null ? 'null' : this.__srcCode.length)); } catch (eAU) {} }
+        // 仅当有源码可跑时自启动（blob/data URL 已解析；http URL worker
+        // 保持旧的惰性——__workerRun 会 fetch）。
+        if (this.__srcCode !== null && typeof __workerRunSrc === 'function') {
+            this.__run(null);
+        }
+    };
     Worker.prototype.postMessage = function(msg) {
+        this.__run(msg);
+    };
+    Worker.prototype.__run = function(msg) {
         if (this.__terminated) return;
-        // M93.18-diag: worker 源码头 150 字符（定位 VM fp worker 形态）
+        // M93.19b-diag: worker 源码全文（定位 VM fp worker 为何 ERROR）
         if (typeof __ctrace === 'function' && this.__srcCode) {
-            try { __ctrace('WSRC ' + this.__srcCode.replace(/\s+/g, ' ').slice(0, 150)); } catch (eWS) {}
+            try { __ctrace('WSRC-FULL ' + this.__srcCode.replace(/\s+/g, ' ')); } catch (eWS) {}
         }
         var runner = (this.__srcCode !== null && typeof __workerRunSrc === 'function')
             ? null : ((typeof __workerRun === 'function') ? __workerRun : null);
@@ -9862,15 +10144,23 @@ const QUICKJS_WORKER_SHIM: &str = r#"
             return;
         }
         if (!res || res.ok !== true) {
+            if (typeof __ctrace === 'function') { try { __ctrace('WERR ' + this.__src + ' err=' + String((res && res.error) || 'worker failed').slice(0, 300)); } catch (eWE) {} }
             if (this.onerror) { try { this.onerror({ message: (res && res.error) || 'worker failed' }); } catch (e6) {} }
             return;
         }
-        if (typeof this.onmessage !== 'function') return;
+        var hasHandler = (typeof this.onmessage === 'function') || this.__ml.length > 0;
+        if (!hasHandler) return;
         var msgs = res.messages || [];
+        if (typeof __ctrace === 'function') { try { __ctrace('WMSG n=' + msgs.length + (msgs.length ? ' m0=' + String(msgs[0]).slice(0, 200) : '')); } catch (eWM) {} }
         for (var i = 0; i < msgs.length; i++) {
             var d;
             try { d = JSON.parse(msgs[i]); } catch (e7) { d = msgs[i]; }
-            try { this.onmessage({ data: d }); }
+            try {
+                if (typeof this.onmessage === 'function') this.onmessage({ data: d });
+                for (var li = 0; li < this.__ml.length; li++) {
+                    try { this.__ml[li]({ data: d }); } catch (eL2) {}
+                }
+            }
             catch (e8) {
                 if (this.onerror) { try { this.onerror({ message: String((e8 && e8.message) || e8) }); } catch (e9) {} }
             }
@@ -9878,11 +10168,19 @@ const QUICKJS_WORKER_SHIM: &str = r#"
     };
     Worker.prototype.terminate = function() { this.__terminated = true; };
     Worker.prototype.addEventListener = function(type, fn) {
-        if (type === 'message') { this.onmessage = fn; }
+        // M93.19: message 监听器入列（可多个）+ 触发自启动
+        if (type === 'message') {
+            if (typeof fn === 'function') this.__ml.push(fn);
+            this.__maybeAutostart();
+        }
         else if (type === 'error') { this.onerror = fn; }
+        else if (type === 'messageerror') { this.onmessageerror = fn; }
     };
-    Worker.prototype.removeEventListener = function(type) {
-        if (type === 'message') { this.onmessage = null; }
+    Worker.prototype.removeEventListener = function(type, fn) {
+        if (type === 'message') {
+            this.__ml = this.__ml.filter(function(f) { return f !== fn; });
+            if (this.__om === fn) this.__om = null;
+        }
         else if (type === 'error') { this.onerror = null; }
     };
     globalThis.Worker = Worker;

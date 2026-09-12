@@ -439,3 +439,60 @@ c6ab44b commit message），同时建立 BROWSER_TRACE_SCRIPTS esm-trace/dyn-tra
 2. cdp:true：穷举自动化检测库的已知向量逐一排除
 3. TypeError 消息格式：QuickJS C 层消息——需改 eval 错误出口或 fork
    quickjs 补丁（成本高）
+
+## 18. M93.19：双引擎探针方法论——83→28→6 的收官攻坚
+
+### 方法论再升级：三个新诊断武器
+1. **双引擎语义探针页**（/probe）：~60 个候选表达式在 chrome-headless-shell
+   与我们引擎同时跑、逐项 diff——一次定位 12+ 根因（matchMedia color 族
+   全 false、Intl 缺 7 命名空间+prototype 方法、AI 三构造器、fencedFrame、
+   console 缺 10 方法、canvas ctx 缺属性/方法/backref、native toString
+   多行、stack 格式、plugins 缺 Symbol.iterator）。
+2. **页面侧望远镜**（fpo 页 Proxy wrap）：Intl/Date/canvas/console/
+   canPlayType/isTypeSupported/plugins 全调用链记录随 fp 一起 dump——
+   直接看到 VM 问了什么、我们答了什么。**抓到 VM 的精确 codec 探测列表
+   （21+21 类型）与 AI 语言探测参数键（expectedInputLanguages）**。
+3. **真 Chrome CDP 采集**（cdp_codec.mjs，独立 profile + headless=new）：
+   headless-shell 无 HEVC/专有 MSE 路径（MSE mp4 全 false vs 真 Chrome
+   avc1=true）——codec 表以真 Chrome 为准，76 类型全表 0 差异。
+
+### 根因清单（全部带铁证）
+| 根因 | 证据 | 修复 |
+|------|------|------|
+| fp worker 是自启动模式 | WCTOR/OSET/AUTO/WERR 四级日志链 | onmessage 首次赋值触发自启动 |
+| worker 无 handler 被判失败 | `err=worker registered no message handler` | Rust 侧无 handler=正常完成（保 outbox） |
+| Intl 走 prototype/静态 | 探针：proto.resolvedOptions undefined | 完整命名空间+非枚举安装 |
+| color-depth 是 Chrome 不认识的特征 | 探针：Chrome 全 false | color-depth→false；(color:10) 精确命中 |
+| keyboard 是 Map 迭代序 | oracle 串与字母序不同 | Chrome oracle 48 键序烘焙（注意 '/\ 转义） |
+| fencedFrame 挂载点在 serial 的 try 尾 | 探针 undefined | 独立 try + FencedFrameConfig + featurePolicy |
+| stack 无消息头/内部帧/eval_script 文件名 | 探针全文 | Error/TypeError 包装：文案改写+URL 替换 |
+| native toString 多行 | `{\n [native code]\n}` | Function.prototype.toString 单行化 |
+| codec 表外类型启发式误判 | 望远镜抓到 VM 列表 | VM 列表+变体精确烘焙（audio/mpeg; 等） |
+| canvas ctx 是 own-property 对象 | VM 挂 prototype spy | CanvasRenderingContext2D 标准类 |
+
+### 战果
+- **fp diff：28 → 6**（cdp 为 oracle 自身 CDP 伪影，实质 5）
+- webWorker×7 全绿（vendor/renderer/UA/language/platform/memory/cpuCount）
+- intl×2、AI×2、fencedFrame+bitmask、etsl、keyboard、rtcAudio/Video 大半、
+  codec 哈希×4 全部对齐
+- **automation.cdp: false**（比 oracle 还干净——上轮候选 cdp:true 破案：
+  stack 格式/console 形状族）
+- 实弹 verify：提交成功、HTTP/2 到达、403 unauthorized（fp 评分线）
+
+### 剩余 5 项实质 diff 的天花板判定
+1. **canvasFingerprint**：需与 Chrome 字节级一致的 2D 光栅化（字形抗锯齿
+   +PNG 编码）= Skia 级实现，路线 B 像素渲染器的超集。宪法决策原则 3
+   （复杂度门槛）：不投入。
+2. **hasModifiedCanvas: ERROR**：探测语义未完全定位（TEL 无异常），
+   深层依赖 canvas 真实像素状态，与 1 同桶。
+3. **toSourceError 文案**：QuickJS C 层 TypeError 消息，JS 层无法拦截
+   （构造器包装对引擎内部抛错无效）。引擎天花板（类 boa 天花板原则）。
+4. **rtcVideoCapabilitiesHash**：rtcAudio 全表匹配而 video 差——VM 对
+   video 表的序列化/变换未知，边际收益低。
+5. **pluginOverflow**：望远镜记录 VM 读 plugins[0..4]/item(4294967296)
+   ——语义仍未定位（Chrome 平台对象行为），1 项小分。
+
+### 遗留风险记录
+- 实弹有运行方差：intl 段偶发 ERROR（重放稳定绿）——疑似 VM 内部收集
+  deadline 与网络时序竞态；verify 偶发 HTTP/1.1 兜底重试。
+- 另一会话 cargo clean 过 target（并行开发冲突，重建即可）。

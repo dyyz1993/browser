@@ -291,7 +291,13 @@ fn worker_run_src(source: &str, msg_json: &str) -> String {
     // self.onmessage = fn（cap.js 的 fallback solver 用后者）。
     var h = __handlers['message'];
     if (typeof h !== 'function' && typeof self.onmessage === 'function') { h = self.onmessage; }
-    if (typeof h !== 'function') { __err = 'worker registered no message handler'; __done = true; return; }
+    if (typeof h !== 'function') {
+        // M93.19: 自启动 worker（VM fp worker 形态：构造即执行、顶层
+        // postMessage 上报、不注册消息 handler）。这不是错误——outbox 里
+        // 已有顶层 postMessage 的输出；此前判 'worker registered no message
+        // handler' 失败会把 fp 数据整个扔掉（webWorker×7 ERROR 根因）。
+        __done = true; return;
+    }
     Promise.resolve().then(function(){ return h({ data: __msgData }); })
         .then(function(){ __done = true; },
               function(e){ __err = String((e && e.message) || e) + ' @' + String((e && e.stack) || '').split('\n').slice(0,3).join('~').slice(0, 250); __done = true; });
