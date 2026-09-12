@@ -145,3 +145,17 @@ $ 同命令
 | hashx/argon2id 算法 | 需 WASM，不支持 | 少数实例；宪法 G4 不引 WASM 运行时 |
 | localStorage 跨导航不保留 | 每页新 storage | Anubis 不依赖；后续可按 origin 复用 |
 | 代理 IP 限流 | 共享出口 429 | `--cookie-file` 持久化 7 天 auth cookie 后续运行免 PoW 直达 |
+
+## 7. 终局定性（11:53，shot3 后）
+
+| 实验 | 结果 | 结论 |
+|------|------|------|
+| shot2（带 trace） | PoW 2.8s 解开 + 302 + 全新 JWT（9/19 过期）+ 重定向携带 JWT → **仍 429**，退避 3 次全 429 | tiekoetter 应用层有无视 Anubis 通行证的按 IP 配额 |
+| shot3（53 分钟零流量 + 新鲜 JWT 进门） | 入口即 429（CLI 5s×2 退避也失败）；同刻 curl=200 | **客户端指纹级封禁**：对 reqwest+native-tls 的指纹长期拉黑，curl/Chrome 放行 |
+| xcancel 入口对照 | 我们 fetch 正常拿到挑战页（9 脚本执行） | xcancel 不封我们指纹——**用户 Chrome 会话 cookie 复用路线完全可行**（M93.6 已证机制） |
+
+**工程终态**：引擎/协议/重试/缓存/存储全就绪（M93~M93.6，1014 测试全绿），
+Anubis 类站点端到端已证（techaro 官方站真实内容 + 1.9s 免挑战复用）。
+tiekoetter 单站的指纹封禁属于 TLS 指纹对抗区（宪法原则 4 非目标 + ADR-0003
+native-tls 选型），不做 chromium-impersonation 类库（依赖白名单 + G3 双违规）。
+获取 nim_lang 推文的推荐路径：**xcancel + 用户 Chrome 会话 cookie 导出**。
