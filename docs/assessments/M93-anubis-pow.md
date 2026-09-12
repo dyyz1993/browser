@@ -159,3 +159,43 @@ Anubis 类站点端到端已证（techaro 官方站真实内容 + 1.9s 免挑战
 tiekoetter 单站的指纹封禁属于 TLS 指纹对抗区（宪法原则 4 非目标 + ADR-0003
 native-tls 选型），不做 chromium-impersonation 类库（依赖白名单 + G3 双违规）。
 获取 nim_lang 推文的推荐路径：**xcancel + 用户 Chrome 会话 cookie 导出**。
+
+## 8. M93.7：xcancel antibot 深度破译（双引擎差分定位）
+
+### 逆向结论（证据链）
+1. **cap.min.js = 开源 @cap.js PoW 库**（WASM URL 指向 jsdelivr @cap.js/wasm@0.0.7，
+   xcancel 用 CAP_CUSTOM_WASM_URL 自托管）。代码明示：**WASM 缺失自动降级纯 JS
+   solver**（"WebAssembly unavailable, using JS fallback solver"）——WASM 非必需。
+2. 真实缺口三个，全部标准 Web API，M93.7 已全部实现并本地验证：
+   `crypto.subtle.digest('SHA-256')`（worker 内）、`new Worker(blob:URL)`
+   （cap 用 Blob+createObjectURL 构造 worker）、Blob/TextEncoder 的 spec 语义。
+3. 843KB js-challenge.js = 全混淆 VM 编排器（字符串表加密，grep 不可见）。
+
+### 双引擎差分（同一插桩页面，本地重放服务器）
+| 步骤 | Chrome | 我们 | 判定 |
+|------|:---:|:---:|------|
+| 5+ 脚本 eval | ✅ | ✅ | — |
+| WASM 形状桩（instantiate 拒绝）| ✅ | ✅ | 触发降级路径 |
+| cap 预载 fetch wasm 文件 | ✅ | ✅ | M93.7 后解锁 |
+| `__antibotStarted=true` | ✅ | ✅ | **编排器确实在跑** |
+| **fetch /antibot/api/cap/challenge** | ✅ | ❌ | **唯一分歧点** |
+| blob Worker PoW | ✅ | （本地已验证能力） | — |
+| POST /antibot/api/verify | ✅ | ❌ | 下游 |
+
+### 剩余卡点定性（黑盒已穷尽）
+编排器在"标记 started"与"发起挑战 fetch"之间静默停滞：零 JS 错误、零
+unhandledrejection、零 API 调用。Cap.prototype 两引擎一致（仅 constructor），
+排除 cap 半执行。可能根因（按概率排序）：
+1. **某 Promise 永不 settle**——编排器 await 一个我们 shim 未实现/未 resolve
+   的异步 API（无 rejection 故不可见）
+2. **反 VM 计时/一致性自检**——混淆 VM 常见手法：performance.now 精度、
+   Date 单调性、Error.stack 形状、Function.prototype.toString 自检不过则
+   内部死等
+3. **指纹采集链静默异常**——canvas/WebGL/字体等采集在我们引擎返回意外形状，
+   被 VM 内部 catch 后放弃
+
+### 已沉淀能力（与卡点无关，永久有效）
+crypto.subtle.digest（SHA-256）、blob Worker、Blob 真内容、TextEncoder 真
+UTF-8——任何用 WebCrypto/Worker 的正常站点（cap.js 同款 PoW 已大量部署）直接受益。
+本地三链路铁证：/tmp/cap_test.html 模式（SHA-256 标准向量 + blob Worker +
+worker 内 PoW 解题复验）。
