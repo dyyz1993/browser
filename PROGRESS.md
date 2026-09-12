@@ -1,3 +1,16 @@
+## M94.2 栈行号定位 + 向量围猎（hasModifiedCanvas 仍未破，方法论沉淀）
+- FSTACK 引擎侧栈探针（fillText/toDataURL/getImageData，门控 trace）：
+  页面级行号列号可靠——VM 探测代码栈帧定位到 eval 体内 3AP8yO@<input>:3:512333
+  ← nhrazA@698699 ← VdTOxA@796605（js-challenge 混淆单行外另一层运行时 eval）
+- <input> 栈名实验确认 = eval/new Function 共用；Function/eval/Promise.then
+  三层 dump 基建落地（then 23 回调全 wasm/cap——canvas 探测完全同步）
+- Function.prototype.toString 白名单（canvas 方法族 45 个返回 native 串，
+  防绕 own 伪装的源码级检测）+ 假说 #9 未中
+- 重放侧 hik8ew dump 钩子修复（regex 误吃第二参数事故——serve 出 0 字节
+  假象曾误导停滞归因）
+- 实弹终测：403 稳定；canvasFingerprint -650ed7e0 真实渲染
+- 门禁 1024/0。剩余 5 项 diff 全部天花板/已定位未破，详见 M94 评估 §六
+
 ## M94.1 hasModifiedCanvas 向量追猎（未破，资产沉淀）
 - 四层望远镜全零命中：方法调用链（无 THROW）/C2D.prototype Proxy（VM 不内省）
   /canvas 元素 Proxy（只读 getContext/getAttribute/style/toDataURL）/

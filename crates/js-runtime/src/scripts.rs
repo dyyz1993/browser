@@ -2942,10 +2942,24 @@ try { Plugin.prototype[Symbol.iterator] = Array.prototype.values; } catch (ePI3)
 // （单行）。VM 可哈希 native 函数的 toString 输出。
 (function() {
     var __origTS = Function.prototype.toString;
+    // M94.2: canvas 方法族白名单——VM 的 hasModifiedCanvas 用
+    // Function.prototype.toString.call(fn) 读真源码检测 hook（绕过 own
+    // toString 伪装）。白名单函数一律返回 native 串（Chrome 实测形状）。
+    var __nativeFns = {};
+    ['fillRect','strokeRect','clearRect','beginPath','closePath','moveTo','lineTo','arc','arcTo',
+     'rect','ellipse','bezierCurveTo','quadraticCurveTo','fill','stroke','clip','roundRect',
+     'drawImage','putImageData','fillText','strokeText','measureText','save','restore','scale',
+     'rotate','translate','transform','setTransform','resetTransform','setLineDash','getLineDash',
+     'createLinearGradient','createRadialGradient','createConicGradient','createPattern',
+     'createImageData','getImageData','isPointInPath','isPointInStroke','getContextAttributes',
+     'getContext','toDataURL','toBlob','captureStream','transferControlToOffscreen'].forEach(function(n) { __nativeFns[n] = 1; });
     try {
         Object.defineProperty(Function.prototype, 'toString', {
             value: function __ts() {
                 if (this === Function.prototype.toString) return 'function toString() { [native code] }';
+                if (this && this.name && __nativeFns[this.name] === 1) {
+                    return 'function ' + this.name + '() { [native code] }';
+                }
                 var s = __origTS.call(this);
                 return /\{\s*\[native code\]\s*\}/.test(s) ? s.replace(/\{\s*\[native code\]\s*\}/g, '{ [native code] }') : s;
             },
@@ -3983,6 +3997,7 @@ Element.prototype.getContext = function(type) {
     return null;
 };
 Element.prototype.toDataURL = function() {
+    if (typeof __ctrace === 'function') { try { __ctrace('FSTACK toDataURL :: ' + String(new Error().stack || '').split('\n').slice(1, 7).join(' ~ ')); } catch (eFS2) {} }
     // M94: 真 ctx 时编码真实 PNG（png crate + base64）；无 ctx 保持 1x1 常量
     if (this.__ctx2d && this.__ctx2d.__cvid && typeof __cvToDataURL === 'function') {
         return __cvToDataURL(this.__ctx2d.__cvid);
@@ -4115,6 +4130,7 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
         }
     };
     p.fillText = function(t, x, y) {
+        if (typeof __ctrace === 'function') { try { __ctrace('FSTACK fillText :: ' + String(new Error().stack || '').split('\n').slice(1, 7).join(' ~ ')); } catch (eFS) {} }
         if (this.__cvid && hasCv()) {
             var pf = __cvFontPx(this.font);
             __cvSetStyle(String(this.fillStyle), __cvAlpha(this.globalAlpha), __cvMul(this.globalCompositeOperation));
@@ -4122,6 +4138,7 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
         }
     };
     p.getImageData = function(x, y, w, h) {
+        if (typeof __ctrace === 'function') { try { __ctrace('FSTACK getImageData :: ' + String(new Error().stack || '').split('\n').slice(1, 7).join(' ~ ')); } catch (eFS3) {} }
         if (this.__cvid && hasCv()) {
             var b = __cvGetImageData(this.__cvid, x || 0, y || 0, w || 1, h || 1);
             if (typeof atob === 'function') {

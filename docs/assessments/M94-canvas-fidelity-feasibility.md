@@ -147,3 +147,25 @@ fromCodePoint/charCodeAt），静态 dump 不可达。
 下轮候选路径：(a) rquickjs eval 命名支持（EvalOptions 无 name 字段，
 需上游或 wrapper 层方案）→ stack 行号映射回 js-challenge.js 源码行 →
 直接读探测函数混淆源码；(b) 源码级 charCode 拼名静态重构（AST 反混淆）。
+
+## 七、M94.2 附录：栈行号定位法与最终围猎状态
+
+**FSTACK 引擎侧栈探针**（scripts.rs 的 fillText/toDataURL/getImageData
+桥调用处，BROWSER_TRACE_FETCH 门控）证实页面级 stack 行:列可靠。VM 探测
+栈帧：`3AP8yO <input>:3:512333 ← nhrazA:698699 ← VdTOxA:796605`——
+探测代码不在 js-challenge.js 混淆主体内，而在**运行时第二层 eval 的
+明文体**里（栈名 <input>；Function/eval/Promise.then 三层 dump 基建
+已落地重放侧，then 23 回调全为 wasm/cap——canvas 探测完全同步）。
+
+要读取该明文 eval 体需拦截 QuickJS 原生 eval（JS 层不可达——VM 闭包
+持有原始引用；引擎层 rquickjs eval 无 name/钩子接口）——为下一里程碑
+的工程入口（若做：fork rquickjs 或 patch QuickJS C 层 JS_Eval 加 dump）。
+
+防御性修复入库：Function.prototype.toString 白名单（canvas 方法族 45
+函数返回 native 串，覆盖 `Function.prototype.toString.call(fn)` 绕过
+own toString 伪装的源码级检测路径）。
+
+终态（M94.2）：实弹 verify 稳定 403；fp diff 实质 5 项全部完成定位：
+hasModifiedCanvas（深层同步探测，需引擎级 eval 拦截才能读源）、
+toSourceError（QuickJS C 文案）、canvasFingerprint（字节级判不可行）、
+rtcVideo（序列化）、pluginOverflow（语义未定位）。
