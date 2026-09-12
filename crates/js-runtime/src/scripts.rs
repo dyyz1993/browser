@@ -4131,25 +4131,29 @@ window.CanvasRenderingContext2D = window.CanvasRenderingContext2D || function Ca
     };
     p.fillText = function(t, x, y) {
         if (typeof __ctrace === 'function') { try { __ctrace('FSTACK fillText :: ' + String(new Error().stack || '').split('\n').slice(1, 7).join(' ~ ')); } catch (eFS) {} }
-        if (this.__cvid && hasCv()) {
-            var pf = __cvFontPx(this.font);
-            __cvSetStyle(String(this.fillStyle), __cvAlpha(this.globalAlpha), __cvMul(this.globalCompositeOperation));
-            __cvFillText(this.__cvid, String(t), x, y, pf[0], pf[1]);
-        }
+        try {
+            if (this.__cvid && hasCv()) {
+                var pf = __cvFontPx(this.font);
+                __cvSetStyle(String(this.fillStyle), __cvAlpha(this.globalAlpha), __cvMul(this.globalCompositeOperation));
+                __cvFillText(this.__cvid, String(t), x, y, pf[0], pf[1]);
+            }
+        } catch (eFTg) { if (typeof __ctrace === 'function') { try { __ctrace('CVTHROW fillText: ' + String(eFTg && eFTg.message)); } catch (eLg) {} } throw eFTg; }
     };
     p.getImageData = function(x, y, w, h) {
         if (typeof __ctrace === 'function') { try { __ctrace('FSTACK getImageData :: ' + String(new Error().stack || '').split('\n').slice(1, 7).join(' ~ ')); } catch (eFS3) {} }
-        if (this.__cvid && hasCv()) {
-            var b = __cvGetImageData(this.__cvid, x || 0, y || 0, w || 1, h || 1);
-            if (typeof atob === 'function') {
-                var bin = atob(b);
-                var arr = new Uint8ClampedArray(bin.length);
-                for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-                return { width: w || 1, height: h || 1, data: arr, colorSpace: 'srgb' };
+        try {
+            if (this.__cvid && hasCv()) {
+                var b = __cvGetImageData(this.__cvid, x || 0, y || 0, w || 1, h || 1);
+                if (typeof atob === 'function') {
+                    var bin = atob(b);
+                    var arr = new Uint8ClampedArray(bin.length);
+                    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                    return { width: w || 1, height: h || 1, data: arr, colorSpace: 'srgb' };
+                }
             }
-        }
-        var n = (w || 1) * (h || 1) * 4;
-        return { width: w || 1, height: h || 1, data: new Uint8ClampedArray(n), colorSpace: 'srgb' };
+            var n = (w || 1) * (h || 1) * 4;
+            return { width: w || 1, height: h || 1, data: new Uint8ClampedArray(n), colorSpace: 'srgb' };
+        } catch (eGIg) { if (typeof __ctrace === 'function') { try { __ctrace('CVTHROW getImageData: ' + String(eGIg && eGIg.message)); } catch (eLg2) {} } throw eGIg; }
     };
     p.putImageData = function(d, dx, dy) {
         if (this.__cvid && hasCv() && d && d.data) {
