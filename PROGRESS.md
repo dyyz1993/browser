@@ -1,3 +1,9 @@
+## M94.13 战役总回顾文档归档
+- docs/assessments/M94-campaign-retrospective.md：M93.15→M94.12 全战役
+  一站式索引（成果总表/里程碑链/终局定论/工具链/宪法红线）——任何未来
+  方向（Skia 级/引擎更换/其他 antibot 站点）直接复用
+- 终态不变：fp diff 3（伪影/引擎级/Skia 级），verify 403，裁决待用户
+
 ## M94.12 toSourceError 破译修复——fp diff 3 项（形状级唯一剩 canvasFingerprint）
 - 反混淆（HIIQYG）破译：toSourceError 探测读 **t.toString()**（非 stack）
   ——Error.prototype.toString 可拦（引擎内部抛错不经构造器，但 toString 走原型链）
