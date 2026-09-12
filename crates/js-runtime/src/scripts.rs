@@ -2949,6 +2949,74 @@ window.history = (function() {
 // document 占位（完整 document 在 document shim 里填充）
 window.document = { createElement: function(tag) { return new Element(0); }, getElementById: function(id) { return null; } };
 
+// M93.10: Page Visibility API——xcancel antibot VM 解码字符串实锤其探测
+// visibilityState/hidden/visibilitychange：undefined ≠ 'visible' 被判
+// "页面不可见"→ 静默等待可见 → 挑战永不发起（零副作用停滞的根因之一）。
+// 我们主动渲染 DOM，'visible'/hidden=false 是诚实值。
+try {
+    Object.defineProperty(document, 'visibilityState', {
+        get: function() { return 'visible'; },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(document, 'webkitVisibilityState', {
+        get: function() { return 'visible'; },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(document, 'hidden', {
+        get: function() { return false; },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(document, 'webkitHidden', {
+        get: function() { return false; },
+        enumerable: true, configurable: true
+    });
+} catch (eVis) {}
+
+// M93.10: navigator.sendBeacon（VM 字符串含 /antibot/api/client-report，
+// 上报通道大概率走 beacon）——同步 POST 真实现。
+if (typeof navigator.sendBeacon !== 'function') {
+    try {
+        navigator.sendBeacon = function(url, data) {
+            try {
+                var body = (typeof data === 'string') ? data : String(data == null ? '' : data);
+                __fetchSyncMethod(String(url), 'POST', body, null);
+            } catch (eSb) {}
+            return true;
+        };
+    } catch (eSb2) {}
+}
+
+// M93.10: HTMLMediaElement.canPlayType——VM 解码字符串含整段音视频 codec
+// 探测表（audio/mp4 codecs=mp4a.40.2 等），用于构建平台编解码指纹。
+// 全空表 = "什么都放不了"的退化指纹。按宿主平台（macOS + Chromium 系
+// 编解码栈）的真实能力声明对齐 Chrome 的公开应答表——与 UA/Accept 同
+// 类别的环境一致性，非伪装（我们不在页面内解码媒体，仅声明平台能力）。
+if (typeof Element.prototype.canPlayType !== 'function') {
+    (function() {
+        var probably = [
+            'audio/mp4', 'audio/mpeg', 'audio/aac', 'audio/webm', 'audio/ogg; codecs="vorbis"',
+            'audio/wav', 'audio/flac', 'audio/ogg; codecs="flac"',
+            'video/mp4', 'video/webm', 'video/ogg; codecs="theora"',
+            'mp4a.40.2', 'avc1.42E01E', 'avc1.58A01E', 'avc1.4D401E', 'avc1.64001E',
+            'vp8', 'vp9', 'av01', 'theora', 'vorbis', 'opus', 'flac', 'aac'
+        ];
+        var never = [
+            'speex', 'dirac', 'mp4v.20.8', 'mp4v.20.240', 'x-matroska', '3gpp'
+        ];
+        Element.prototype.canPlayType = function(type) {
+            var t = String(type || '');
+            if (!t) return '';
+            var tl = t.toLowerCase();
+            for (var i = 0; i < never.length; i++) if (tl.indexOf(never[i].toLowerCase()) >= 0) return '';
+            for (var j = 0; j < probably.length; j++) if (tl.indexOf(probably[j].toLowerCase()) >= 0) return 'probably';
+            // 未列出的容器类型按 spec 返回 ''；Chrome 对裸容器带 codecs="unknown" 返回 ''
+            return '';
+        };
+    })();
+}
+
+
+
 // __makeElement 工厂
 // M78: 按 nodeId 缓存包装器——同一节点的两次 getElementById/querySelector/
 // 命名访问必须 === 相等（WPT assert_equals 用严格相等）。纯 JS 数据缓存，
