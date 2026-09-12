@@ -270,3 +270,24 @@ fp 经 AES-256-GCM 加密上报（/antibot/api/dx 或 client-report），opjs �
 （248KB）采集深层指纹。通过判定 = 呈现"真人浏览器"完整指纹身份——宪法
 原则 4 禁区。获取 xcancel 数据的可行路径：用户 Chrome 会话 cookie 复用
 （M93.6 已证机制），或 netbub 等无挑战实例（已交付）。
+
+## 11. M93.11：HTTP/2 双栈——引擎协议层对齐 Chrome（curl A/B 实锤链）
+
+### 三连定位（每步都有对照实验）
+1. 403 body = `{"ok":false,"reason":"unauthorized"}`；curl 复刻任意头组合全 200
+2. **curl --http1.1 + 我们的头组 = 403（字节级一致）；同头组 h2 = 200** → WAF 按协议版本判定
+3. 我们引擎实测 `proto=HTTP/1.1`（nghttp2 回显）——reqwest+native-tls 过代理
+   ALPN 掉 1.1
+
+### 修复（全部提交，1014/0）
+- **rustls 主栈（h2）+ native-tls 兜底**（传输层失败重试一次；ADR-0003 百度
+  兼容保留）——实测 proto=HTTP/2.0，挑战 POST 403→200
+- fetch headers 全量透传（spec 缺口：Authorization 等此前被丢弃）
+- navigator.hardwareConcurrency（真核数桥）——cap.js 的
+  Math.min(hc,N) 对 undefined 算出 NaN → 零 Worker → 无限等待
+
+### 实弹状态（M93.11 后）
+挑战 200（h2）→ 页面进入 "Verifying your browser…" 状态 → VM 内部处理挑战
+响应（5 个微任务）后死寂：零 Worker/零 crypto.subtle/零后续 fetch。
+剩余层完全在混淆 VM 腹地（其自解算器或 fp 加密在其内部 JS 中静默失败），
+下一步需要 QuickJS 指令级追踪或 VM 反编译（独立深潜课题）。
