@@ -1,3 +1,17 @@
+## M96.2b 回调挂起对照收窄——v8eval 对照组回调跑通，delta 清单 3 项
+- **决定性对照**：v8eval（独立干净环境）同 rusty_v8 0.32 + 官方回调模式
+  （process.rs 的 fn 回调 + Math.max + JS 调用）→ **CALLBACK: ret=42 跑通**
+  ——rusty_v8 回调注册/调用本身无问题
+- js-runtime 侧 global-in-ContextScope 修复（对照 v8eval 模式）后仍挂
+ （release 无符号 sample 确认同挂点）——**剩余 delta 精确 3 项**：
+  ① platform 构造：make_shared() vs SharedRef::from()
+  ② context 生命周期：单 scope 现用现建（v8eval）vs Global<Context>
+   跨 HandleScope 复用（我们）
+  ③ 双引擎同链（已排除静态冲突但未排除运行时回调交互）
+- 下轮：按 ①② 逐项对齐复测（最可能 ②——Global 重开 scope 的
+  callback 上下文激活问题）
+- 门禁双绿 1024/0
+
 ## M96.2 核心桥迁移——回调挂起精确隔离（单 bug 剩余）
 - 16 桥迁移完成（诊断/DOM 核心：createEl/appendChild/setText/setAttr/
   setBody/setTitle 等，qjs_bridge 复用）+ Global<Context> 持久上下文

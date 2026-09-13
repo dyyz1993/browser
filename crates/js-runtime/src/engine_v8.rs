@@ -96,8 +96,10 @@ impl V8Engine {
     pub fn install_core_bridges(&mut self) -> bool {
         let mut hs = rusty_v8::HandleScope::new(&mut self.isolate);
         let context = rusty_v8::Local::new(&mut hs, self.context.clone());
-        let global = context.global(&mut hs);
         let mut cs = rusty_v8::ContextScope::new(&mut hs, context);
+        // M96.2-fix：global 必须在 context entered（ContextScope 内）取——
+        #[allow(unused)]
+        let global = context.global(&mut cs);
 
         macro_rules! defn {
             ($name:expr, $body:expr) => {{
