@@ -8,6 +8,7 @@
 //! - `browser render-url  <url>`      fetch + parse + execute scripts + render
 
 mod ai;
+mod assets;
 mod img_ascii;
 mod sandbox;
 mod screenshot;
@@ -271,6 +272,16 @@ enum Cmd {
         /// Skip <script> execution (faster for known-static pages).
         #[arg(long)]
         no_js: bool,
+        /// M96.19: 资源下载匹配规则（可多次）。三态：含 `/` = glob
+        /// （`*` 单段 / `**` 跨段 / `?` 单字符，如 `https://pbs.twimg.com/**/*.jpg`）；
+        /// `.png` 形态 = 后缀；`pbs.twimg.com` 形态 = 域名（含子域）。
+        /// JS 跑完后从最终 DOM 收集 img/video/audio/source/link/meta-og 等
+        /// 资源 URL，命中规则的下载落盘。
+        #[arg(long = "save-assets")]
+        save_assets: Vec<String>,
+        /// 资源保存目录（配合 --save-assets）。默认 ./saved-assets。
+        #[arg(long, default_value = "saved-assets")]
+        save_dir: String,
         /// Output structured JSON {url, title, content} instead of raw content.
         #[arg(long)]
         json: bool,
@@ -795,6 +806,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             wait_strategy,
             timeout_ms,
             inline_images,
+            save_assets,
+            save_dir,
         } => {
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
@@ -959,6 +972,22 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     "JS eval+eventloop",
                     rss(),
                     js_elapsed.as_secs_f64()
+                );
+            }
+            // M96.19: 资源下载（--save-assets）——JS 阶段后、提取前，
+            // TreeGuard 存活（bridge thread_local DOM 可访问）。
+            if !save_assets.is_empty() {
+                // bridge thread_local DOM 需要存活 guard（JS 阶段的 guard 已随
+                // run_scripts 返回 drop）——临时重装，收集完释放。
+                let _asset_guard = browser_js_runtime::bridge::install_shared(shared.clone());
+                let urls = assets::collect_asset_urls(&shared, base.as_deref().unwrap_or(""));
+                drop(_asset_guard);
+                eprintln!("[assets] collected {} resource URLs from DOM", urls.len());
+                let (ok, fail) = assets::save_assets(&urls, &save_assets, &save_dir, false).await;
+                eprintln!(
+                    "[assets] done: {} saved, {} failed (dir: {save_dir})",
+                    ok.len(),
+                    fail.len()
                 );
             }
             let extract_start = std::time::Instant::now();

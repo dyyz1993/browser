@@ -3227,3 +3227,22 @@ react.dev 回归 17KB ✓，996 tests 全绿。
 - 服务端挑战暂停窗口记录：裸 curl 直过（环境使然不作数，已如实区分）
 - 门禁三套全绿（default / chrome-tls / v8+chrome-tls）
 
+
+## M96.19 资源下载器（fetch --save-assets）——域名/后缀/glob 三态匹配 + DOM 收集 + 批量落盘
+- `cli/src/assets.rs`：JS 跑完后从**最终 DOM** 收集资源 URL（img/video/audio/
+  source/embed/link/script + meta og:image；srcset 展开；data-src 等懒加载
+  属性；相对 URL base 解析；去重）→ 匹配 → 批量下载落盘（url-hash 文件名
+  防穿越/防重名）
+- 匹配三态（对完整 URL）：含 `/` = **glob**（`*` 单段 / `**` 跨段含段内
+  `**_suffix` 形态 / `?` 单字符，匹配面向剥 query 后的纯路径）；`.png`
+  形态 = **后缀**；`pbs.twimg.com` 形态 = **域名**（含子域）
+- 两个实现坑：①qjs_bridge::all_ids() 返回的是 **id 属性值**非 NodeId 表
+  （名字误导）——收集器改直接遍历 arena tree；②fetch 命令是 async 上下文
+  不能嵌套 block_on 建 runtime——直接 await
+- 实测（elonmusk 页）：域名 `pbs.twimg.com` → **50 个全成功 0 失败**
+  （验证真 JPEG 400x400）；glob `**/profile_images/**_400x400.jpg` → 精确
+  命中 1 个（Musk 头像）；后缀 `.jpg` → 30 个
+- 用法：`browser fetch <url> --save-assets "pbs.twimg.com" --save-assets
+  "**/*.woff2" --save-dir ./assets`（可多次 --save-assets 叠加规则）
+- glob/三态单测入库；门禁双绿
+
