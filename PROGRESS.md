@@ -1,3 +1,19 @@
+## M96.4 V8 CLI 接线完成——fpo 端到端跑通（FP-PLAIN 出现，diff 8→6）
+- CLI 全链：EngineKind::V8 + parse_str("v8") + run_scripts_v8 管线 +
+  feature 链（cli/v8 → js-runtime/v8 + cdp/v8）+ fetch --js-engine v8
+- run_scripts_v8 关键三件套（对齐 QuickJS 管线语义）：
+  ①module 退化 eval（js-challenge.js 无 import/export → eval_install）
+  ②DCL/load 事件派发（VM 主入口挂 DOMContentLoaded listener——不派发
+   则 async 链永不启动，fpo 停在 Starting verification）
+  ③microtask pump（V8 显式策略——Promise .then 需要 checkpoint）
+- **fpo 端到端铁证：276KB 完整页面 + challenge 6 次 + FP-PLAIN 出现**
+- hwCores 修复：shim 的 __hwConcurrency 检查 typeof==='number'——
+  V8 侧从 defn!(function) 改为直接 Number 值（sysctl hw.ncpu=12 全核，
+  Chrome 同语义）→ device/iframe cpuCount 8→12 ✓
+- V8 fp diff 6 项（cdp 伪影 / etsl 226 / bitmask 1 位 / sumPrecise /
+  maths / canvas）——后 4 项 = V8 12.x 与 Chrome 153 数学引擎微差
+- 门禁双绿 1024/0
+
 ## M96.3 全量桥迁移 + 6 段 shim 接入 V8 成功
 - 81 桥全量 defn!（QuickJS 注册表批量映射：DOM 读写/qs/offset/canvas 真像素
   /fetch/storage/ws/xhr/location/history/worker/navRecord/parseHtml）

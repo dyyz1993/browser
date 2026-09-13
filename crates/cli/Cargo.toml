@@ -51,6 +51,8 @@ wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
+# M96.4: V8 引擎透传
+v8 = ["browser-js-runtime/v8", "browser-cdp/v8"]
 default = ["quickjs"]
 # M81.E1: GUI 窗口（winit+softbuffer）。默认不编译——容器/服务器部署零图形依赖。
 gui = ["dep:browser-gui"]

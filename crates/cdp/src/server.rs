@@ -93,6 +93,8 @@ impl CdpServer {
                 EngineKind::QuickJs => "quickjs",
                 #[cfg(feature = "boa")]
                 EngineKind::Boa => "boa",
+                #[cfg(feature = "v8")]
+                EngineKind::V8 => "v8",
             }
         );
         // M81(A1): one SharedBrowserState for the whole server — every

@@ -78,6 +78,12 @@ impl V8Engine {
         Some(s.to_rust_string_lossy(&mut cs))
     }
 
+    /// microtask pump（V8 显式策略——Promise .then 回调需要）。
+    /// shim/页面脚本的 async 链依赖此调用驱动。
+    pub fn pump_microtasks(&mut self) {
+        self.isolate.perform_microtask_checkpoint();
+    }
+
     /// eval 且不取返回值（安装 shim 用）。
     pub fn eval_install(&mut self, js: &str) -> bool {
         let mut hs = rusty_v8::HandleScope::new(&mut self.isolate);
@@ -119,20 +125,25 @@ impl V8Engine {
                            _rv: ReturnValue| {
             qb::log(arg_string(s, &a, 0));
         });
-        defn!(
-            "__hwCores",
-            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
-                rv.set(
-                    rusty_v8::Number::new(
-                        _s,
-                        std::thread::available_parallelism()
-                            .map(|n| n.get())
-                            .unwrap_or(8) as f64,
-                    )
-                    .into(),
-                );
+        // M96.4b: __hwCores 是**数值**（shim 的 __hwConcurrency 检查
+        // typeof === 'number'）——Chrome = 全部逻辑核（sysctl hw.ncpu=12）。
+        {
+            let cores = std::process::Command::new("sysctl")
+                .args(["-n", "hw.ncpu"])
+                .output()
+                .ok()
+                .and_then(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                })
+                .unwrap_or(8.0);
+            let num = rusty_v8::Number::new(&mut cs, cores);
+            if let Some(key) = rusty_v8::String::new(&mut cs, "__hwCores") {
+                let _ = global.set(&mut cs, key.into(), num.into());
             }
-        );
+        }
         defn!(
             "__sysTimezone",
             |s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {

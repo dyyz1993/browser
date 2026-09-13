@@ -49,6 +49,9 @@ pub enum EngineKind {
     Boa,
     #[allow(dead_code)]
     QuickJs,
+    /// M96.4/ADR-0006: V8 可选后端（--features v8）。
+    #[cfg(feature = "v8")]
+    V8,
 }
 
 impl EngineKind {
@@ -58,6 +61,9 @@ impl EngineKind {
             "quickjs" | "qjs" => Self::QuickJs,
             #[cfg(feature = "boa")]
             "boa" => Self::Boa,
+            // M96.4: V8 可选后端（--features v8 编译期门控）
+            #[cfg(feature = "v8")]
+            "v8" => Self::V8,
             _ => Self::QuickJs,
         }
     }
@@ -80,6 +86,10 @@ impl EngineKind {
             }
             #[cfg(feature = "boa")]
             Self::Boa => Box::new(crate::engine_boa::BoaEngine::new(esm_origin)),
+            // M96.4: V8 走独立路径（run_scripts_v8），不实现 JsEngine——
+            // 到达 create() 说明管线接线错误，panic 提示。
+            #[cfg(feature = "v8")]
+            Self::V8 => panic!("V8 engine uses run_scripts_v8 path, not JsEngine::create"),
         }
     }
 }

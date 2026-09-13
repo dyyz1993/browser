@@ -10784,6 +10784,12 @@ pub fn run_scripts_with_post_exprs(
         eprintln!("[js-runtime] QuickJS requested but feature not enabled, using boa");
     }
 
+    // M96.4: V8 走独立路径（shim+桥已全链路跑通——v8_smoke 铁证）。
+    #[cfg(feature = "v8")]
+    if matches!(engine_kind, crate::engine::EngineKind::V8) {
+        return run_scripts_v8(shared, base_url, post_exprs);
+    }
+
     // M71.1: boa 路径仅在 --features boa 时编译。无 boa 时不可能走到这里
     //（QuickJS 分支已 return，或 EngineKind 只有 QuickJs）。
     #[cfg(feature = "boa")]
@@ -11146,4 +11152,187 @@ mod m69_proto_rel_diag {
         let r4 = resolve_script_url("https://cdn.example.com/x.js", None);
         eprintln!("absolute https without base: {:?}", r4);
     }
+}
+
+/// M96.4: V8 执行管线（ADR-0006 可选后端）。与 QuickJS 管线同构但简化：
+/// 单页执行（文档导航循环 V8 后续里程碑）、同步 timer 近似（shim 的
+/// setTimeout 直接执行——与 worker env 同策略）。
+/// 全链路已在 v8_smoke example 铁证（81 桥 + 6 段 shim + DOM 操作）。
+#[cfg(feature = "v8")]
+fn run_scripts_v8(
+    shared: crate::bridge::SharedTree,
+    base_url: Option<String>,
+    post_exprs: &[String],
+) -> (crate::bridge::SharedTree, usize) {
+    let _guard = crate::bridge::install_shared_with_base(shared.clone(), base_url.clone());
+    let storage = browser_storage::new_storage();
+    crate::bridge::install_storage(storage);
+    let initial_url = base_url
+        .clone()
+        .unwrap_or_else(|| "about:blank".to_string());
+    let nav = browser_navigation::new_navigation(&initial_url);
+    crate::bridge::install_navigation(nav);
+    crate::bridge::ensure_cookie_jar();
+    crate::bridge::reset_pending_navigation();
+    ensure_script_client();
+
+    let mut engine = match crate::engine_v8::V8Engine::new() {
+        Some(e) => e,
+        None => {
+            eprintln!("[js-runtime] V8 engine init failed");
+            return (shared, 0);
+        }
+    };
+    if !engine.install_core_bridges() {
+        eprintln!("[js-runtime] V8 bridge install failed");
+        return (shared, 0);
+    }
+
+    // shim：与 QuickJS 相同的 6 段逐段安装（V8 的 globalThis 属性跨
+    // eval 存活，shim 用 var window = globalThis 模式——每段独立 eval 即可）
+    let shims = get_all_shim_js(&base_url);
+    let mut installed = 0;
+    for (name, js) in &shims {
+        if engine.eval_install(js) {
+            installed += 1;
+        } else {
+            eprintln!("[js-runtime] V8 shim segment failed: {name}");
+        }
+    }
+    if installed < shims.len() {
+        eprintln!(
+            "[js-runtime] V8 shim installed {}/{} segments",
+            installed,
+            shims.len()
+        );
+    }
+
+    // 全局别名（与 QuickJS 管线同款——var 声明）
+    let _ = engine.eval_install(
+        r#"var document = globalThis.document;
+        var navigator = globalThis.navigator;
+        var location = globalThis.location;
+        var history = globalThis.history;
+        var localStorage = globalThis.localStorage;
+        var sessionStorage = globalThis.sessionStorage;
+        var Event = globalThis.Event;
+        var CustomEvent = globalThis.CustomEvent;
+        var URL = globalThis.URL;
+        var URLSearchParams = globalThis.URLSearchParams;
+        var fetch = globalThis.fetch;
+        var setTimeout = globalThis.setTimeout;
+        var clearTimeout = globalThis.clearTimeout;
+        var setInterval = globalThis.setInterval;
+        var clearInterval = globalThis.clearInterval;
+        var requestAnimationFrame = globalThis.requestAnimationFrame;
+        var queueMicrotask = globalThis.queueMicrotask;
+        var atob = globalThis.atob;
+        var btoa = globalThis.btoa;
+        var crypto = globalThis.crypto;
+        var self = globalThis;
+        var Worker = globalThis.Worker;
+        "#,
+    );
+
+    // 逐 script eval
+    let scripts = {
+        let borrowed = shared.borrow();
+        extract_script_entries(&borrowed)
+    };
+    let mut executed = 0;
+    for s in &scripts {
+        match s {
+            ScriptEntry::Inline(code) => {
+                if engine.eval_install(code) {
+                    executed += 1;
+                } else {
+                    eprintln!(
+                        "[js-runtime] V8 inline script failed ({} bytes)",
+                        code.len()
+                    );
+                }
+            }
+            ScriptEntry::External(src) => {
+                if let Some(url) = resolve_script_url(src, base_url.as_deref()) {
+                    if should_skip_script(&url) {
+                        continue;
+                    }
+                    match fetch_external_script(&url) {
+                        Ok(code) => {
+                            if engine.eval_install(&code) {
+                                executed += 1;
+                            } else {
+                                eprintln!("[js-runtime] V8 external script failed: {url}");
+                            }
+                        }
+                        Err(e) => eprintln!("[js-runtime] external fetch failed: {url}: {e}"),
+                    }
+                }
+            }
+            ScriptEntry::ExternalModule(src) => {
+                // M96.4: module 脚本——无静态 import/export 的（js-challenge.js
+                // 实测）经 strip_esm_syntax 退化普通 eval（与 QuickJS 管线
+                // 同策略）；有静态 import 的跳过（V8 module loader 后续）。
+                if let Some(url) = resolve_script_url(src, base_url.as_deref()) {
+                    match fetch_external_script(&url) {
+                        Ok(code) => {
+                            // M96.4: 无静态 import 的 module 退化 eval——js-challenge.js 实测无
+                            // import/export，仅需处理可能的 import.meta.url
+                            let stripped = code.replace("import.meta.url", "\"module-url\"");
+                            if engine.eval_install(&stripped) {
+                                executed += 1;
+                            } else {
+                                eprintln!("[js-runtime] V8 module script failed: {url}");
+                            }
+                        }
+                        Err(e) => eprintln!("[js-runtime] module fetch failed: {url}: {e}"),
+                    }
+                }
+            }
+            ScriptEntry::InlineModule(code) => {
+                let stripped = code.replace("import.meta.url", "\"module-url\"");
+                if engine.eval_install(&stripped) {
+                    executed += 1;
+                } else {
+                    eprintln!(
+                        "[js-runtime] V8 inline module failed ({} bytes)",
+                        code.len()
+                    );
+                }
+            }
+        }
+    }
+
+    // post_exprs（--click 等合成交互）
+    for expr in post_exprs {
+        let _ = engine.eval_install(expr);
+    }
+
+    // M96.4: DCL/load 事件派发（与 QuickJS 管线同款——VM 的主入口挂在
+    // DOMContentLoaded listener 上，不派发则 async 链永不启动）
+    let _ = engine.eval_install(
+        r#"try {
+            if (typeof globalThis.__docReadyState !== 'undefined') { globalThis.__docReadyState = 'interactive'; }
+            if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
+                var ev1 = new Event('DOMContentLoaded');
+                document.dispatchEvent(ev1);
+                if (typeof globalThis.__docReadyState !== 'undefined') { globalThis.__docReadyState = 'complete'; }
+                var ev2 = new Event('load');
+                document.dispatchEvent(ev2);
+                if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+                    window.dispatchEvent(ev1);
+                    window.dispatchEvent(ev2);
+                }
+            }
+        } catch(e) {}"#,
+    );
+
+    // M96.4: microtask pump 循环——V8 显式 microtask 策略下 Promise .then
+    // 不会自动执行，需要显式 checkpoint。迭代 pump 直至无新 microtask
+    //（async 链可能注册新 microtask，与 QuickJS 的 run_jobs 语义对齐）。
+    for _ in 0..100 {
+        engine.pump_microtasks();
+    }
+
+    (shared, executed)
 }

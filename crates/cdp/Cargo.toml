@@ -25,6 +25,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [features]
+# M96.4: V8 引擎透传
+v8 = ["browser-js-runtime/v8"]
 default = ["quickjs"]
 # M67: QuickJS JS 引擎后端（转发到 js-runtime）。CDP Runtime domain 默认走 QuickJS。
 quickjs = ["browser-js-runtime/quickjs"]
