@@ -19,3 +19,10 @@ tests/compat/suites/
 tests/compat/build/
 tests/compat/results/
 tests/compat/__pycache__/
+tests/compat/suites/
+tests/e2e/node_modules/
+xcancel_nim_lang_live.md
+elonmusk_live.md
+node_modules/
+tests/compat/
+tests/e2e/node_modules/

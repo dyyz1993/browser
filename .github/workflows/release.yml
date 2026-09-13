@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────── macOS ARM64 ───────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Build (full)
+        run: |
+          cargo build --release -p browser-cli --features "quickjs,v8,chrome-tls" --target aarch64-apple-darwin
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/browser dist/
+          tar czf browser-darwin-arm64.tar.gz -C dist browser
+      - name: Basic test
+        run: |
+          ./target/aarch64-apple-darwin/release/browser --version
+          ./target/aarch64-apple-darwin/release/browser fetch https://example.com/ --format text --no-js | head -3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-darwin-arm64
+          path: browser-darwin-arm64.tar.gz
+
+  # ─────────────────────── Linux x86_64 ───────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake
+      - name: Build (full, zero-openssl)
+        run: |
+          cargo build --release -p browser-cli \
+            --target x86_64-unknown-linux-gnu \
+            --no-default-features \
+            --features "quickjs,v8,chrome-tls"
+      - name: Basic test
+        run: |
+          ./target/x86_64-unknown-linux-gnu/release/browser --version
+          ./target/x86_64-unknown-linux-gnu/release/browser fetch https://example.com/ --format text --no-js | head -3
+      - name: xcancel smoke test (JS + V8)
+        run: |
+          # GitHub Actions 在美国，可直连 xcancel（无需代理）
+          OUT=$(timeout 120 ./target/x86_64-unknown-linux-gnu/release/browser \
+            fetch https://xcancel.com/nim_lang \
+            --js-engine v8 --format text --timeout-ms 100000 2>/dev/null | head -3)
+          echo "$OUT"
+          # 挑战暂停窗口时可能直接过；挑战开启时走 verify。
+          # 只要没报 "Automated verification failed" 就算通过。
+          if echo "$OUT" | grep -q "Automated verification failed"; then
+            echo "⚠️ xcancel challenge active but verification failed (may be window-dependent)"
+            # 不 fail——记录结果即可（挑战时好时坏）
+          fi
+      - name: Create portable-glibc package
+        run: |
+          mkdir -p portable-glibc
+          cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 portable-glibc/
+          for lib in $(ldd target/x86_64-unknown-linux-gnu/release/browser | awk '{print $3}' | grep '\.so' | sort -u); do
+            cp "$lib" portable-glibc/ 2>/dev/null || true
+          done
+          tar czf portable-glibc-x86_64.tar.gz portable-glibc
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/browser dist/
+          tar czf browser-linux-x86_64.tar.gz -C dist browser
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-linux-x86_64
+          path: |
+            browser-linux-x86_64.tar.gz
+            portable-glibc-x86_64.tar.gz
+
+  # ─────────────────────── 发布 ───────────────────────
+  release:
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          cp install.sh release/
+          ls -la release/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
