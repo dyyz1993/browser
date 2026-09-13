@@ -1,3 +1,16 @@
+## M96.2c 终局破案——回调挂起根因=空树 panic 跨 V8 C++ unwind，桥全线跑通
+- 阶梯逼近四步（LADDER1 OnceLock+闭包回调 ✓ → LADDER2 树+qb::create_el
+  挂 → catch_unwind 探针捕获 **PANIC-IN-CALLBACK: "Tree::root on empty
+  tree"** → 解析树替换空树后全通）
+- **根因链**：v8_smoke 装的是 Tree::new()（空树）→ __createEl 回调 →
+  find_first_element 无 body → 回退 t.root() → 空树 panic → panic 跨
+  V8 extern C trampoline unwind = UB → 0% CPU 静默挂死（QuickJS 管线
+  天然用解析树从未触发；此前所有"引擎级/静态初始化"假象全部由此解释）
+- **修复**：解析树前置（html_parser::parse("<html><body></body></html>")）
+ → v8_smoke V8_BRIDGES_OK（__createEl 真 NodeId=4/__sysTimezone=
+  Asia/Shanghai）；单测 2 passed 全绿去 ignore
+- 门禁双绿（默认+v8 feature）1024/0
+
 ## M96.2b 回调挂起对照收窄——v8eval 对照组回调跑通，delta 清单 3 项
 - **决定性对照**：v8eval（独立干净环境）同 rusty_v8 0.32 + 官方回调模式
   （process.rs 的 fn 回调 + Math.max + JS 调用）→ **CALLBACK: ret=42 跑通**

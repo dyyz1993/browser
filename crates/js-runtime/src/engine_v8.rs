@@ -300,13 +300,20 @@ mod tests {
     // M96.2: 桥回调在 Script::Run 内挂起（见 PROGRESS——纯 eval/native 调用均通，
     // 仅 Rust 回调挂；修复后去 ignore）。
     #[test]
-    #[ignore = "V8 回调映射待修（M96.2 隔离证据：Math.max 原生调用通）"]
     fn v8_core_bridges_dom() {
+        let tree = browser_html_parser::parse("<html><body></body></html>");
+        let _guard = crate::bridge::install_current(tree);
         let mut e = V8Engine::new().expect("v8 init");
         assert!(e.install_core_bridges(), "bridges install");
         let out = e.eval_string(
             "(function() { var el = __createEl('div'); __setAttr(el, 'id', 'v8test'); return typeof el + ':' + el; })()",
         );
-        assert_eq!(out.as_deref(), Some("number:1"));
+        let ok = out
+            .as_deref()
+            .and_then(|s| s.strip_prefix("number:"))
+            .and_then(|n| n.parse::<i64>().ok())
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        assert!(ok, "bridge should return positive NodeId, got {out:?}");
     }
 }
