@@ -35,6 +35,7 @@ browser-html-parser = { path = "../html-parser" }
 rusty_v8 = { version = "0.32", optional = true }
 
 [dev-dependencies]
+browser-dom = { path = "../dom" }
 wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 assert_cmd.workspace = true
@@ -48,3 +49,7 @@ quickjs = ["dep:rquickjs", "dep:rquickjs-core"]
 boa = ["dep:boa_engine"]
 # M95/ADR-0006: V8 引擎后端（可选，默认 QuickJS 不受影响）。
 v8 = ["dep:rusty_v8"]
+
+[[example]]
+name = "v8_smoke"
+required-features = ["v8"]

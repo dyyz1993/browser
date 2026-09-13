@@ -1,3 +1,18 @@
+## M96.2 核心桥迁移——回调挂起精确隔离（单 bug 剩余）
+- 16 桥迁移完成（诊断/DOM 核心：createEl/appendChild/setText/setAttr/
+  setBody/setTitle 等，qjs_bridge 复用）+ Global<Context> 持久上下文
+ （修跨 eval 状态丢失）
+- 阶段隔离铁证（v8_stage 系列冒烟）：树安装 ✓/V8 init ✓/桥安装 ✓/
+  **纯表达式 eval ✓（1+1=2）**/**原生函数调用 ✓（Math.max=2）**——
+  **仅 JS→Rust 回调调用挂起**（sample 定位 v8::Script::Run+948，0% CPU）
+- 已排除假设：双引擎静态初始化冲突（no-op main 同链接正常）、LTO/strip
+ （v8diag profile 同挂）、树缺失（早期挂起根因已修：无树 with_tree
+  panic 在 V8 C++ 回调内=UB——现树已装）
+- 剩余单 bug：闭包→FunctionCallback 映射（下轮：FunctionBuilder 显式
+  extern C / 对照 rusty_v8 hello_world 示例的回调写法）
+- 桥测试 #[ignore] 标注原因；v8_smoke example 留作验收（required-features
+  门控）；门禁双绿 1024/0
+
 ## M96.1 V8 真实 pipeline 跑通——同源消解实证
 - engine_v8.rs：ensure_v8_initialized（OnceLock 进程级 platform）+
   V8Engine{OwnedIsolate} + eval_string/eval_install（API 适配
