@@ -1,3 +1,19 @@
+## M96.7 实弹复测 + Rust 原生 SHA-256 桥——PoW 时长对齐，403 定位收口
+- **实弹 verify 请求体全文铁证**（BROWSER_TRACE_REQ_BODY）：powToken 真实 +
+  powSolutions 30 个真实 nonce + challengeNonce + fp 完整 ECIES 密文——
+  客户端全链 100%（此前 mock 场景的 [0] 是 mock 参数所致，非引擎缺陷）
+- **PoW 时长族群对齐**：纯 JS SHA-256 fallback solver 实测 0.055ms/hash
+  （30 题 ≈4.8s）vs Chrome wasm ≈0.1s——50 倍时差信号。手写 Rust SHA-256
+  （sha256.rs，FIPS 180-4，NIST 向量入库，自研原则不引 sha2）经
+  `__sha256Hex` 桥（latin1 打包无损传输）接入 worker env + 主 shim +
+  QuickJS/V8 双注册 → 0.017ms/hash（PoW ≈1.5s），实弹总墙钟 12.8s
+- **实弹 fp 复 diff 仍 = 2**：cdp 伪影（基准自身 CDP 采集）+ canvasFingerprint
+  （fontdue vs Skia，M80 非目标）——形状级全对齐保持
+- **403 unauthorized 终局定位**：客户端可修项穷尽。剩余变量 = 服务端族群
+  评分三件（canvas hash 渲染族 / TLS ClientHello 族（native-tls ≠ BoringSSL，
+  伪造=原则 4 红线）/ IP 信誉），全部超出宪法 scope（M80 非目标或原则 4）
+- 门禁双绿（default + v8 feature）
+
 ## M96.6 v8 152 指纹对齐终局——fp diff 6→2（真实差异仅 canvas hash）
 - **FP-PLAIN 明文 vs Chrome 基准全字段 diff = 2**（QuickJS 83 → rusty_v8 6 → 2）：
   - etsl/maths/sumPrecise/bitmask/features/highEntropyValues/plugins/toSourceError
