@@ -1,3 +1,34 @@
+## M96.5 v8 152.2.0 同源迁移 + 本地复演 ECIES 全链铁证（verify 真实加密 payload 发出）
+- **rusty_v8 0.32 → v8 152.2.0**（Chrome 152/153 同源 V8，/tmp/v8eval2 三同源
+  实证：etsl=33 ✓ / TypeError 文案逐字符 ✓ / native toString 单行 ✓）
+- v8 152 API 重构 engine_v8.rs 全量重写（84 编译错→0）：
+  ①`v8::scope!` 宏（HandleScope pinned shadow）替代 HandleScope 直用
+  ②`PinScope`——Function::new 要 `&mut`（ContextScope owned + DerefMut），
+   String/Object::set 只要 `&`（Deref）
+  ③`Global::new(hs, ctx)` 传 scope（Deref 到 &Isolate）——不能 `&mut isolate`
+   （scope! 宏已持有可变借用，E0499）
+  ④Context::new(hs, Default::default()) 双参数
+- 单测入库 `engine_v8::tests`：v8_pipeline_eval（etsl=33/TypeError 逐字符/
+  native ts 单行三断言）+ v8_core_bridges_dom（81 桥 + arena DOM NodeId 往返）
+- **本地复演 mock 后端**（xcancel.com 宕机 TCP 超期间）：xc_home.html +
+  js-challenge.js + cap.min.js + cap_wasm（CDN @cap.js/wasm 0.0.7）+ mock_srv.py
+  （challenge/redeem/verify 端点 + 全量请求日志）
+- **协议逆向实证**（body_deobf2.js 可读片段）：
+  ①challenge 响应字段 = `challengeNonce` + `fpPublicKey`（fpPublicKey 为
+   **base64** 编码 65 字节 0x04||X||Y——97=len(130hex)*3/4 反推 + 实测）
+  ②VM 自拦截 cap /redeem（CAP_CUSTOM_FETCH 返回 token:"intercepted"）——
+   redeem 不落网络
+  ③verify payload = `{powToken, powSolutions, challengeNonce, fp:{pub,iv,ct}}`
+- **ECIES 全链走通铁证**（mock 日志）：crypto.subtle generateKey(ECDH P-256)
+  → importKey(raw,base64 fpPublicKey) → deriveBits → HKDF-SHA256 →
+  AES-GCM encrypt → exportKey(raw) 全部成功——verify POST 带真实加密
+  payload（pub 88B b64 / iv 12B / ct ~4KB），此前 403 era 的
+  "crypto.subtle EC raw public key" 报错 = mock 缺 fpPublicKey 字段所致，
+  **我们的 crypto.subtle JS 实现（P-256 Jacobian + HKDF + AES-GCM）本来
+  就是对的，无需补 Rust**
+- 二进制：default 10.3MB 不变 / --features v8 50.9MB（ADR-0006：默认不引入）
+- 门禁双绿（default + v8 feature 各跑一遍 fmt/clippy/test，0 fail）
+
 ## M96.4 V8 CLI 接线完成——fpo 端到端跑通（FP-PLAIN 出现，diff 8→6）
 - CLI 全链：EngineKind::V8 + parse_str("v8") + run_scripts_v8 管线 +
   feature 链（cli/v8 → js-runtime/v8 + cdp/v8）+ fetch --js-engine v8

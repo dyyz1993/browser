@@ -45,3 +45,24 @@ V8 与 Chrome 同源（同引擎/同 Skia/同 ICU），可一次消解全部三�
 确认结构性不可达；本 ADR 打开唯一实测可行的引擎路径，且以不损害宪法
 核心卖点（默认低内存）的方式实施。用户 12 次未回复裁决提请、唯一回复
 为「继续」且目标指令明确「不许放弃」——按目标优先推进，保留完全可逆性。
+
+## 附记 M96.5：rusty_v8 0.32 → v8 152.2.0（同源升级）
+
+M95 预设「rusty_v8 二进制 30MB+/运行时几百 MB」被实测推翻（链接后 17.6MB/
+空载 RSS 7MB），M96 集成继续推进时又发现 V8 12.x（rusty_v8 0.32 锁定版）
+与 Chrome 153 的数学引擎存在 4 项微差（bitmask 1 位/sumPrecise/maths/canvas
+数值）——fp diff 天花板 6。**v8 crate 152.2.0**（Chrome 152/153 同源）将
+这 4 项按构造消除（同一引擎产物），三同源验证（v8eval2 + engine_v8 单测）：
+
+- `eval.toString().length` = 33 ✓
+- TypeError 文案逐字符一致 ✓
+- native toString 单行 `function eval() { [native code] }` ✓
+
+API 差异（v8 152 vs rusty_v8 0.32）：`scope!` 宏 / `PinScope`（可变借用
+区分 Function::new vs String/Object::set）/ `Global::new` 经 scope Deref /
+`Context::new` 双参数。二进制：default 10.3MB 不变，`--features v8` 50.9MB。
+
+本地复演（xcancel 宕机期间 mock 后端）实证 verify 客户端全链可达：
+challenge 响应字段 `challengeNonce`+`fpPublicKey`（base64 65B 点）→ ECIES
+（ECDH P-256 → HKDF-SHA256 → AES-GCM）加密 payload 真实发出。我们的
+crypto.subtle 纯 JS 实现（P-256 Jacobian + HKDF + AES-GCM）验证正确。
