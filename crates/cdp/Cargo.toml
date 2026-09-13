@@ -9,13 +9,13 @@ description = "Chrome DevTools Protocol (CDP) server — exposes browser to Pupp
 
 [dependencies]
 browser-ws = { path = "../ws" }
-browser-net = { path = "../net" }
+browser-net = { path = "../net", default-features = false }
 browser-dom = { path = "../dom" }
 browser-html-parser = { path = "../html-parser" }
 browser-css-engine = { path = "../css-engine" }
 browser-layout = { path = "../layout" }
 browser-render = { path = "../render" }
-browser-js-runtime = { path = "../js-runtime" }
+browser-js-runtime = { path = "../js-runtime", default-features = false }
 png = "0.17"
 url = "2"
 tokio = { workspace = true }
@@ -25,9 +25,12 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [features]
+# M96.20: TLS 后端链（net 默认 native；chrome-tls 全功能构建从 cli 层
+# --no-default-features 断链排除 native-tls）。
+net-tls-native = ["browser-net/tls-native", "browser-js-runtime/net-tls-native"]
 # M96.4: V8 引擎透传
 v8 = ["browser-js-runtime/v8"]
-default = ["quickjs"]
+default = ["quickjs", "net-tls-native"]
 # M67: QuickJS JS 引擎后端（转发到 js-runtime）。CDP Runtime domain 默认走 QuickJS。
 quickjs = ["browser-js-runtime/quickjs"]
 # M71.1: boa 引擎后端（转发到 js-runtime，让 cdp 内部 cfg(feature="boa") 生效）。

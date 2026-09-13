@@ -3246,3 +3246,29 @@ react.dev 回归 17KB ✓，996 tests 全绿。
   "**/*.woff2" --save-dir ./assets`（可多次 --save-assets 叠加规则）
 - glob/三态单测入库；门禁双绿
 
+
+## M96.20 双 SSH 服务器部署 + Linux boring 集成三大坑修复
+- **部署形态**（两台实弹成功，均拉到真推文）：
+  - shanbox（x86_64 Linux 8核15G）：本地原生构建全功能版 59MB
+    （`--no-default-features --features quickjs,v8,chrome-tls`）
+  - replay（腾讯云老 glibc）：**便携 glibc 方案**——shanbox 的新 glibc 核心库
+    （ld-linux/libc/libm/libgcc_s）+ `ld.so --library-path` 显式加载
+    （musl 交叉编 v8/boring 不可行：无 musl-g++；crt-static 撞 V8 libc++）
+  - 网络均走 SSH 反向隧道借本机 Clash（`ssh -N -R 7890:...`）+
+    `/root/xcancel.sh` 便捷包装
+- **坑①双 SSL 堆损坏（free(): invalid pointer）**：boring（静态 BoringSSL）
+  与 openssl 同进程在 Linux 崩溃（macOS 不崩——native-tls 走系统框架）。
+  对照实验定责：v8-only ✓ / quickjs+chrome-tls ✗ → 与 v8 无关、boring+openssl
+  共存所致。根治：**TLS 后端全线 feature 化剥离 openssl**——
+  net reqwest 的 default-tls/native-tls → feature `tls-native`（默认开，
+  全功能构建 --no-default-features 断链）；**ws crate TLS 从 native-tls 迁
+  rustls**（与主栈一致）；cli/cdp/js-runtime 的 workspace 内依赖全部
+  default-features=false + net-tls-native 显式链——no-default 全功能构建
+  `cargo tree -i openssl-sys` 零命中
+- **坑②boring 同名静态库劫持**：boring-sys 构建产物 libssl.a/libcrypto.a
+  进全局 -L，openssl 的 `-lssl` 抓错库（undefined SSL_CTX_ctrl）——链接期
+  屏蔽 boring 目录同名 .a（零 openssl 后不再发生）
+- **坑③crt-static/musl 均不可行**（V8 的 libc++ 与系统 libstdc++ 冲突 /
+  无 musl-g++）——便携 glibc 是老系统部署的标准解
+- 门禁双绿（default + v8,chrome-tls 全 feature；默认构建零变化）
+

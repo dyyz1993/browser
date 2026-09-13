@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 browser-dom = { path = "../dom" }
 browser-html-parser = { path = "../html-parser" }
-browser-net = { path = "../net" }
+browser-net = { path = "../net", default-features = false }
 browser-cookie = { path = "../cookie" }
 url = "2"
 browser-css-engine = { path = "../css-engine" }
@@ -24,8 +24,8 @@ fontdue = "0.9"
 png = "0.17"
 # M12.3: image decoding for ASCII art rendering (~30k lines, <10w threshold).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-browser-js-runtime = { path = "../js-runtime" }
-browser-cdp = { path = "../cdp" }
+browser-js-runtime = { path = "../js-runtime", default-features = false }
+browser-cdp = { path = "../cdp", default-features = false }
 # M81.E1: GUI 改为可选 feature（默认关闭）。winit 在 Linux 上动态链接
 # X11/wayland/xkbcommon，headless 容器部署（CF Containers 等）不需要；
 # 窗口模式用 `--features gui` 重新构建。
@@ -51,11 +51,14 @@ wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
+# M96.20: TLS 后端链（net 默认 native；chrome-tls 全功能构建从 cli 层
+# --no-default-features 断链排除 native-tls）。
+net-tls-native = ["browser-net/tls-native", "browser-js-runtime/net-tls-native", "browser-cdp/net-tls-native"]
 # M96.18: Chrome 同源 TLS（透传 net crate）。
 chrome-tls = ["browser-net/chrome-tls"]
 # M96.4: V8 引擎透传
 v8 = ["browser-js-runtime/v8", "browser-cdp/v8"]
-default = ["quickjs"]
+default = ["quickjs", "net-tls-native"]
 # M81.E1: GUI 窗口（winit+softbuffer）。默认不编译——容器/服务器部署零图形依赖。
 gui = ["dep:browser-gui"]
 # M66: QuickJS JS 引擎后端（默认引擎）

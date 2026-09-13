@@ -23,9 +23,10 @@ tokio-boring = { version = "4", optional = true }
 h2 = { version = "0.4", optional = true }
 http = { version = "1", optional = true }
 bytes = { version = "1", optional = true }
+# M96.20: native-tls 由 feature `tls-native` 开（默认）——chrome-tls 构建
+# 显式 --no-default-features 时排除：boring（静态 BoringSSL）与系统
+# libssl 同进程会同名符号冲突（Linux 堆损坏 root cause）。
 reqwest = { version = "0.12", default-features = false, features = [
-    "default-tls",
-    "native-tls",
     "rustls-tls",
     "http2",
     "charset",
@@ -47,5 +48,12 @@ wiremock = "0.6"
 futures = "0.3"
 
 [features]
+default = ["tls-native"]
+# M96.20: reqwest native-tls（openssl/SecurityFramework）——默认开，
+# chrome-tls 全功能构建用 --no-default-features 排除（见上）。
+tls-native = ["reqwest/default-tls", "reqwest/native-tls"]
 # M96.18: Chrome 同源 TLS（BoringSSL）+ H2 通道。默认关闭。
 chrome-tls = ["dep:boring", "dep:tokio-boring", "dep:h2", "dep:http", "dep:bytes"]
+# M96.20: 交叉编译便利——openssl 源码自编译（zigbuild 到 Linux 时无系统
+# OpenSSL 可链）。默认关闭，macOS 本机构建零影响。
+native-tls-vendored = ["reqwest/native-tls-vendored"]

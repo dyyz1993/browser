@@ -125,13 +125,21 @@ impl WebSocket {
             .await
             .map_err(|_| WsError::InvalidFrame("tcp connect failed"))?;
 
-        // M31: wss:// 需要 TLS handshake（native-tls，与 M24 决策一致）。
+        // M31/M96.20: wss:// 需要 TLS handshake——rustls（与 net 主栈一致；
+        // TLS 后端全线去 openssl，避免与 boring 共存的 Linux 堆损坏）。
         let mut socket: BoxStream = if is_tls {
-            let tls_connector = native_tls::TlsConnector::new()
-                .map_err(|_| WsError::InvalidFrame("tls connector init failed"))?;
-            let tls_connector = tokio_native_tls::TlsConnector::from(tls_connector);
-            let tls_socket = tls_connector
-                .connect(host, tcp_socket)
+            let roots = rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            let config = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
+            let server_name = rustls_pki_types::ServerName::try_from(host.to_string())
+                .map_err(|_| WsError::InvalidFrame("invalid server name"))?
+                .to_owned();
+            let tls_socket = connector
+                .connect(server_name, tcp_socket)
                 .await
                 .map_err(|_| WsError::InvalidFrame("tls handshake failed"))?;
             Box::new(tls_socket)

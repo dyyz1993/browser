@@ -186,11 +186,16 @@ impl HttpClient {
                 .default_headers(browser_default_headers())
                 .gzip(true)
                 .brotli(true);
-            b = if rustls {
-                b.use_rustls_tls()
-            } else {
-                b.use_native_tls()
-            };
+            // M96.20: chrome-tls 全功能构建（--no-default-features）无
+            // native-tls——rustls 单后端（boring 通道另行处理 https 的
+            // Chrome 形传输）。
+            #[cfg(feature = "tls-native")]
+            if !rustls {
+                b = b.use_native_tls();
+            }
+            if rustls || !cfg!(feature = "tls-native") {
+                b = b.use_rustls_tls();
+            }
             // M96.16-diag: 本地 MITM 判别实验（自签 CA 信任）
             if std::env::var("BROWSER_TLS_INSECURE").is_ok() {
                 b = b
@@ -223,11 +228,16 @@ impl HttpClient {
                 .default_headers(browser_default_headers())
                 .gzip(true)
                 .brotli(true);
-            b = if rustls {
-                b.use_rustls_tls()
-            } else {
-                b.use_native_tls()
-            };
+            // M96.20: chrome-tls 全功能构建（--no-default-features）无
+            // native-tls——rustls 单后端（boring 通道另行处理 https 的
+            // Chrome 形传输）。
+            #[cfg(feature = "tls-native")]
+            if !rustls {
+                b = b.use_native_tls();
+            }
+            if rustls || !cfg!(feature = "tls-native") {
+                b = b.use_rustls_tls();
+            }
             // M96.16-diag: 本地 MITM 判别实验（自签 CA 信任）
             if std::env::var("BROWSER_TLS_INSECURE").is_ok() {
                 b = b

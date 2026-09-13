@@ -12,7 +12,7 @@ browser-storage = { path = "../storage" }
 browser-navigation = { path = "../navigation" }
 browser-cookie = { path = "../cookie" }
 browser-eventloop = { path = "../eventloop" }
-browser-net = { path = "../net" }
+browser-net = { path = "../net", default-features = false }
 browser-ws = { path = "../ws" }
 # M78: offsetWidth mini 级联（parse + compute_styles 取元素 width）。
 browser-css-engine = { path = "../css-engine" }
@@ -42,7 +42,10 @@ assert_cmd.workspace = true
 tempfile = "3"
 
 [features]
-default = ["quickjs"]
+# M96.20: TLS 后端链（net 默认 native；chrome-tls 全功能构建从 cli 层
+# --no-default-features 断链排除 native-tls）。
+net-tls-native = ["browser-net/tls-native"]
+default = ["quickjs", "net-tls-native"]
 # M66: QuickJS JS 引擎后端（rquickjs，默认引擎）
 quickjs = ["dep:rquickjs", "dep:rquickjs-core"]
 # M71.1: boa 引擎后端（备选，降为 optional。默认不编译，需 --features boa）。

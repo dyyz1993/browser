@@ -14,8 +14,12 @@ path = "src/lib.rs"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = "2"
-native-tls = "0.2"
-tokio-native-tls = "0.3"
+# M96.20: rustls（与 net 主栈一致）——TLS 后端全线去 openssl：boring 与
+# openssl 同进程在 Linux 触发堆损坏（free invalid pointer，shanbox 实证）。
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pki-types = "1"
+webpki-roots = "0.26"
 
 [dev-dependencies]
 tokio = { workspace = true }
