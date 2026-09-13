@@ -145,6 +145,15 @@ impl ClientBuilder {
             builder = builder.user_agent(UA);
         }
 
+        // M96.16-diag: 本地 MITM 判别实验（传输层全 Chrome 化）用——
+        // 信任本地自签 CA（BROWSER_TLS_INSECURE=1 + BROWSER_PROXY_...）。
+        // 仅诊断场景；正常构建零影响。
+        if std::env::var("BROWSER_TLS_INSECURE").is_ok() {
+            builder = builder
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true);
+        }
+
         let interceptor = self
             .interceptor
             .unwrap_or_else(|| Arc::new(NoopInterceptor));
@@ -182,6 +191,12 @@ impl HttpClient {
             } else {
                 b.use_native_tls()
             };
+            // M96.16-diag: 本地 MITM 判别实验（自签 CA 信任）
+            if std::env::var("BROWSER_TLS_INSECURE").is_ok() {
+                b = b
+                    .danger_accept_invalid_certs(true)
+                    .danger_accept_invalid_hostnames(true);
+            }
             b.build().unwrap_or_else(|_| reqwest::Client::new())
         };
         Self {
@@ -213,6 +228,12 @@ impl HttpClient {
             } else {
                 b.use_native_tls()
             };
+            // M96.16-diag: 本地 MITM 判别实验（自签 CA 信任）
+            if std::env::var("BROWSER_TLS_INSECURE").is_ok() {
+                b = b
+                    .danger_accept_invalid_certs(true)
+                    .danger_accept_invalid_hostnames(true);
+            }
             b.build().unwrap_or_else(|_| reqwest::Client::new())
         };
         Self {
@@ -244,9 +265,34 @@ impl HttpClient {
         url: &str,
         cookie_header: Option<&str>,
     ) -> Result<(Vec<u8>, HeaderMap), NetError> {
-        let (_status, body, headers) = self
-            .request_full(url, Method::GET, None, None, cookie_header)
+        let (status, body, headers) = self
+            .request_full_raw_hdr(
+                url,
+                "GET",
+                None,
+                None,
+                cookie_header,
+                &[
+                    // M96.15: 导航请求头组（Chromium navigate 语义——Chrome
+                    // netlog IncludeSensitive 实测首文档 GET 恒带）。
+                    ("upgrade-insecure-requests".to_string(), "1".to_string()),
+                    (
+                        "accept".to_string(),
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7".to_string(),
+                    ),
+                    ("sec-fetch-site".to_string(), "none".to_string()),
+                    ("sec-fetch-mode".to_string(), "navigate".to_string()),
+                    ("sec-fetch-user".to_string(), "?1".to_string()),
+                    ("sec-fetch-dest".to_string(), "document".to_string()),
+                    ("priority".to_string(), "u=0, i".to_string()),
+                ],
+            )
             .await?;
+        // 保持 get_with_headers 原 BadStatus 语义（非 2xx → Err——CLI fetch
+        // 的失败/重试逻辑依赖；raw_hdr 只借导航头组，不借 raw 状态语义）。
+        if !(200..300).contains(&status) {
+            return Err(NetError::BadStatus { code: status });
+        }
         Ok((body, headers))
     }
 

@@ -3418,7 +3418,19 @@ function __parseLoc(href) {
         pathname: pathname,
         search: searchPart,
         origin: proto + (host ? '//' + host : ''),
-        reload: function() {},
+        // M96.17: 真实语义——reload = 对当前 URL 的文档导航（记录
+        // pending_navigation 交给导航循环；此前 no-op 导致 xcancel verify
+        // 200 后 "Verified. Redirecting…" 永不落地）。
+        reload: function() {
+            // M96.17: reload = 对当前 URL 的文档导航。同 URL 的 href 赋值会被
+            // __setLocHref 的「非 hash 变化」条件滤掉（SPA 路由防误导航）——
+            // reload 语义必须强制记录（xcancel verify 200 后
+            // "Verified. Redirecting…" 靠它落地）。
+            if (typeof __navRecord === 'function') {
+                try { __navRecord(String(__locHref)); } catch (eNav) {}
+            }
+            if (typeof __setLocHref === 'function') { __setLocHref(String(__locHref)); }
+        },
         replace: function(u) { __locNavigate(u, 'replace'); },
         assign: function(u) { __locNavigate(u, 'assign'); },
         toString: function() { return __locHref; }
@@ -11255,11 +11267,59 @@ mod m69_proto_rel_diag {
 #[cfg(feature = "v8")]
 fn run_scripts_v8(
     shared: crate::bridge::SharedTree,
-    base_url: Option<String>,
+    mut base_url: Option<String>,
     post_exprs: &[String],
 ) -> (crate::bridge::SharedTree, usize) {
+    // M96.17: 文档导航循环（M93 QuickJS 同款）——verify 200 后 VM 触发
+    // reload/location 导航（xcancel "Verified. Redirecting…"），每页全新
+    // V8Engine（导航 = 销毁旧 JS 全局空间），storage 同源跨跳复用。
+    const MAX_V8_NAV_HOPS: usize = 5;
+    let mut executed_total = 0usize;
+    let mut prev_storage: Option<browser_storage::StorageHandle> = None;
+    let mut prev_origin: Option<String> = None;
+    for hop in 0..=MAX_V8_NAV_HOPS {
+        let origin = base_url
+            .as_deref()
+            .map(url_origin)
+            .unwrap_or_else(|| "about:blank".to_string());
+        let storage = match (&prev_storage, &prev_origin) {
+            (Some(handle), Some(po)) if *po == origin => handle.clone(),
+            _ => browser_storage::new_storage(),
+        };
+        prev_storage = Some(storage.clone());
+        prev_origin = Some(origin);
+        let (executed, next) = run_page_v8(shared.clone(), base_url.clone(), post_exprs, storage);
+        executed_total += executed;
+        match next {
+            Some((url, html)) if hop < MAX_V8_NAV_HOPS => {
+                eprintln!(
+                    "[nav] M96.17 V8 document navigation hop {}/{}: {url}",
+                    hop + 1,
+                    MAX_V8_NAV_HOPS
+                );
+                *shared.borrow_mut() = browser_html_parser::parse(&html);
+                base_url = Some(url);
+            }
+            Some((url, _)) => {
+                eprintln!("[nav] M96.17 max V8 navigation hops ({MAX_V8_NAV_HOPS}) reached, staying on {url}");
+                break;
+            }
+            None => break,
+        }
+    }
+    (shared, executed_total)
+}
+
+/// M96.17: 单页 V8 执行（[`run_scripts_v8`] 导航循环的一跳）。
+/// 返回 (executed 数, 待跟进的文档导航 (url, html))——None = 本页无导航。
+#[cfg(feature = "v8")]
+fn run_page_v8(
+    shared: crate::bridge::SharedTree,
+    base_url: Option<String>,
+    post_exprs: &[String],
+    storage: browser_storage::StorageHandle,
+) -> (usize, Option<(String, String)>) {
     let _guard = crate::bridge::install_shared_with_base(shared.clone(), base_url.clone());
-    let storage = browser_storage::new_storage();
     crate::bridge::install_storage(storage);
     let initial_url = base_url
         .clone()
@@ -11274,12 +11334,12 @@ fn run_scripts_v8(
         Some(e) => e,
         None => {
             eprintln!("[js-runtime] V8 engine init failed");
-            return (shared, 0);
+            return (0, None);
         }
     };
     if !engine.install_core_bridges() {
         eprintln!("[js-runtime] V8 bridge install failed");
-        return (shared, 0);
+        return (0, None);
     }
 
     // shim：与 QuickJS 相同的 6 段逐段安装（V8 的 globalThis 属性跨
@@ -11436,5 +11496,16 @@ fn run_scripts_v8(
         engine.pump_microtasks();
     }
 
-    (shared, executed)
+    // M96.17: 文档导航取出（TreeGuard 存活期间 fetch——cookie slot 可写；
+    // 逐跳跟 3xx 语义复用 M93 的 fetch_navigation_document）。
+    let next = crate::bridge::take_pending_navigation().and_then(|url| {
+        match crate::bridge::fetch_navigation_document(&url) {
+            Ok(html) => Some((url, html)),
+            Err(e) => {
+                eprintln!("[nav] fetch navigation target failed: {e} — keeping current DOM");
+                None
+            }
+        }
+    });
+    (executed, next)
 }

@@ -931,6 +931,8 @@ pub fn fetch_favicon_async(base_url: &str) {
     });
     with_net_worker(|tx| {
         let (reply_tx, _reply_rx) = std::sync::mpsc::channel();
+        // M96.15: favicon 头组对齐 Chrome netlog（accept image 家族 +
+        // referer + sec-fetch no-cors/image + priority u=1）。
         let _ = tx.send(NetRequest {
             url: fav_url.clone(),
             method: "GET".to_string(),
@@ -938,7 +940,17 @@ pub fn fetch_favicon_async(base_url: &str) {
             content_type: None,
             cookie_header,
             no_redirect: false,
-            extra_headers: Vec::new(),
+            extra_headers: vec![
+                (
+                    "Accept".to_string(),
+                    "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8".to_string(),
+                ),
+                ("Referer".to_string(), base_url.to_string()),
+                ("Sec-Fetch-Site".to_string(), "same-origin".to_string()),
+                ("Sec-Fetch-Mode".to_string(), "no-cors".to_string()),
+                ("Sec-Fetch-Dest".to_string(), "image".to_string()),
+                ("Priority".to_string(), "u=1, i".to_string()),
+            ],
             reply: reply_tx,
         });
         if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
@@ -1117,11 +1129,59 @@ fn fetch_sync_with_method_full(
         if !has!("sec-fetch-site") {
             hdrs.push(("Sec-Fetch-Site".into(), site.into()));
         }
+        // M96.15: Sec-Fetch Mode/Dest 按 Chromium 资源加载语义推断（此前
+        // 写死 cors/empty——Chrome netlog IncludeSensitive 实测：外链
+        // script=no-cors/script、module/wasm/字体=cors、css=no-cors/style、
+        // 图片=no-cors/image（且 accept image/*）、fetch()=cors/empty）。
+        let path_lower = url::Url::parse(url.as_str())
+            .map(|u| u.path().to_ascii_lowercase())
+            .unwrap_or_default();
+        let (fmode, fdest, fact): (&str, &str, Option<&str>) = if path_lower.ends_with(".mjs")
+            || path_lower.ends_with(".wasm")
+            || path_lower.ends_with(".woff2")
+            || path_lower.ends_with(".woff")
+        {
+            ("cors", "empty", Some("*/*"))
+        } else if path_lower.ends_with(".js") {
+            ("no-cors", "script", Some("*/*"))
+        } else if path_lower.ends_with(".css") {
+            ("no-cors", "style", Some("text/css,*/*;q=0.1"))
+        } else if path_lower.ends_with(".png")
+            || path_lower.ends_with(".jpg")
+            || path_lower.ends_with(".jpeg")
+            || path_lower.ends_with(".svg")
+            || path_lower.ends_with(".ico")
+            || path_lower.ends_with(".gif")
+            || path_lower.ends_with(".webp")
+        {
+            (
+                "no-cors",
+                "image",
+                Some("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"),
+            )
+        } else {
+            ("cors", "empty", None)
+        };
         if !has!("sec-fetch-mode") {
-            hdrs.push(("Sec-Fetch-Mode".into(), "cors".into()));
+            hdrs.push(("Sec-Fetch-Mode".into(), fmode.into()));
         }
         if !has!("sec-fetch-dest") {
-            hdrs.push(("Sec-Fetch-Dest".into(), "empty".into()));
+            hdrs.push(("Sec-Fetch-Dest".into(), fdest.into()));
+        }
+        // M96.15: HTTP priority hint（Chrome 153 每请求恒带——netlog 实测
+        // script/css u=1、image u=2；我们此前全缺）。
+        if !has!("priority") {
+            let urgency = if fdest == "image" { "u=2, i" } else { "u=1, i" };
+            hdrs.push(("Priority".into(), urgency.into()));
+        }
+        // M96.15: 资源类型 Accept（Chrome 按类型发；脚本/通用路径不覆盖）。
+        if let Some(acc) = fact {
+            if !extra_headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case("accept"))
+            {
+                hdrs.push(("Accept".into(), acc.into()));
+            }
         }
         hdrs
     };
@@ -1194,8 +1254,11 @@ fn fetch_sync_with_method_full(
     // 主线程写回 jar。
     if std::env::var("BROWSER_TRACE_NAV").is_ok() {
         eprintln!(
-            "[ck-diag] {method} {url} set_cookies={} slot={}",
-            set_cookies.len(),
+            "[ck-diag] {method} {url} set_cookies={:?} slot={}",
+            set_cookies
+                .iter()
+                .map(|sc| sc.chars().take(60).collect::<String>())
+                .collect::<Vec<_>>(),
             CURRENT_COOKIE.with(|s| s.borrow().is_some())
         );
     }
