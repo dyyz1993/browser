@@ -1,3 +1,35 @@
+## M96.15–M96.17 🎯 目标达成——xcancel verify 200 + nim_lang 推文完整到手
+- **里程碑：自研引擎 100% 通过 xcancel antibot 并抓到推文**
+  （xcancel_nim_lang_live.md 16.6KB：置顶 "Nim v1 is here.👑"/920 tweets/
+  5236 followers/完整时间线；端到端复验 3 次全成功）
+- **M96.15 头组语义升级**（Chrome netlog IncludeSensitive 金标准）：
+  Sec-Fetch Mode/Dest 按资源类型推断（script=no-cors/script、module/wasm=
+  cors、css=style、image=image+accept image/*）+ 每请求 priority hint
+  （u=1/u=2）+ 导航头组（upgrade-insecure-requests/navigate/document/
+  sec-fetch-user/priority u=0）+ favicon 头组（accept image/referer）
+- **M96.16 决定性判别**（MITM-Chrome 代理 /tmp/mitm_chrome.py：引擎→
+  本地 8898 解密→curl_cffi impersonate=chrome 转发）：**传输层全 Chrome
+  化（TLS ClientHello+H2 帧）→ verify 稳定 200**——此前判别实验①被
+  「challenge(rustls)/verify(BoringSSL) 指纹突变」污染；真实结论：我们
+  的 payload/PoW/fp/头组全部合格，唯传输栈形状是最后拼图。
+  引擎侧配合：BROWSER_TLS_INSECURE=1（自签信任，诊断开关）
+- **M96.17 落地三件**：
+  ①V8 管线 M93 同款文档导航循环（run_scripts_v8→外层 hop 循环+
+    run_page_v8 单页；每页全新 V8Engine、storage 同源跨跳复用）
+  ②location.reload 真实语义（此前 no-op；且同 URL 的 href 赋值被
+    __setLocHref「非 hash 变化」条件滤掉——reload 强制 __navRecord）
+  ③verify 200 → __antibot 会话票 Set-Cookie → reload 带票 → 真身页
+- **完整通过链条**（复现命令）：
+  ```bash
+  /usr/local/bin/python3.12 /tmp/mitm_chrome.py &   # Chrome 形传输代理
+  BROWSER_TLS_INSECURE=1 ./target/release/browser fetch \
+    https://xcancel.com/nim_lang --js-engine v8 \
+    --proxy http://127.0.0.1:8898 --format markdown
+  ```
+- **工程化后续**（未做）：Rust 侧原生 Chrome 形 TLS（boring/utls 后端）
+  可去掉 MITM 依赖；Clash 节点选择影响出口可用性
+- 门禁双绿（default + v8 feature）
+
 ## M96.11–M96.13 判别实验矩阵收官——四大维度逐一实证排除，403 锁定会话级行为/IP 评分
 - **实验①传输层**：BROWSER_VERIFY_CAPTURE 截获 verify（token 不消费）→
   curl_cffi（Chrome 同形 TLS+H2）重放完整真 payload → **403 同文案**
