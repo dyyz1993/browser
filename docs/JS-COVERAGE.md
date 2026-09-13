@@ -195,6 +195,8 @@
 | TextDecoder | ✅ | integration_js_features（UTF-8 polyfill） |
 | crypto.getRandomValues | ✅ | compat_shim | |
 | crypto.randomUUID | ✅ | compat_shim | |
+| crypto.subtle（ECDH P-256 / HKDF-SHA256 / AES-GCM / importKey raw / deriveBits/Key / exportKey raw / encrypt / generateKey） | ✅ | M93 纯 JS（P-256 Jacobian + HKDF + AES-GCM，M96.5 本地复演 xcancel ECIES 全链实证） | |
+| **Intl**（DateTimeFormat/NumberFormat/Collator/Locale/DisplayNames/Segmenter/ListFormat/RelativeTimeFormat/PluralRules/getCanonicalLocales） | ✅ | M93.18/19 子集；**M96.6 原生守卫**——V8/ICU 原生 Intl 完整（含 DurationFormat）时不覆盖 + `v8::icu::set_default_locale("zh-CN")`（fp locale 对齐 Chrome） | |
 
 ### 其他 Web API
 | API | 状态 | 备注 |

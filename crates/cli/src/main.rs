@@ -200,7 +200,7 @@ enum Cmd {
         /// 在子进程内杀掉自己，父进程走 CSR 兜底。0 = 禁用沙箱（进程内渲染）。
         #[arg(long, default_value_t = sandbox::DEFAULT_JS_MEMORY_LIMIT_MB)]
         js_memory_limit_mb: u64,
-        /// M66: JS engine (boa | quickjs). Default: quickjs.
+        /// M66: JS engine (boa | quickjs | v8[--features v8]). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
         /// M81: 合成点击（可多次）。JS 跑完后、渲染/截图前按序执行：
@@ -281,7 +281,7 @@ enum Cmd {
         /// 阶段：fetch HTML / parse / JS eval / event loop / serialize / total
         #[arg(long)]
         profile: bool,
-        /// M66: JS engine selection (boa | quickjs). Default: quickjs.
+        /// M66: JS engine selection (boa | quickjs | v8[--features v8]). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
         /// M57.6: Wait strategy for JS execution. Options: load (full event loop),
@@ -323,7 +323,7 @@ enum Cmd {
         /// by e2e tests in headless environments.
         #[arg(long)]
         check: bool,
-        /// M66: JS engine (boa | quickjs). Default: quickjs.
+        /// M66: JS engine (boa | quickjs | v8[--features v8]). Default: quickjs.
         #[arg(long, default_value = "quickjs")]
         js_engine: String,
     },
@@ -334,7 +334,7 @@ enum Cmd {
         /// Port to listen on (Chrome default: 9222).
         #[arg(long, default_value_t = browser_cdp::server::DEFAULT_CDP_PORT)]
         port: u16,
-        /// M67: JS engine for Runtime.evaluate/callFunctionOn (boa | quickjs).
+        /// M67: JS engine for Runtime.evaluate/callFunctionOn (boa | quickjs | v8).
         /// Default: quickjs (aligns with render-url/fetch/open). The CDP Runtime
         /// domain is the last path still bound to boa pre-M67.
         #[arg(long, default_value = "quickjs")]
