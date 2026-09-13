@@ -2095,6 +2095,15 @@ fn run_page_quickjs(
             }
         } catch(e) {}"#,
     );
+    // M96.14: favicon loader 行为——DCL 派发 eval 已完成（VM main@DCL 的
+    // challenge POST 已进 net worker 队列），eventloop pump（verify 在此
+    // 阶段）之前，异步补 favicon 请求——对齐 Chrome netlog 实测会话序
+    // （challenge → favicon → verify；Chromium favicon loader 固有行为）。
+    if let Some(b) = base_url.as_deref() {
+        if b.starts_with("http") {
+            crate::bridge::fetch_favicon_async(b);
+        }
+    }
     eprintln!(
         "[serve] scripts: {}ms, dcl: {}ms",
         __t_scripts_start.elapsed().as_millis(),
@@ -11411,6 +11420,14 @@ fn run_scripts_v8(
             }
         } catch(e) {}"#,
     );
+
+    // M96.14: favicon loader 行为（同 QuickJS 管线）——DCL 派发后（VM 的
+    // challenge 已发）、microtask pump（verify 在此阶段）之前。
+    if let Some(b) = base_url.as_deref() {
+        if b.starts_with("http") {
+            crate::bridge::fetch_favicon_async(b);
+        }
+    }
 
     // M96.4: microtask pump 循环——V8 显式 microtask 策略下 Promise .then
     // 不会自动执行，需要显式 checkpoint。迭代 pump 直至无新 microtask

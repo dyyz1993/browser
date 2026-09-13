@@ -62,6 +62,11 @@ impl V8Engine {
     pub fn new() -> Option<Self> {
         ensure_v8_initialized();
         let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        // M96.14: 显式 microtask 策略——默认 auto 会让页面 async 全链在
+        // 单次 eval 内同步跑完（DCL 派发 eval 里 challenge→PoW→verify 一气
+        // 呵成），管线失去阶段控制点（favicon loader 行为需要插在 challenge
+        // 后 verify 前）。对齐 QuickJS run_jobs 的显式 pump 语义。
+        isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
         let context = {
             v8::scope!(let hs, &mut isolate);
             let ctx = v8::Context::new(hs, Default::default());

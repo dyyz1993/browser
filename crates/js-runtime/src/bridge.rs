@@ -902,6 +902,51 @@ struct NetRequest {
 
 type NetResult = Result<(u16, Vec<u8>, Vec<(String, String)>), String>;
 
+/// M96.14: favicon loader 行为——真实浏览器（Chromium favicon loader）在
+/// 页面加载期对站点图标做异步补载；Chrome netlog 实测真 xcancel 挑战
+/// 会话的请求序：challenge POST → **GET /favicon.ico**（+3ms）→ verify
+/// POST。我们的引擎此前从不请求 favicon——会话请求序列与浏览器不一致。
+/// V8 引擎已设 Explicit microtask 策略（M96.14）：DCL 派发 eval 只跑
+/// VM 同步段（challenge 发出即挂起），调用方在 eval 后、pump 前插入
+/// 本函数——时序恰为 challenge 后 verify 前。
+pub fn fetch_favicon_async(base_url: &str) {
+    let Ok(u) = url::Url::parse(base_url) else {
+        return;
+    };
+    let origin = u.origin().ascii_serialization();
+    if !origin.starts_with("http") {
+        return;
+    }
+    let fav_url = format!("{origin}/favicon.ico");
+    let cookie_header = CURRENT_COOKIE.with(|slot| {
+        slot.borrow().as_ref().and_then(|h| {
+            let parsed = url::Url::parse(&fav_url).ok()?;
+            let header = h.borrow().to_cookie_header(&parsed);
+            if header.is_empty() {
+                None
+            } else {
+                Some(header)
+            }
+        })
+    });
+    with_net_worker(|tx| {
+        let (reply_tx, _reply_rx) = std::sync::mpsc::channel();
+        let _ = tx.send(NetRequest {
+            url: fav_url.clone(),
+            method: "GET".to_string(),
+            body: None,
+            content_type: None,
+            cookie_header,
+            no_redirect: false,
+            extra_headers: Vec::new(),
+            reply: reply_tx,
+        });
+        if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+            eprintln!("[fav-trace] enqueued {fav_url}");
+        }
+    });
+}
+
 thread_local! {
     static NET_WORKER: std::cell::OnceCell<NetWorker> = const { std::cell::OnceCell::new() };
 }
