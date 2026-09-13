@@ -1105,6 +1105,29 @@ fn fetch_sync_with_method_full(
     let recv_wait = js_deadline_remaining()
         .unwrap_or(std::time::Duration::from_secs(8))
         .min(std::time::Duration::from_secs(8));
+    // M96.11-diag: 判别实验钩子——verify 请求**截获不发**（challenge token
+    // 保持未消费），完整请求落盘 /tmp/verify_capture.json 供 curl_cffi
+    // （Chrome 同形 TLS+H2）重放对比：隔离「传输层 vs 密文内容」哪个是
+    // 403 真凶。
+    if std::env::var("BROWSER_VERIFY_CAPTURE").is_ok()
+        && url.contains("/antibot/api/verify")
+        && method == "POST"
+    {
+        if let Some(b) = body.as_deref() {
+            // 仅截真正的 verify payload（>1KB；VM 失败后的 66B error 上报跳过，
+            // 避免覆盖第一份）
+            if b.len() > 1024 {
+                // body 本身是合法 JSON——直接内嵌（无需转义）；cookie/URL 无引号。
+                let capture = format!(
+                    "{{\"url\":\"{url}\",\"cookie\":\"{}\",\"body\":{b}}}",
+                    cookie_header.as_deref().unwrap_or("")
+                );
+                let _ = std::fs::write("/tmp/verify_capture.json", capture);
+                eprintln!("[verify-capture] captured {}B body, NOT sent", b.len());
+            }
+        }
+        return Err("verify captured (BROWSER_VERIFY_CAPTURE)".to_string());
+    }
     let (status, bytes, headers) = reply_rx
         .recv_timeout(recv_wait)
         .map_err(|_| "fetch timeout (8s)".to_string())??;
@@ -1114,7 +1137,13 @@ fn fetch_sync_with_method_full(
         .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
         .map(|(_, v)| v.clone())
         .collect();
-    let body = String::from_utf8(bytes).map_err(|e| format!("non-utf8 response: {e}"))?;
+    // M96.12: 二进制安全——原始字节 base64 进侧信道（wasm 等非 UTF-8 资产
+    // 此前 from_utf8 直接 Err → 整个 fetch FAIL，cap_wasm_bg.wasm 拿不到 →
+    // Chrome 走 wasm PoW 路径而我们被迫 JS fallback）。文本 body 用 lossy
+    // （合法 UTF-8 响应零损失）。
+    let b64_body = crate::canvas2d::b64(&bytes);
+    qjs_bridge::set_last_response_b64(&b64_body);
+    let body = String::from_utf8_lossy(&bytes).into_owned();
     // M70.4: 记录这个网络请求到 CDP Network 事件队列（供 navigate drain）。
     record_network_event(&url, &method, status, &headers, body.len());
     // 主线程写回 jar。
@@ -3502,7 +3531,22 @@ pub mod qjs_bridge {
         out
     }
 
-    /// fetchSyncMethod(url, method, body, contentType) -> Option<String>。
+    // fetchSyncMethod(url, method, body, contentType) -> Option<String>。
+    // M96.12: 最近一次 fetch 的原始响应体 base64（二进制安全侧信道——
+    // wasm 等非 UTF-8 资产经 String 必损；JS 侧紧跟 fetch 调
+    // `__fetchB64()` 取走，同一同步 JS 栈内无竞态）。
+    thread_local! {
+        static LAST_RESPONSE_B64: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+
+    pub fn set_last_response_b64(v: &str) {
+        LAST_RESPONSE_B64.with(|s| *s.borrow_mut() = v.to_string());
+    }
+
+    pub fn fetch_b64() -> String {
+        LAST_RESPONSE_B64.with(|s| std::mem::take(&mut *s.borrow_mut()))
+    }
+
     pub fn fetch_sync_method(
         url: String,
         method: String,

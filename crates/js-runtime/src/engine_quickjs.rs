@@ -680,6 +680,21 @@ impl QuickJsEngine {
                     })
                     .unwrap(),
                 );
+                // === M96.11-diag: fp canvas hash A/B 覆盖值（env 注入） ===
+                if let Ok(v) = std::env::var("BROWSER_FP_CANVAS_OVERRIDE") {
+                    let _ = g.set("__canvasFpOverride", v);
+                }
+                // === M96.12-diag: signals 全树 override（终局判别） ===
+                if let Ok(p) = std::env::var("BROWSER_FP_SIGNALS_FILE") {
+                    if let Ok(s) = std::fs::read_to_string(&p) {
+                        let _ = g.set("__fpSignalsOverride", s);
+                    }
+                }
+                // === M96.12: 二进制安全 fetch 侧信道（wasm 等资产真字节） ===
+                let _ = g.set(
+                    "__fetchB64",
+                    Function::new(ctx.clone(), bridge::qjs_bridge::fetch_b64).unwrap(),
+                );
 
                 // === 日志 ===
                 let _ = g.set(

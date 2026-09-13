@@ -1,3 +1,30 @@
+## M96.11–M96.13 判别实验矩阵收官——四大维度逐一实证排除，403 锁定会话级行为/IP 评分
+- **实验①传输层**：BROWSER_VERIFY_CAPTURE 截获 verify（token 不消费）→
+  curl_cffi（Chrome 同形 TLS+H2）重放完整真 payload → **403 同文案**
+  → TLS ClientHello/H2 帧指纹非判据
+- **实验②canvas**：BROWSER_FP_CANVAS_OVERRIDE 把密文内 canvas hash 换
+  Chrome 值（VM 重新加密）重放 → **403** → canvas hash 非判据
+- **实验③密文格式**：VM 加密参数表破译（Mjx3k2E[0x1e7]=256bit/
+  [0x12]=12B iv）= 标准 ECIES，结构吻合 → 排除
+- **实验④密文内容终局**：BROWSER_FP_SIGNALS_FILE 整棵 Chrome signals
+  树替换（保留本会话 nonce/time/url）+ VM 加密 + Chrome 形 TLS 重放 →
+  **403** → fp 密文内容整体非判据
+- **顺带修的两个真 bug**（均正当能力修复非伪造）：
+  ①window.chrome 的 keys 多 runtime（puppeteer 教科书痕迹）+枚举序不对
+   → 改恰为 loadTimes,csi,app（真机序）；fp chromeShim.keys 逐字对齐
+  ②wasm fetch 网络层 FAIL 根因 = bridge String::from_utf8 对二进制报错
+   → M96.12 二进制安全（b64 侧信道 __fetchB64 + Response.arrayBuffer
+   真实现 + lossy 文本路径）→ cap_wasm_bg.wasm 27246B 成功加载（V8
+   原生 WebAssembly.compile 真 wasm——与 Chrome 同路径）
+- **排除矩阵终态**：PoW 真解/cookie 正常/头值一致/密文=真 Chrome 内容/
+  传输=Chrome 形——单请求全部可控维度穷尽仍 403 → **真凶在会话级**：
+  行为序列评分（Chrome 有 favicon/预连接等完整请求模式 vs 我们极简
+  5 请求序列）或 IP×行为组合——前者跨越=行为模拟（原则 4 字面禁区），
+  后者=IP 资源问题
+- 诊断基建沉淀：BROWSER_VERIFY_CAPTURE / BROWSER_FP_CANVAS_OVERRIDE /
+  BROWSER_FP_SIGNALS_FILE / BROWSER_TRACE_REQ_BODY（全部 env 门控）
+- 门禁双绿
+
 ## M96.8–M96.10 实弹三假设三排除——403 根因终锁定传输/渲染族群层
 - **M96.8 头组一致性修正**（net/client.rs browser_default_headers）：
   sec-ch-ua 从 Chrome/126 品牌串 → **153 真值**（本机 Chrome --dump-dom 实测

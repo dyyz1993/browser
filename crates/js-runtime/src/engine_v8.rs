@@ -143,6 +143,36 @@ impl V8Engine {
                 }
             }
         );
+        // M96.11-diag: fp canvas hash A/B 覆盖值（env 注入，诊断专用）
+        if let Ok(v) = std::env::var("BROWSER_FP_CANVAS_OVERRIDE") {
+            if let (Some(ls), Some(key)) = (
+                v8::String::new(&scope, &v),
+                v8::String::new(&scope, "__canvasFpOverride"),
+            ) {
+                let _ = global.set(&scope, key.into(), ls.into());
+            }
+        }
+        // M96.12-diag: signals 全树 override（终局判别）
+        if let Ok(p) = std::env::var("BROWSER_FP_SIGNALS_FILE") {
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                if let (Some(ls), Some(key)) = (
+                    v8::String::new(&scope, &s),
+                    v8::String::new(&scope, "__fpSignalsOverride"),
+                ) {
+                    let _ = global.set(&scope, key.into(), ls.into());
+                }
+            }
+        }
+        // M96.12: 二进制安全 fetch 侧信道（wasm 等资产真字节）
+        defn!(
+            "__fetchB64",
+            |_s: &mut PinScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::fetch_b64();
+                if let Some(ls) = v8::String::new(_s, &v) {
+                    rv.set(ls.into());
+                }
+            }
+        );
         // __hwCores 是**数值**（shim 检查 typeof === 'number'）——Chrome 全核
         {
             let cores = std::process::Command::new("sysctl")

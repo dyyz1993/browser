@@ -2708,13 +2708,15 @@ try { window.screen.orientation.type = 'landscape-primary'; } catch (eScr) {}
 window.innerWidth = 1200;
 window.innerHeight = 762;
 
-// M93.15: window.chrome——UA 声明 Chrome 而 window.chrome 缺失是环境
-// 不一致信号（fp 检查 window.chrome 存在性）。现代 Chrome 的最小形状。
+// M93.15/M96.11: window.chrome——UA 声明 Chrome 而 window.chrome 缺失是环境
+// 不一致信号（fp 检查 window.chrome 存在性）。**keys 必须恰为
+// loadTimes,csi,app 且按此枚举序**（真 Chrome 153 实测 own-key 序）——
+// 多出 runtime 是 puppeteer/自动化环境的教科书痕迹（此前我们带 runtime
+// 被 fp 逐字比较判异）；普通页面无 runtime（那是扩展上下文）。
 window.chrome = {
-    app: { isInstalled: false, getDetails: function() { return null; }, getIsInstalled: function() { return false; }, installState: function() { return {installState:'disabled'}; }, runningState: function() { return 'cannot_run'; } },
-    runtime: { OnInstalledReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {} },
+    loadTimes: function() { return { requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000, commitLoadTime: Date.now() / 1000, finishDocumentLoadTime: Date.now() / 1000, finishLoadTime: Date.now() / 1000, firstPaintTime: Date.now() / 1000, firstPaintAfterLoadTime: 0, navigationType: 'Other', wasFetchedViaSpdy: true, wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false, connectionInfo: 'h2' }; },
     csi: function() { return { startE: Date.now(), onloadT: Date.now(), pageT: 0, tran: 15 }; },
-    loadTimes: function() { return { requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000, commitLoadTime: Date.now() / 1000, finishDocumentLoadTime: Date.now() / 1000, finishLoadTime: Date.now() / 1000, firstPaintTime: Date.now() / 1000, firstPaintAfterLoadTime: 0, navigationType: 'Other', wasFetchedViaSpdy: true, wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false, connectionInfo: 'h2' }; }
+    app: { isInstalled: false, getDetails: function() { return null; }, getIsInstalled: function() { return false; }, installState: function() { return {installState:'disabled'}; }, runningState: function() { return 'cannot_run'; } }
 };
 
 // M93.15: CacheStorage（caches）——spec 桩：空缓存语义。
@@ -6788,6 +6790,41 @@ const QUICKJS_WEBCRYPTO_SHIM: &str = r#"
                     var p = gcmParams(algo);
                     var g = gcmCtx(key.__material.raw, p.iv);
                     var plain = toU8(data);
+                    // M96.11-diag: 一次性 A/B 因果诊断——BROWSER_FP_CANVAS_OVERRIDE
+                    // 把 fp 明文里的 canvasFingerprint 替换为指定值（验证「canvas
+                    // hash 是否 verify 判定项」）。诊断专用：不用于获取访问，
+                    // 产出的会话立即丢弃。VM 不可见的 shim 源码级。
+                    // M96.12-diag: BROWSER_FP_SIGNALS_OVERRIDE（JS 字符串）= 整棵
+                    // signals 树 JSON——终局判别：Chrome signals + 本会话
+                    // nonce/time/url，密文内 vs 密文外真凶一锤定音。
+                    try {
+                        var __ovr = (typeof __canvasFpOverride !== 'undefined') ? __canvasFpOverride : '';
+                        var __sig = (typeof __fpSignalsOverride !== 'undefined') ? __fpSignalsOverride : '';
+                        if (__sig && plain.length > 100) {
+                            var __pt2 = '';
+                            for (var si = 0; si < plain.length; si++) __pt2 += String.fromCharCode(plain[si]);
+                            var __obj = JSON.parse(__pt2);
+                            var __newsig = JSON.parse(__sig);
+                            // 会话性字段保留本次真实值（服务端绑定校验）
+                            if (__obj.signals && __newsig.automation) { __newsig.automation.cdp = __obj.signals.automation.cdp; }
+                            __obj.signals = __newsig;
+                            var __out = JSON.stringify(__obj);
+                            var __pn2 = new Uint8Array(__out.length);
+                            for (var sj = 0; sj < __out.length; sj++) __pn2[sj] = __out.charCodeAt(sj) & 255;
+                            plain = __pn2;
+                            if (typeof __ctrace === 'function') { try { __ctrace('FP-SIGNALS-OVERRIDE applied ' + __out.length + 'B'); } catch (eSo) {} }
+                        } else if (__ovr && plain.length > 100) {
+                            var __pt = '';
+                            for (var pi = 0; pi < plain.length; pi++) __pt += String.fromCharCode(plain[pi]);
+                            if (__pt.indexOf('"canvasFingerprint":"') >= 0) {
+                                __pt = __pt.replace(/("canvasFingerprint":")([^"]+)(")/, '$1' + __ovr + '$3');
+                                var __pn = new Uint8Array(__pt.length);
+                                for (var pj = 0; pj < __pt.length; pj++) __pn[pj] = __pt.charCodeAt(pj) & 255;
+                                plain = __pn;
+                                if (typeof __ctrace === 'function') { try { __ctrace('FP-CANVAS-OVERRIDE applied ' + __ovr); } catch (eOv) {} }
+                            }
+                        }
+                    } catch (eOvAll) {}
                     // M93.14-diag: fp 明文捕获（区分 spec 缺口 vs 身份信号——
                     // VM 不可见的 shim 源码级）
                     if (plain.length > 0 && plain.length < 16384 && typeof __ctrace === 'function') {
@@ -10141,7 +10178,24 @@ Object.defineProperty(Response.prototype, Symbol.toStringTag, { value: 'Response
 Response.prototype.text = function() { this.bodyUsed = true; return Promise.resolve(this.__body); };
 Response.prototype.json = function() { this.bodyUsed = true; return Promise.resolve(JSON.parse(this.__body)); };
 Response.prototype.clone = function() { return new Response(this.__body, { status: this.status, statusText: this.statusText }); };
-Response.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+Response.prototype.arrayBuffer = function() {
+    this.bodyUsed = true;
+    // M96.12: 真实现——优先二进制侧信道（wasm 等资产此前恒空缓冲 →
+    // WebAssembly.compile 报错 → cap PoW 被迫 JS fallback）。
+    if (this.__b64) {
+        try {
+            var s = this.__b64;
+            while (s.length % 4) s += '=';
+            var bin = (typeof window !== 'undefined' && window.atob ? window.atob : atob)(s);
+            var out = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+            return Promise.resolve(out.buffer);
+        } catch (eAb) {}
+    }
+    // 文本 body 回退（UTF-8 编码）
+    var t = new TextEncoder().encode(this.__body || '');
+    return Promise.resolve(t.buffer);
+};
 Response.prototype.blob = function() { return Promise.resolve({}); };
 Response.prototype.formData = function() {
     // M78.68: FormData 类（此前完全缺失——Response.formData 的依赖）。
@@ -10337,6 +10391,12 @@ window.fetch = function(input, options) {
         if (raw === null || raw === undefined) {
             reject(new TypeError('Failed to fetch ' + url));
         } else {
+            // M96.12: 二进制安全侧信道——紧跟 bridge 调用取走本次响应的
+            // 原始字节 base64（wasm 等非 UTF-8 资产 text 路径必损）。
+            var __rb64 = '';
+            if (typeof __fetchB64 === 'function') {
+                try { __rb64 = String(__fetchB64() || ''); } catch (eB64) {}
+            }
             // M93.5: 静态资产形状的 GET 成功响应写 SCRIPT_CACHE——同 URL 的
             // Worker 源码加载（worker_run → fetch_sync 读 SCRIPT_CACHE）直接
             // 命中缓存，去重 Anubis main.mjs 预取 sha256.mjs + Worker 再取的
@@ -10347,6 +10407,7 @@ window.fetch = function(input, options) {
             }
             var resp = new Response(raw, { status: statusCode, statusText: statusCode === 200 ? 'OK' : String(statusCode) });
             resp.url = url;
+            resp.__b64 = __rb64;
             resolve(resp);
         }
     });
