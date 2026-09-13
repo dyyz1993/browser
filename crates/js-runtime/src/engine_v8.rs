@@ -133,6 +133,16 @@ impl V8Engine {
                            _rv: ReturnValue| {
             qb::log(arg_string(s, &a, 0));
         });
+        // M96.7: Rust 原生 SHA-256（crypto.subtle.digest fast path——PoW 提速）
+        defn!(
+            "__sha256Hex",
+            |s: &mut PinScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = crate::sha256::sha256_hex_latin1(&arg_string(s, &a, 0));
+                if let Some(ls) = v8::String::new(s, &v) {
+                    rv.set(ls.into());
+                }
+            }
+        );
         // __hwCores 是**数值**（shim 检查 typeof === 'number'）——Chrome 全核
         {
             let cores = std::process::Command::new("sysctl")

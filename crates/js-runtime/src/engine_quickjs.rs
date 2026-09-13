@@ -187,6 +187,18 @@ globalThis.crypto = {
                     else if (data instanceof ArrayBuffer) { u8 = new Uint8Array(data); }
                     else if (typeof data === 'string') { u8 = new TextEncoder().encode(data); }
                     else { reject(new TypeError('digest: data must be BufferSource')); return; }
+                    // M96.7: Rust 原生 fast path（NIST 同源实现）——latin1 打包
+                    // 每 char 一字节，hex 回转 32 字节。纯 JS 兜底保持不变。
+                    if (typeof __sha256Hex === 'function') {
+                        try {
+                            var __ls = String.fromCharCode.apply(null, u8.length === u8.byteLength ? u8 : Array.prototype.slice.call(u8));
+                            var __hx = __sha256Hex(__ls);
+                            var __ob = new Uint8Array(32);
+                            for (var oi = 0; oi < 32; oi++) __ob[oi] = parseInt(__hx.substr(oi * 2, 2), 16);
+                            resolve(__ob.buffer);
+                            return;
+                        } catch (eFast) {}
+                    }
                     resolve(__sha256(u8).buffer);
                 } catch (err) { reject(err); }
             });
@@ -256,6 +268,15 @@ pub(crate) fn worker_run_src(source: &str, msg_json: &str) -> String {
 
     // 3. env → worker 源码 → 消息分发 → drain → 收集。
     ctx.with(|ctx: Ctx| {
+        // M96.7: worker env 的 crypto.subtle.digest 优先走 Rust 原生
+        // SHA-256（PoW fallback solver 提速 ~50x，对齐 Chrome wasm 时长量级）。
+        let _ = ctx.globals().set(
+            "__sha256Hex",
+            Function::new(ctx.clone(), |s: String| {
+                crate::sha256::sha256_hex_latin1(&s)
+            })
+            .unwrap(),
+        );
         let env = worker_env_js(msg_json, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36");
         if let Err(e) = ctx.eval::<(), _>(env.as_str()).catch(&ctx) {
             return format!("{{\"ok\":false,\"error\":\"worker env install failed: {e}\"}}");
@@ -648,6 +669,15 @@ impl QuickJsEngine {
         self.ctx
             .with(|ctx: Ctx| {
                 let g = ctx.globals();
+
+                // === M96.7: Rust 原生 SHA-256（crypto.subtle.digest 提速） ===
+                let _ = g.set(
+                    "__sha256Hex",
+                    Function::new(ctx.clone(), |s: String| {
+                        crate::sha256::sha256_hex_latin1(&s)
+                    })
+                    .unwrap(),
+                );
 
                 // === 日志 ===
                 let _ = g.set(

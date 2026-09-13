@@ -3318,6 +3318,17 @@ function __subtleDigest(algo, data) {
                 reject(new TypeError('crypto.subtle.digest: data must be BufferSource'));
                 return;
             }
+            // M96.7: Rust 原生 fast path（worker PoW 提速；NIST 同源实现）
+            if (typeof __sha256Hex === 'function') {
+                try {
+                    var __ls = String.fromCharCode.apply(null, u8.length === u8.byteLength ? u8 : Array.prototype.slice.call(u8));
+                    var __hx = __sha256Hex(__ls);
+                    var __ob = new Uint8Array(32);
+                    for (var oi = 0; oi < 32; oi++) __ob[oi] = parseInt(__hx.substr(oi * 2, 2), 16);
+                    resolve(__ob.buffer);
+                    return;
+                } catch (eFast) {}
+            }
             resolve(__sha256(u8).buffer);
         } catch (err) { reject(err); }
     });

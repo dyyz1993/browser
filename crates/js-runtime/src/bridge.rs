@@ -3521,6 +3521,15 @@ pub mod qjs_bridge {
         } else if trace_fetch {
             eprintln!("[fetch-trace] CALL {method} {resolved}");
         }
+        // M96.7-diag: verify/pow 请求体 dump（powSolutions 是否真实到达）。
+        if std::env::var("BROWSER_TRACE_REQ_BODY").is_ok() {
+            if let Some(b) = body.as_deref() {
+                eprintln!(
+                    "[req-body] {method} {resolved} body[0..800]={:?}",
+                    b.chars().take(800).collect::<String>()
+                );
+            }
+        }
         let out = super::fetch_sync_with_method_full(
             &resolved,
             &method,

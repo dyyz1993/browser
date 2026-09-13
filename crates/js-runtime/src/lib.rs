@@ -38,6 +38,7 @@ pub mod runtime;
 #[cfg(feature = "boa")]
 pub mod screen_shim;
 pub mod scripts;
+pub mod sha256;
 // M-cls.3: CSR 数据兜底（JS 跑空时直接拉 SSR 数据页注入正文）。
 pub mod spa_fallback;
 #[cfg(feature = "boa")]
