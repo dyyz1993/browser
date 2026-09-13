@@ -2458,7 +2458,19 @@ function __intlLocale() {
 // Segmenter / ListFormat / RelativeTimeFormat / PluralRules /
 // getCanonicalLocales），缺任一即整段 ERROR。成员非枚举安装
 //（Chrome 实测 Object.keys(Intl) === []）。
+// M96.6: 引擎原生 Intl 完整时（V8/ICU——含 DurationFormat/supportedValuesOf）
+// 不覆盖——本子集缺 DurationFormat，覆盖反而把 Intl 探针打成 ERROR；
+// QuickJS 无 ICU，走本子集。
 (function() {
+    var __nativeIntlComplete = false;
+    try {
+        __nativeIntlComplete = (typeof Intl === 'object' && Intl !== null
+            && typeof Intl.DateTimeFormat === 'function'
+            && typeof Intl.DurationFormat === 'function'
+            && typeof Intl.Segmenter === 'function'
+            && typeof Intl.getCanonicalLocales === 'function');
+    } catch (eNativeIntl) {}
+    if (!__nativeIntlComplete) {
     var I = {};
     function def(name, val) { try { Object.defineProperty(I, name, { value: val, writable: true, configurable: true, enumerable: false }); } catch (e) {} }
     function localeArg(locales) { return (typeof locales === 'string' && locales) ? locales.split(',')[0] : ((locales && locales[0]) || __intlLocale()); }
@@ -2527,6 +2539,7 @@ function __intlLocale() {
     def('PluralRules', PluralRules);
     def('getCanonicalLocales', function(x) { return Array.isArray(x) ? x.slice() : [String(x)]; });
     window.Intl = I;
+    } // M96.6: !__nativeIntlComplete 守卫结束
 })();
 
 // M93.19c: RTCRtpSender.getCapabilities——本机真 Chrome CDP 实测全表

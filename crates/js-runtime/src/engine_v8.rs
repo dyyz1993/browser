@@ -24,6 +24,12 @@ pub fn ensure_v8_initialized() {
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
+        // M96.6: ICU 默认 locale 对齐 shim 的 navigator.language（'zh-CN'，
+        // scripts.rs navigator 常量）——Chrome 从浏览器语言推导 Intl locale，
+        // fp 采集 `Intl.DateTimeFormat().resolvedOptions().locale` 需要
+        // zh-CN（en-US 会成为身份差异项）。timeZone 由 ICU 从宿主
+        // TZ 推导（本机 Asia/Shanghai，与 Chrome 一致），无需干预。
+        v8::icu::set_default_locale("zh-CN");
     });
 }
 

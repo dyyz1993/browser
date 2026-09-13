@@ -1,3 +1,19 @@
+## M96.6 v8 152 指纹对齐终局——fp diff 6→2（真实差异仅 canvas hash）
+- **FP-PLAIN 明文 vs Chrome 基准全字段 diff = 2**（QuickJS 83 → rusty_v8 6 → 2）：
+  - etsl/maths/sumPrecise/bitmask/features/highEntropyValues/plugins/toSourceError
+    /Intl 全部一致——**v8 152 同源把 4 项数学引擎微差全部消除**（maths
+    -4c12b63 逐位一致）
+  - 剩余 2：automation.cdp（=Chrome 基准自身 CDP 采集伪影，我们 false 才对）
+    + canvasFingerprint（fontdue vs Skia 光栅化 hash——M80 非目标天花板）
+- Intl 修复两件：
+  ①`v8::icu::set_default_locale("zh-CN")`——Intl locale en-US→zh-CN
+   （对齐 shim navigator.language；LC_ALL=zh_CN 实测验证 ICU 路径）
+  ②Intl shim 原生守卫——V8/ICU 原生 Intl 完整（含 DurationFormat）时不覆盖
+   （此前无条件覆盖→Intl 探针整段 ERROR）；QuickJS 无 ICU 照走子集
+- assessment 入库：`docs/assessments/M96.6-v8152-fp-parity.md`（协议逆向
+  实证 + 复演环境复用指南）
+- 门禁双绿（default + v8 feature：fmt/clippy 0 warning，test 0 fail）
+
 ## M96.5 v8 152.2.0 同源迁移 + 本地复演 ECIES 全链铁证（verify 真实加密 payload 发出）
 - **rusty_v8 0.32 → v8 152.2.0**（Chrome 152/153 同源 V8，/tmp/v8eval2 三同源
   实证：etsl=33 ✓ / TypeError 文案逐字符 ✓ / native toString 单行 ✓）
