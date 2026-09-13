@@ -224,6 +224,517 @@ impl V8Engine {
             }
         );
 
+        // ---- DOM 读取族 ----
+        defn!(
+            "__getText",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::get_text(arg_f64(s, &a, 0));
+                ret_str(s, &mut rv, &v);
+            }
+        );
+        defn!("__getTag", |_s: &mut HandleScope,
+                           a: FunctionCallbackArguments,
+                           mut rv: ReturnValue| {
+            let t = qb::get_tag(arg_f64(_s, &a, 0));
+            ret_str(_s, &mut rv, &t);
+        });
+        defn!(
+            "__getTagName",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let t = qb::get_tag(arg_f64(_s, &a, 0));
+                ret_str(_s, &mut rv, &t);
+            }
+        );
+        defn!(
+            "__findTag",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::get_tag_by_name(arg_string(_s, &a, 0));
+                rv.set(rusty_v8::Number::new(_s, v).into());
+            }
+        );
+        defn!(
+            "__getAttr",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::get_attr(arg_f64(_s, &a, 0), arg_string(_s, &a, 1));
+                match v {
+                    Some(s) => ret_str(_s, &mut rv, &s),
+                    None => rv.set(rusty_v8::null(_s).into()),
+                }
+            }
+        );
+        defn!(
+            "__getElById",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::get_el_by_id(arg_string(_s, &a, 0));
+                rv.set(rusty_v8::Number::new(_s, v).into());
+            }
+        );
+        defn!("__qs", |_s: &mut HandleScope,
+                       a: FunctionCallbackArguments,
+                       mut rv: ReturnValue| {
+            let v = qb::qs(arg_string(_s, &a, 0));
+            rv.set(rusty_v8::Number::new(_s, v).into());
+        });
+        defn!("__qsAll", |_s: &mut HandleScope,
+                          a: FunctionCallbackArguments,
+                          mut rv: ReturnValue| {
+            let v = qb::qs_all(arg_string(_s, &a, 0));
+            ret_str(_s, &mut rv, &v);
+        });
+        defn!(
+            "__qsMatch",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::qs_match(arg_f64(_s, &a, 0), arg_string(_s, &a, 1));
+                rv.set(rusty_v8::Boolean::new(_s, v).into());
+            }
+        );
+        defn!(
+            "__qsClosest",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::qs_closest(arg_f64(_s, &a, 0), arg_string(_s, &a, 1));
+                rv.set(rusty_v8::Number::new(_s, v).into());
+            }
+        );
+        defn!(
+            "__qsCheck",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let ok = crate::bridge::qs_syntax_error(&arg_string(_s, &a, 0)).is_none();
+                rv.set(rusty_v8::Boolean::new(_s, ok).into());
+            }
+        );
+        defn!(
+            "__offsetWidth",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::offset_width(arg_f64(_s, &a, 0));
+                rv.set(rusty_v8::Number::new(_s, v).into());
+            }
+        );
+        defn!("__allIds", |_s: &mut HandleScope,
+                           _a: FunctionCallbackArguments,
+                           mut rv: ReturnValue| {
+            let v = qb::all_ids();
+            ret_str(_s, &mut rv, &v);
+        });
+        defn!(
+            "__attrsOf",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::attrs_of(arg_f64(_s, &a, 0));
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__textData",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::text_data(arg_f64(_s, &a, 0));
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__visibleBodyTextLen",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::Number::new(_s, qb::visible_body_text_len()).into());
+            }
+        );
+        defn!(
+            "__getBody",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::Number::new(_s, qb::get_body()).into());
+            }
+        );
+        defn!(
+            "__getParent",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::get_parent(arg_f64(_s, &a, 0));
+                rv.set(rusty_v8::Number::new(_s, v).into());
+            }
+        );
+        defn!(
+            "__children",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::children(arg_f64(_s, &a, 0));
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__getValue",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::get_attr(arg_f64(_s, &a, 0), "value".to_string());
+                match v {
+                    Some(s) => ret_str(_s, &mut rv, &s),
+                    None => rv.set(rusty_v8::null(_s).into()),
+                }
+            }
+        );
+        defn!(
+            "__setValue",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::set_attr(arg_f64(s, &a, 0), "value".to_string(), arg_string(s, &a, 1));
+            }
+        );
+        defn!("__click", |_s: &mut HandleScope,
+                          _a: FunctionCallbackArguments,
+                          _rv: ReturnValue| {});
+        defn!("__submit", |_s: &mut HandleScope,
+                           _a: FunctionCallbackArguments,
+                           _rv: ReturnValue| {});
+
+        // ---- fetch 族 ----
+        defn!(
+            "__fetchSetBody",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::fetch_set_body(arg_string(s, &a, 0));
+            }
+        );
+        defn!(
+            "__fetchAppendBody",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::fetch_append_body(arg_string(s, &a, 0));
+            }
+        );
+        defn!(
+            "__fetchSync",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::fetch_sync(arg_string(_s, &a, 0));
+                match v {
+                    Some(s) => ret_str(_s, &mut rv, &s),
+                    None => rv.set(rusty_v8::null(_s).into()),
+                }
+            }
+        );
+        defn!(
+            "__fetchSyncMethod",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let body = if a.get(2).is_null_or_undefined() {
+                    None
+                } else {
+                    Some(arg_string(_s, &a, 2))
+                };
+                let ct = if a.get(3).is_null_or_undefined() {
+                    None
+                } else {
+                    Some(arg_string(_s, &a, 3))
+                };
+                let hj = if a.get(4).is_null_or_undefined() {
+                    None
+                } else {
+                    Some(arg_string(_s, &a, 4))
+                };
+                let v = qb::fetch_sync_method(
+                    arg_string(_s, &a, 0),
+                    arg_string(_s, &a, 1),
+                    body,
+                    ct,
+                    hj,
+                );
+                match v {
+                    Some(s) => ret_str(_s, &mut rv, &s),
+                    None => rv.set(rusty_v8::null(_s).into()),
+                }
+            }
+        );
+        defn!(
+            "__fetchScriptMimeOk",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let ok = crate::scripts::fetch_script_mime_ok(arg_string(_s, &a, 0));
+                rv.set(rusty_v8::Boolean::new(_s, ok).into());
+            }
+        );
+        defn!(
+            "__cacheAsset",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::cache_asset(arg_string(s, &a, 0), arg_string(s, &a, 1));
+            }
+        );
+
+        // ---- parseHtml（innerHTML）----
+        defn!(
+            "__parseHtml",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::parse_html(arg_f64(s, &a, 0), arg_string(s, &a, 1));
+            }
+        );
+
+        // ---- storage ----
+        defn!(
+            "__storageGet",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::storage_get(arg_string(_s, &a, 0));
+                match v {
+                    Some(s) => ret_str(_s, &mut rv, &s),
+                    None => rv.set(rusty_v8::null(_s).into()),
+                }
+            }
+        );
+        defn!(
+            "__storageSet",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::storage_set(arg_string(s, &a, 0), arg_string(s, &a, 1));
+            }
+        );
+        defn!(
+            "__storageRemove",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                qb::storage_remove(arg_string(s, &a, 0));
+            }
+        );
+        defn!(
+            "__storageLen",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::Number::new(_s, qb::storage_len()).into());
+            }
+        );
+        defn!(
+            "__storageKey",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::storage_key(arg_f64(_s, &a, 0));
+                match v {
+                    Some(s) => ret_str(_s, &mut rv, &s),
+                    None => rv.set(rusty_v8::null(_s).into()),
+                }
+            }
+        );
+        defn!(
+            "__storageClear",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+
+        // ---- canvas 2D（真像素）----
+        defn!("__cvNew", |_s: &mut HandleScope,
+                          a: FunctionCallbackArguments,
+                          mut rv: ReturnValue| {
+            let v = crate::canvas2d::cv_new(arg_f64(_s, &a, 0), arg_f64(_s, &a, 1));
+            rv.set(rusty_v8::Number::new(_s, v).into());
+        });
+        defn!(
+            "__cvResize",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::canvas2d::cv_resize(
+                    arg_f64(_s, &a, 0),
+                    arg_f64(_s, &a, 1),
+                    arg_f64(_s, &a, 2),
+                );
+            }
+        );
+        defn!(
+            "__cvBeginPath",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::canvas2d::cv_begin_path(arg_f64(_s, &a, 0));
+            }
+        );
+        defn!("__cvRect", |_s: &mut HandleScope,
+                           a: FunctionCallbackArguments,
+                           _rv: ReturnValue| {
+            crate::canvas2d::cv_rect(
+                arg_f64(_s, &a, 0),
+                arg_f64(_s, &a, 1),
+                arg_f64(_s, &a, 2),
+                arg_f64(_s, &a, 3),
+                arg_f64(_s, &a, 4),
+            );
+        });
+        defn!("__cvArc", |_s: &mut HandleScope,
+                          a: FunctionCallbackArguments,
+                          _rv: ReturnValue| {
+            crate::canvas2d::cv_arc(
+                arg_f64(_s, &a, 0),
+                arg_f64(_s, &a, 1),
+                arg_f64(_s, &a, 2),
+                arg_f64(_s, &a, 3),
+                arg_f64(_s, &a, 4),
+                arg_f64(_s, &a, 5),
+                a.get(6).boolean_value(_s),
+            );
+        });
+        defn!(
+            "__cvSetStyle",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::canvas2d::cv_set_style(
+                    &arg_string(s, &a, 0),
+                    arg_f64(s, &a, 1),
+                    a.get(2).boolean_value(s),
+                );
+            }
+        );
+        defn!("__cvFill", |s: &mut HandleScope,
+                           a: FunctionCallbackArguments,
+                           _rv: ReturnValue| {
+            crate::canvas2d::cv_fill(arg_f64(s, &a, 0), &arg_string(s, &a, 1));
+        });
+        defn!(
+            "__cvFillRect",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::canvas2d::cv_fill_rect(
+                    arg_f64(_s, &a, 0),
+                    arg_f64(_s, &a, 1),
+                    arg_f64(_s, &a, 2),
+                    arg_f64(_s, &a, 3),
+                    arg_f64(_s, &a, 4),
+                );
+            }
+        );
+        defn!(
+            "__cvFillText",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::canvas2d::cv_fill_text(
+                    arg_f64(s, &a, 0),
+                    &arg_string(s, &a, 1),
+                    arg_f64(s, &a, 2),
+                    arg_f64(s, &a, 3),
+                    arg_f64(s, &a, 4),
+                    &arg_string(s, &a, 5),
+                );
+            }
+        );
+        defn!(
+            "__cvToDataURL",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = crate::canvas2d::cv_to_data_url(arg_f64(_s, &a, 0));
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__cvGetImageData",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = crate::canvas2d::cv_get_image_data(
+                    arg_f64(_s, &a, 0),
+                    arg_f64(_s, &a, 1),
+                    arg_f64(_s, &a, 2),
+                    arg_f64(_s, &a, 3),
+                    arg_f64(_s, &a, 4),
+                );
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__cvPutImageData",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::canvas2d::cv_put_image_data(
+                    arg_f64(s, &a, 0),
+                    &arg_string(s, &a, 1),
+                    arg_f64(s, &a, 2),
+                    arg_f64(s, &a, 3),
+                    arg_f64(s, &a, 4),
+                );
+            }
+        );
+
+        // ---- ws/xhr/location/history/nav（QuickJS 同款桩）----
+        defn!(
+            "__wsCreate",
+            |_s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = crate::bridge::ws_create(arg_string(_s, &a, 0)) as f64;
+                rv.set(rusty_v8::Number::new(_s, v).into());
+            }
+        );
+        defn!("__wsSend", |s: &mut HandleScope,
+                           a: FunctionCallbackArguments,
+                           _rv: ReturnValue| {
+            crate::bridge::ws_send(arg_f64(s, &a, 0) as u32, arg_string(s, &a, 1));
+        });
+        defn!("__wsClose", |s: &mut HandleScope,
+                            a: FunctionCallbackArguments,
+                            _rv: ReturnValue| {
+            crate::bridge::ws_close(arg_f64(s, &a, 0) as u32);
+        });
+        defn!(
+            "__xhrCreate",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::Number::new(_s, 0.0).into());
+            }
+        );
+        defn!("__xhrOpen", |_s: &mut HandleScope,
+                            _a: FunctionCallbackArguments,
+                            _rv: ReturnValue| {});
+        defn!("__xhrSend", |_s: &mut HandleScope,
+                            _a: FunctionCallbackArguments,
+                            _rv: ReturnValue| {});
+        defn!(
+            "__xhrGetResponseText",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::null(_s).into());
+            }
+        );
+        defn!(
+            "__locationHref",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = qb::location_href();
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__locationParts",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let v = r#"{"href":"about:blank","protocol":"about:","host":"","pathname":"","search":"","hash":""}"#.to_string();
+                ret_str(_s, &mut rv, &v);
+            }
+        );
+        defn!(
+            "__locationAssign",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__locationReplace",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__historyPush",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__historyReplace",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__historyBack",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__historyForward",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__historyGo",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, _rv: ReturnValue| {}
+        );
+        defn!(
+            "__historyLen",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::Number::new(_s, 1.0).into());
+            }
+        );
+        defn!(
+            "__historyState",
+            |_s: &mut HandleScope, _a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                rv.set(rusty_v8::null(_s).into());
+            }
+        );
+        defn!(
+            "__navRecord",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, _rv: ReturnValue| {
+                crate::bridge::record_pending_navigation(&arg_string(s, &a, 0));
+            }
+        );
+
+        // ---- worker（同步近似：跑在主线程子 isolate）----
+        defn!(
+            "__workerRun",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let r =
+                    crate::engine_quickjs::worker_run(&arg_string(s, &a, 0), &arg_string(s, &a, 1));
+                ret_str(s, &mut rv, &r);
+            }
+        );
+        defn!(
+            "__workerRunSrc",
+            |s: &mut HandleScope, a: FunctionCallbackArguments, mut rv: ReturnValue| {
+                let r = crate::engine_quickjs::worker_run_src(
+                    &arg_string(s, &a, 0),
+                    &arg_string(s, &a, 1),
+                );
+                ret_str(s, &mut rv, &r);
+            }
+        );
+
         true
     }
 }

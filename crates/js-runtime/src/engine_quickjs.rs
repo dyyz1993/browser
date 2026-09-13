@@ -220,7 +220,7 @@ globalThis.crypto = {
 ///
 /// 返回 JSON：`{"ok":true,"messages":[...]}`（outbox 原始 JSON 文本数组）
 /// 或 `{"ok":false,"error":"..."}`（主侧 Worker shim 转调 onerror）。
-fn worker_run(url: &str, msg_json: &str) -> String {
+pub(crate) fn worker_run(url: &str, msg_json: &str) -> String {
     if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
         eprintln!("[worker-trace] SPAWN url={url}");
     }
@@ -235,7 +235,7 @@ fn worker_run(url: &str, msg_json: &str) -> String {
 
 /// M93.7: 直接以源码执行 worker（blob: URL 路径）——主侧 JS shim 从
 /// `__blobUrls` 注册表解析出 blob: 的源码文本后走这里，免去网络取回。
-fn worker_run_src(source: &str, msg_json: &str) -> String {
+pub(crate) fn worker_run_src(source: &str, msg_json: &str) -> String {
     use rquickjs::context::EvalOptions;
     use rquickjs::CatchResultExt;
     if std::env::var("BROWSER_TRACE_FETCH").is_ok() {

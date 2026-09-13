@@ -1,3 +1,18 @@
+## M96.3 全量桥迁移 + 6 段 shim 接入 V8 成功
+- 81 桥全量 defn!（QuickJS 注册表批量映射：DOM 读写/qs/offset/canvas 真像素
+  /fetch/storage/ws/xhr/location/history/worker/navRecord/parseHtml）
+- 借用冲突批量修复（rv.set(Number::new(_s, EXPR(_s))) 拆两步——16 处）
+- worker_run/run_src pub(crate) 化（QuickJS 模块共享）
+- **shim 6 段全部装入 V8 成功**（globals 206KB/webcrypto/element 91KB/
+  document/xhr/worker）——window/document/navigator 全 object，
+  **document.createElement 经 shim → 桥 → arena DOM 全链路跑通**
+  （'hello-shim/shim-test'）
+- 前置依赖补齐：install_navigation（locationHref 桥需要——shim globals
+  构造期就调）+ install_storage——此前同类 panic 跨 V8 C++ unwind=UB
+  abort 的根因复现（M96.2c 教训直接应用）
+- scripts.rs 暴露 shim_segments_for_v8()（引擎无关复用）
+- 门禁双绿 1024/0
+
 ## M96.2c 终局破案——回调挂起根因=空树 panic 跨 V8 C++ unwind，桥全线跑通
 - 阶梯逼近四步（LADDER1 OnceLock+闭包回调 ✓ → LADDER2 树+qb::create_el
   挂 → catch_unwind 探针捕获 **PANIC-IN-CALLBACK: "Tree::root on empty

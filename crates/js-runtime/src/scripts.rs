@@ -2377,6 +2377,11 @@ fn wrap_shim_iife_full(inner: &str) -> String {
     out
 }
 
+/// M96.3: V8 后端取 shim 段（与 QuickJS 共用同一 shim 源——引擎无关）。
+pub fn shim_segments_for_v8() -> Vec<(&'static str, String)> {
+    get_all_shim_js(&None)
+}
+
 fn get_all_shim_js(_base_url: &Option<String>) -> Vec<(&'static str, String)> {
     vec![
         ("globals", QUICKJS_GLOBAL_SHIM.to_string()),
