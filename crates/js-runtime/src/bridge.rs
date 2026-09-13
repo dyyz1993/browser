@@ -1118,6 +1118,13 @@ fn fetch_sync_with_method_full(
     // M70.4: 记录这个网络请求到 CDP Network 事件队列（供 navigate drain）。
     record_network_event(&url, &method, status, &headers, body.len());
     // 主线程写回 jar。
+    if std::env::var("BROWSER_TRACE_NAV").is_ok() {
+        eprintln!(
+            "[ck-diag] {method} {url} set_cookies={} slot={}",
+            set_cookies.len(),
+            CURRENT_COOKIE.with(|s| s.borrow().is_some())
+        );
+    }
     if !set_cookies.is_empty() {
         CURRENT_COOKIE.with(|slot| {
             if let Some(h) = slot.borrow().as_ref() {

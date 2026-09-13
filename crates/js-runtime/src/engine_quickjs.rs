@@ -252,6 +252,8 @@ pub(crate) fn worker_run_src(source: &str, msg_json: &str) -> String {
     use rquickjs::CatchResultExt;
     if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
         eprintln!("[worker-trace] SPAWN src_len={}", source.len());
+        // M96.10-diag: worker 收到的消息（PoW salt/target 语义实证）
+        eprintln!("[worker-trace] MSG {msg_json}");
     }
     let source = source.to_string();
 

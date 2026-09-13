@@ -27,13 +27,19 @@ use crate::interceptor::{RequestContext, ResponseContext};
 /// 真实 Chrome UA（解决反爬 + 模拟浏览器行为）。
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
-/// M93.2: 浏览器级默认请求头——与 UA（Chrome/126, macOS）**身份一致**的
+/// M93.2/M96.8: 浏览器级默认请求头——与 UA（Chrome/153, macOS）**身份一致**的
 /// 恒定头组。真实浏览器每个请求（导航/script/XHR）都带这四个头；我们此前
 /// 只发裸 UA，WAF 请求评分一眼"非浏览器"。
 ///
 /// 纪律边界（宪法原则 4）：这是**补全基础请求能力**——头组与我们声明的
 /// UA 完全一致（不伪装成别的浏览器/平台），全部是 Chrome 对任何资源类型
 /// 都恒定发送的真值。不做 per-站点指纹定制、不伪造 sec-fetch 场景头。
+///
+/// M96.8 一致性修正（实弹 403 根因候选）：此前 sec-ch-ua 停留在 Chrome/126
+/// 品牌串、accept-language 停留在 en-US——与 UA（Chrome/153）和
+/// navigator.language（zh-CN）**自相矛盾**（一眼假）。以下为真 Chrome 153
+/// 实测值（本机 --dump-dom 读取 brands 顺序）+ 与 shim navigator.language
+/// 一致的 accept-language。
 fn browser_default_headers() -> reqwest::header::HeaderMap {
     let mut h = reqwest::header::HeaderMap::new();
     let ins = |h: &mut reqwest::header::HeaderMap, k: &'static str, v: &'static str| {
@@ -44,11 +50,14 @@ fn browser_default_headers() -> reqwest::header::HeaderMap {
             h.insert(name, val);
         }
     };
-    ins(&mut h, "accept-language", "en-US,en;q=0.9");
+    ins(&mut h, "accept-language", "zh-CN,zh;q=0.9");
+    // Chrome 123+ 真值（含 zstd）。实测 xcancel CDN offer zstd 时仍选 gzip/
+    // 不压缩，声明零风险；reqwest 显式头存在时跳过自动 accept-encoding。
+    ins(&mut h, "accept-encoding", "gzip, deflate, br, zstd");
     ins(
         &mut h,
         "sec-ch-ua",
-        "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"",
+        "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
     );
     ins(&mut h, "sec-ch-ua-mobile", "?0");
     ins(&mut h, "sec-ch-ua-platform", "\"macOS\"");

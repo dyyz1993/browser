@@ -1,3 +1,31 @@
+## M96.8–M96.10 实弹三假设三排除——403 根因终锁定传输/渲染族群层
+- **M96.8 头组一致性修正**（net/client.rs browser_default_headers）：
+  sec-ch-ua 从 Chrome/126 品牌串 → **153 真值**（本机 Chrome --dump-dom 实测
+  brands 顺序："Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"）；
+  accept-language en-US → **zh-CN,zh;q=0.9**（对齐 navigator.language/Intl）；
+  + accept-encoding **gzip, deflate, br, zstd**（Chrome 123+ 真值；实测
+  xcancel CDN offer zstd 时仍选 gzip，声明零风险）。修复前 126 品牌串配
+  153 UA 是一眼假的矛盾组。头序 + H2 SETTINGS + TLS ClientHello 属指纹
+  伪造红线，不动
+- **M96.9 cookie 假设排除**：mock 复演 verify 不带 cookie 是 mock 自己
+  从未发 Set-Cookie（challenge 分支漏）——最小复现（repro 页）证明引擎
+  cookie 链 100% 正常；**实弹铁证**：challenge Set-Cookie __antibot_ref 进
+  jar → verify POST 带 `cookie=[__antibot_ref=...]` 全程正确。新增诊断：
+  [ck-diag]（set_cookies 数 + slot 状态，BROWSER_TRACE_NAV 门控）+
+  [worker-trace] MSG（BROWSER_TRACE_FETCH 门控）
+- **M96.10 PoW 有效性验证**（Z 函数破译 + 量级实证）：cap.min.js 的
+  `Z(input,l)` = xorshift32 伪随机 hex 生成器（FNV 种子）——salt=
+  Z(token+K,32)、target=Z(token+K+"d",3)（12-bit 前缀匹配，期望 ~4096 次/
+  题）。实测 worker 消息 salt=32hex/target="af0" + nonce 54~23603（均值
+  几千）与理论期望精确吻合 → **30 个 nonce 全部真解**，PoW 无效假设排除。
+  真实 challenge 参数实证：{c:30, s:32, d:3}（s/d 是 hex 长度非 bit 数）
+- **headless Chrome 对照重做**（真时间 --timeout=90s，避开 virtual-time
+  污染）：正确 UA + 代理 → 也停在挑战页未通过（其被拒最可能是 CDP/
+  headless 痕迹）——无法充当「族群评分可过」的反例
+- **403 终局变量**（全部超出宪法 scope）：canvasFingerprint（Skia 级=
+  M80 非目标）/ TLS ClientHello（伪造=原则 4）/ H2 帧指纹（同前）/ IP 信誉
+- 门禁双绿
+
 ## M96.7 实弹复测 + Rust 原生 SHA-256 桥——PoW 时长对齐，403 定位收口
 - **实弹 verify 请求体全文铁证**（BROWSER_TRACE_REQ_BODY）：powToken 真实 +
   powSolutions 30 个真实 nonce + challengeNonce + fp 完整 ECIES 密文——
