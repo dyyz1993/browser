@@ -260,5 +260,5 @@ print(t)
 1
 5
 21
-[Load more](https://xcancel.com/nim_lang?cursor=DAAHCgABHSFwAhH__-oLAAIAAAATMTQ5MDc4NTY4NDc2ODA1MTIwNggAAwAAAAIAAA)
+[Load more](https://xcancel.com/nim_lang?cursor=DAAHCgABHSGBmmV__-oLAAIAAAATMTQ5MDc4NTY4NDc2ODA1MTIwNggAAwAAAAIAAA)
 [](https://xcancel.com/nim_lang#)

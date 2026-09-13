@@ -8,6 +8,9 @@
 #![forbid(unsafe_code)]
 
 pub mod client;
+// M96.18: Chrome 同源 TLS 通道（--features chrome-tls）。
+#[cfg(feature = "chrome-tls")]
+pub mod boring_h2;
 pub mod error;
 pub mod interceptor;
 

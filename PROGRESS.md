@@ -3212,3 +3212,18 @@ react.dev 回归 17KB ✓，996 tests 全绿。
 - **架构变化**：改 docs/ARCHITECTURE.md
 - **里程碑完成**：改 docs/ROADMAP.md + 写 docs/postmortems/M<n>.md
 - **冲突优先级**：GOALS > FEATURES > ARCHITECTURE > 其他
+
+## M96.18 完全体：原生 boring TLS 集成——纯 Rust 二进制通过挑战（无 MITM/无 curl_cffi）
+- **ADR-0007**：boring（BoringSSL=Chromium 同源 TLS）+ h2 可选后端
+  （feature `chrome-tls`，默认不编译；net 增量 ≈0.9MB，cmake 构建）
+- `net/src/boring_h2.rs`：BoringSSL ClientHello + ALPN h2 + per-host 连接
+  复用（SETTINGS Chrome 值）+ https_proxy CONNECT 隧道 + 常驻专用
+  runtime（脚本线程一次性 runtime drop 杀连接的 843KB 超时根因修复）+
+  send 失败自动重连；`request_full_raw_hdr` 优先 boring 失败回退 reqwest
+- **响应头 append 修复**（非 insert）：verify 200 的两条 Set-Cookie
+  （__antibot 会话票 + ref）曾被覆盖——reload 拿挑战页循环 5 跳的根因
+- **实弹铁证（挑战开启状态）**：challenge 200 → verify 200（纯 boring）
+  → 票入 jar → reload 带票 → 真身页 16.6KB 推文，复验通过
+- 服务端挑战暂停窗口记录：裸 curl 直过（环境使然不作数，已如实区分）
+- 门禁三套全绿（default / chrome-tls / v8+chrome-tls）
+

@@ -16,6 +16,13 @@ description = "HTTP / HTTPS / WebSocket client for the browser project"
 # text/html 等大响应做 brotli 压缩（content-encoding: br）。缺这些特性时 reqwest
 # 收到压缩字节流按明文解码，报 "error decoding response body"，导致整站爬取失败。
 # 这些是 reqwest 官方解码 feature（非新 crate），属白名单 reqwest 的合理配置。
+# M96.18/ADR-0007: Chrome 同源 TLS 通道（BoringSSL = Chromium 同源库）。
+# optional——默认不编译，--features chrome-tls 启用。
+boring = { version = "4", optional = true }
+tokio-boring = { version = "4", optional = true }
+h2 = { version = "0.4", optional = true }
+http = { version = "1", optional = true }
+bytes = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = [
     "default-tls",
     "native-tls",
@@ -38,3 +45,7 @@ async-trait = "0.1"
 tokio = { workspace = true }
 wiremock = "0.6"
 futures = "0.3"
+
+[features]
+# M96.18: Chrome 同源 TLS（BoringSSL）+ H2 通道。默认关闭。
+chrome-tls = ["dep:boring", "dep:tokio-boring", "dep:h2", "dep:http", "dep:bytes"]

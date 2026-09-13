@@ -529,6 +529,46 @@ impl HttpClient {
         cookie_header: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<(u16, Vec<u8>, HeaderMap), NetError> {
+        // M96.18: Chrome 同源 TLS 通道（--features chrome-tls）——BoringSSL
+        // ClientHello 与 Chromium 同源（MITM 判别实验：Chrome 形传输过
+        // verify、rustls 403）。仅对 https 走此通道；失败回退 reqwest
+        //（rustls/native-tls）——保「能打开」优先。
+        #[cfg(feature = "chrome-tls")]
+        if url.starts_with("https://") {
+            let mut bhdrs: Vec<(String, String)> = Vec::new();
+            if let Some(ct) = content_type {
+                bhdrs.push(("content-type".into(), ct.to_string()));
+            }
+            if let Some(ck) = cookie_header {
+                bhdrs.push(("cookie".into(), ck.to_string()));
+            }
+            bhdrs.extend(extra_headers.iter().cloned());
+            match crate::boring_h2::request(url, method, &bhdrs, body).await {
+                Ok((status, hdrs, bytes)) => {
+                    let mut hm = HeaderMap::new();
+                    for (k, v) in hdrs {
+                        if let (Ok(n), Ok(val)) = (
+                            reqwest::header::HeaderName::try_from(k.as_str()),
+                            reqwest::header::HeaderValue::from_str(&v),
+                        ) {
+                            // M96.18: append（非 insert）——重复响应头（多个
+                            // Set-Cookie：__antibot 票 + __antibot_ref）不得
+                            // 互相覆盖（覆盖会把会话票顶掉 → reload 又拿
+                            // 挑战页）。
+                            hm.append(n, val);
+                        }
+                    }
+                    return Ok((status, bytes, hm));
+                }
+                Err(e) => {
+                    if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
+                        eprintln!(
+                            "[net-diag] boring channel failed ({e}) — falling back to reqwest"
+                        );
+                    }
+                }
+            }
+        }
         // 先走标准路径拿 builder 不行（私有），这里直接重建请求逻辑：
         // 复用 request_full_raw 的语义 + 追加 extra headers。
         // 简洁实现：通过内部调用 + reqwest 的 header 机制不可行，改为

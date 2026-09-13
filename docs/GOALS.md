@@ -55,7 +55,7 @@ CI 在 GitHub Actions 三平台矩阵上每个 commit 全绿。
 只有"底层解析/IO 库过于复杂（约 ≥10 万行）"时才允许引入外部 crate。
 
 **当前允许的外部依赖（白名单，见 CONVENTIONS.md）：**
-html5ever、hyper+rustls、tokio、clap、boa_engine、winit+softbuffer、url、fontdue、png、image。/`v8`（ADR-0006：V8 152 可选后端，默认不编译）
+html5ever、hyper+rustls、tokio、clap、boa_engine、winit+softbuffer、url、fontdue、png、image。/`v8`（ADR-0006：V8 152 可选后端，默认不编译）、`boring`/`tokio-boring`/`h2`（ADR-0007：Chrome 同源 TLS 可选后端 `chrome-tls`，默认不编译）
 
 ### G5. 真实世界可用性（持续提升 🟡）
 

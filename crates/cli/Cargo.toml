@@ -51,6 +51,8 @@ wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
+# M96.18: Chrome 同源 TLS（透传 net crate）。
+chrome-tls = ["browser-net/chrome-tls"]
 # M96.4: V8 引擎透传
 v8 = ["browser-js-runtime/v8", "browser-cdp/v8"]
 default = ["quickjs"]
