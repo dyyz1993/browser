@@ -62,20 +62,36 @@ GLIBC_TARBALL="portable-glibc-x86_64.tar.gz"
 
 info "下载: ${BINARY_TARBALL}"
 
+# ─────────────────────────── 下载函数（带重试 + 镜像回退） ───────────────────────────
+download() {
+    _file="$1"; _dest="$2"
+    _urls="
+        ${GITHUB_BASE}/${_file}
+        https://ghproxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/${_file}
+        https://mirror.ghproxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/${_file}
+    "
+    for _url in $_urls; do
+        for _try in 1 2 3; do
+            info "  下载(${_try}/3): ${_url##*/}"
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 15 --max-time 300 \
+                    -o "$_dest" "$_url" && return 0
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q --timeout=15 --tries=1 \
+                    -O "$_dest" "$_url" && return 0
+            fi
+            sleep 2
+        done
+    done
+    return 1
+}
+
 # ─────────────────────────── 下载 & 解压 ───────────────────────────
 TMPDIR="$(mktemp -d /tmp/browser-install.XXXXXX)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-# 下载二进制
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "$TMPDIR/browser.tar.gz" "${GITHUB_BASE}/${BINARY_TARBALL}" \
-        || error "下载失败: ${BINARY_TARBALL} (请检查网络)"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$TMPDIR/browser.tar.gz" "${GITHUB_BASE}/${BINARY_TARBALL}" \
-        || error "下载失败: ${BINARY_TARBALL}"
-else
-    error "需要 curl 或 wget"
-fi
+download "$BINARY_TARBALL" "$TMPDIR/browser.tar.gz" \
+    || error "下载失败: ${BINARY_TARBALL} (请检查网络，或手动下载 ${GITHUB_BASE}/${BINARY_TARBALL})"
 
 cd "$TMPDIR"
 tar xzf browser.tar.gz
@@ -83,13 +99,8 @@ tar xzf browser.tar.gz
 # 如果需要 portable-glibc
 if [ "$NEEDS_PORTABLE_GLIBC" -eq 1 ]; then
     info "下载: ${GLIBC_TARBALL} (老系统 glibc 兼容包)"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o glibc.tar.gz "${GITHUB_BASE}/${GLIBC_TARBALL}" \
-            || error "下载 portable-glibc 失败"
-    else
-        wget -q -O glibc.tar.gz "${GITHUB_BASE}/${GLIBC_TARBALL}" \
-            || error "下载 portable-glibc 失败"
-    fi
+    download "$GLIBC_TARBALL" "$TMPDIR/glibc.tar.gz" \
+        || error "下载 portable-glibc 失败 (请检查网络)"
     tar xzf glibc.tar.gz
 fi
 
