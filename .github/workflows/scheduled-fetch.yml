@@ -1,0 +1,112 @@
+name: Scheduled Fetch
+
+# 定时抓取 xcancel 数据（演示自动化能力）：
+# - 数据存为 Artifact（90 天保留），不污染仓库
+# - 与上次对比，有新推文时才生成 diff 报告
+# - 低频（每 6 小时一次），对目标站友好
+on:
+  schedule:
+    - cron: '17 */6 * * *'   # 每 6 小时第 17 分钟（错开整点高峰）
+  workflow_dispatch:          # 允许手动触发
+    inputs:
+      account:
+        description: 'xcancel 账号名（不带 @）'
+        required: false
+        default: 'nim_lang'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      # 复用 Release 构建缓存（没有则冷构建，~8 分钟）
+      - name: Build (full)
+        run: |
+          BIN="target/x86_64-unknown-linux-gnu/release/browser"
+          if [ ! -f "$BIN" ]; then
+            cargo build --release -p browser-cli \
+              --target x86_64-unknown-linux-gnu \
+              --no-default-features \
+              --features "quickjs,v8,chrome-tls"
+          fi
+          echo "BIN=$BIN" >> $GITHUB_ENV
+
+      - name: Fetch timeline
+        run: |
+          ACCOUNT="${{ inputs.account || 'nim_lang' }}"
+          mkdir -p data
+          echo "抓取 @$ACCOUNT ..."
+          timeout 240 "$BIN" \
+            fetch "https://xcancel.com/${ACCOUNT}" \
+            --js-engine v8 --format markdown --timeout-ms 200000 \
+            > "data/${ACCOUNT}.md" 2> "data/${ACCOUNT}.err" || true
+          SIZE=$(wc -c < "data/${ACCOUNT}.md")
+          echo "结果: ${SIZE} bytes"
+          if [ "$SIZE" -lt 1000 ]; then
+            echo "⚠️ 输出过小，可能遇到挑战页"
+            head -5 "data/${ACCOUNT}.md" || true
+          fi
+          echo "ACCOUNT=$ACCOUNT" >> $GITHUB_ENV
+
+      # 下载上次运行的数据做 diff
+      - name: Download previous data
+        uses: actions/download-artifact@v4
+        with:
+          name: last-data
+          path: prev
+        continue-on-error: true   # 首次运行没有历史
+
+      - name: Diff report
+        if: hashFiles('prev/*.md') != ''
+        run: |
+          ACCOUNT="${{ inputs.account || env.ACCOUNT || 'nim_lang' }}"
+          PREV="prev/${ACCOUNT}.md"
+          CURR="data/${ACCOUNT}.md"
+          if [ -f "$PREV" ]; then
+            echo "=== 与上次运行的差异 ==="
+            # 取推文 ID 集合对比
+            grep -oE 'status/[0-9]+' "$CURR" | sort -u > /tmp/curr.ids
+            grep -oE 'status/[0-9]+' "$PREV" | sort -u > /tmp/prev.ids
+            NEW=$(comm -23 /tmp/curr.ids /tmp/prev.ids | wc -l)
+            GONE=$(comm -13 /tmp/curr.ids /tmp/prev.ids | wc -l)
+            echo "新推文: $NEW 条 / 消失: $GONE 条"
+            comm -23 /tmp/curr.ids /tmp/prev.ids | head -10 | while read id; do
+              echo "  NEW: $id"
+            done
+            { echo "NEW_COUNT=$NEW"; } >> $GITHUB_ENV
+          fi
+
+      # 数据存 Artifact（90 天），不提交到仓库
+      - name: Upload data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: last-data
+          path: data/*.md
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          ACCOUNT="${{ inputs.account || env.ACCOUNT || 'nim_lang' }}"
+          {
+            echo "## 定时抓取结果"
+            echo ""
+            echo "- 账号: @$ACCOUNT"
+            echo "- 时间: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo "- 输出: $(wc -c < data/${ACCOUNT}.md) bytes"
+            echo "- 新推文: ${NEW_COUNT:-0} 条"
+            echo ""
+            echo "数据保留 90 天（Artifact: last-data）"
+          } >> $GITHUB_STEP_SUMMARY
