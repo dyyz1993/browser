@@ -293,7 +293,95 @@ async fn request_impl(
         }
         Ok::<(u16, Vec<(String, String)>, Vec<u8>), String>((status, hdrs, out))
     };
-    tokio::time::timeout(std::time::Duration::from_secs(40), fut)
+    let (status, hdrs, out) = tokio::time::timeout(std::time::Duration::from_secs(40), fut)
         .await
-        .map_err(|_| "boring h2 timeout (40s)".to_string())?
+        .map_err(|_| "boring h2 timeout (40s)".to_string())??;
+
+    // M96.21: Reddit 式 PoW 挑战页自动解决——检测到挑战页（小 body + solution/jsc_token）
+    // 时，解析参数、重发带 solution 的请求，返回真页面。
+    if let Some(result) = solve_js_challenge(url, method, headers, status, &out).await {
+        return result;
+    }
+
+    Ok((status, hdrs, out))
+}
+
+/// M96.21: Reddit 式 JS 拼接 PoW 挑战自动解决。
+///
+/// 挑战页结构：`await(async e=>e+e)("<hex>")` 把 hex 字符串重复一次作为
+/// solution，连同 `jsc_token` 通过 GET 参数回传源站即获得真页面。
+/// 在 boring 通道内检测到挑战页（<2000B + 含 solution/token 字段）时，
+/// 解析参数并自动重发一次 GET。
+async fn solve_js_challenge(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    status: u16,
+    body: &[u8],
+) -> Option<Result<(u16, Vec<(String, String)>, Vec<u8>), String>> {
+    // 只处理 200 且 body 很小（挑战页 <4KB）
+    if status != 200 && status != 403 || body.len() > 16384 || body.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(body);
+    // 必须同时含 solution input 和 jsc_token（Reddit 挑战页指纹）
+    if !text.contains("solution") || !text.contains("jsc_token") {
+        return None;
+    }
+    // 提取 PoW 参数：await(async e=>e+e)("<hex>")
+    let re_challenge = text.contains("e+e");
+    let token_re = text.contains("jsc_token");
+    if !re_challenge || !token_re {
+        return None;
+    }
+    // 提取 hex 种子：找 await(async e=>e+e)("XXXX") 模式
+    let seed = {
+        // 手动解析（无 regex crate 依赖——找到 await(async e=>e+e)( 后的引号内内容）
+        let marker = "e+e)(\"";
+        if let Some(pos) = text.find(marker) {
+            let start = pos + marker.len();
+            if let Some(end_rel) = text[start..].find('"') {
+                text[start..start + end_rel].to_string()
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    };
+    let solution = format!("{}{}", seed, seed); // e+e = 字符串重复
+    let jsc_token = {
+        let marker = "jsc_token\" value=\"";
+        if let Some(pos) = text.find(marker) {
+            let start = pos + marker.len();
+            let end = text[start..].find('"')?;
+            text[start..start + end].to_string()
+        } else {
+            return None;
+        }
+    };
+    eprintln!(
+        "[boring] PoW challenge detected: seed={seed} solution={}B token={}B — auto-solving",
+        solution.len(),
+        jsc_token.len()
+    );
+    // 构造带 solution 的 GET 请求（form action 是原始 URL path）
+    let parsed = url::Url::parse(url).ok()?;
+    let path = parsed.path();
+    let query = format!("solution={solution}&js_challenge=1&jsc_token={jsc_token}");
+    let full = format!(
+        "{}://{}{}?{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or(""),
+        path,
+        query
+    );
+    // 重发 GET（会话 cookie 由 h2 连接层保持）
+    // Box::pin 避免异步递归
+    let result = Box::pin(request_impl(&full, "GET", headers, None)).await;
+    eprintln!(
+        "[boring] PoW solve result: {}",
+        result.as_ref().map(|(s, _, b)| format!("{} {}B", s, b.len())).unwrap_or_default()
+    );
+    Some(result)
 }

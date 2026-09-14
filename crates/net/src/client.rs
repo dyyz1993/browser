@@ -552,6 +552,20 @@ impl HttpClient {
             if let Some(ck) = cookie_header {
                 bhdrs.push(("cookie".into(), ck.to_string()));
             }
+            // M96.21: boring 通道绕过了 reqwest——browser_default_headers() 里
+            // 的 User-Agent/sec-ch-ua 等不会被 reqwest 自动附加，需要在这里
+            // 显式注入（缺 UA 导致 gitlab.gnome 等 Anubis 站 406）。
+            bhdrs.push((
+                "user-agent".into(),
+                UA.to_string(),
+            ));
+            bhdrs.push(("accept-language".into(), "zh-CN,zh;q=0.9".into()));
+            bhdrs.push((
+                "sec-ch-ua".into(),
+                "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"".into(),
+            ));
+            bhdrs.push(("sec-ch-ua-mobile".into(), "?0".into()));
+            bhdrs.push(("sec-ch-ua-platform".into(), "\"macOS\"".into()));
             bhdrs.extend(extra_headers.iter().cloned());
             match crate::boring_h2::request(url, method, &bhdrs, body).await {
                 Ok((status, hdrs, bytes)) => {
