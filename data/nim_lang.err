@@ -1,0 +1,3 @@
+[net] attempt 0 failed: failed to fetch https://xcancel.com/nim_lang
+[net] non-retryable error — giving up immediately
+error: failed to fetch https://xcancel.com/nim_lang: HTTP error status: 451
