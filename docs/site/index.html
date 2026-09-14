@@ -154,6 +154,47 @@
         </section>
 
         <section>
+            <h2>🎬 零安装 · 直接看结果</h2>
+            <p style="color:var(--text-muted);margin-bottom:24px">不用下载任何东西。下面是本引擎<b style="color:var(--text)">真实抓取</b>的数据（GitHub Actions 云端自动运行，每 6 小时更新一次）——点开就是原样输出。</p>
+
+            <div class="grid">
+                <div class="card" style="border-color:var(--accent-orange)">
+                    <h3>🔥 马斯克时间线（23.6KB）</h3>
+                    <p style="margin-bottom:8px">通过 xcancel 反爬验证后抓取的 Elon Musk 推文页：108,000+ 条推文、2.4 亿粉丝、置顶 Roadster 发布预告、完整时间线与互动数据。</p>
+                    <a href="./demo-elonmusk.md" target="_blank" class="btn btn-primary" style="padding:8px 20px;font-size:0.9rem">查看真实抓取结果 →</a>
+                    <p style="color:var(--text-muted);font-size:0.8rem;margin-top:12px">
+                        来源: xcancel.com/elonmusk · 走完 PoW→指纹→加密→verify 全流程 · 云端定时更新
+                    </p>
+                </div>
+                <div class="card">
+                    <h3>🕷 定时自动抓取</h3>
+                    <p style="margin-bottom:8px">GitHub Actions 每 6 小时自动运行一次，无需人工干预。每次运行都会和上次对比，报告新增推文数。</p>
+                    <a href="https://github.com/dyyz1993/browser/actions/workflows/scheduled-fetch.yml" target="_blank" class="btn btn-secondary" style="padding:8px 20px;font-size:0.9rem">查看运行记录 →</a>
+                    <p style="color:var(--text-muted);font-size:0.8rem;margin-top:12px">
+                        每次 CPU 时间约 10 分钟（含编译），数据保留 90 天可回溯
+                    </p>
+                </div>
+            </div>
+
+            <div style="margin-top:28px; padding:20px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+                <h3 style="margin-bottom:12px">📡 实时试抓（局域网内可用）</h3>
+                <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px">
+                    局域网部署了一个实时网关：输入 xcancel 账号名，返回刚抓的实时内容。
+                </p>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <input id="live-account" placeholder="输入账号名，如 elonmusk"
+                        style="flex:1; min-width:200px; background:var(--code-bg); border:1px solid var(--border); color:var(--text); padding:10px 14px; border-radius:6px; font-family:var(--font-mono); font-size:0.9rem"
+                        onkeydown="if(event.key==='Enter') liveFetch()">
+                    <button class="btn btn-primary" style="padding:10px 20px;font-size:0.9rem" onclick="liveFetch()">抓取</button>
+                </div>
+                <div id="live-result" style="display:none; margin-top:16px">
+                    <pre id="live-output" style="background:var(--code-bg); border:1px solid var(--border); border-radius:6px; padding:16px; font-size:0.8rem; max-height:400px; overflow:auto; white-space:pre-wrap; color:var(--text)"></pre>
+                </div>
+                <p id="live-error" style="display:none; color:var(--accent-orange); font-size:0.85rem; margin-top:8px"></p>
+            </div>
+        </section>
+
+        <section>
             <h2>一键安装</h2>
             <div class="code-block">
                 <button class="copy" onclick="copyCmd(this)">复制</button>
@@ -294,6 +335,35 @@
     </footer>
 
     <script>
+        // 局域网网关地址（部署者按实际 IP 修改）
+        const GATEWAY = 'http://192.168.0.29:8890';
+
+        async function liveFetch() {
+            const acct = document.getElementById('live-account').value.trim().replace(/^@/, '');
+            const out = document.getElementById('live-output');
+            const err = document.getElementById('live-error');
+            const box = document.getElementById('live-result');
+            if (!acct) { alert('请输入账号名'); return; }
+            out.textContent = '抓取中…（约 10-20 秒，需通过反爬验证）';
+            box.style.display = 'block';
+            err.style.display = 'none';
+            try {
+                const r = await fetch(`${GATEWAY}/?url=https://xcancel.com/${encodeURIComponent(acct)}`);
+                const text = await r.text();
+                if (text.includes('Checking your browser') || text.length < 500) {
+                    out.style.display = 'none';
+                    err.style.display = 'block';
+                    err.textContent = '本次遇到目标站挑战收紧，未通过。稍后重试通常可成功（验证有时段性）。';
+                } else {
+                    out.textContent = text;
+                }
+            } catch (e) {
+                out.style.display = 'none';
+                err.style.display = 'block';
+                err.textContent = '网关不可达：需与服务器在同一局域网（' + GATEWAY + '）。公网访问需部署公网网关。';
+            }
+        }
+
         function copyCmd(btn) {
             const cmd = btn.dataset.cmd
                 || btn.parentElement.querySelector('.cmd').textContent.replace(/^\$\s*/, '');
