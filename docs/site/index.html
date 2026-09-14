@@ -217,6 +217,64 @@
         </section>
 
         <section>
+            <h2>🎯 体验难度阶梯</h2>
+            <p style="color:var(--text-muted);margin-bottom:24px">从易到难四个关卡——每关都是真实站点，点击卡片复制命令直接跑。第 4 关需要通过实时反爬验证才能拿到数据。</p>
+            <div class="grid">
+                <div class="card">
+                    <h3><span style="color:var(--accent-green)">●</span> L1 入门 · 静态页</h3>
+                    <p style="margin-bottom:12px">example.com——最简单的开始，体验 fetch → 提取 → markdown 输出。</p>
+                    <div class="code-block" style="margin:0 0 12px;font-size:0.8rem">
+                        <div><span class="cmd">$ browser fetch https://example.com/ --format text</span></div>
+                    </div>
+                    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">✓ 输出 "Example Domain" 正文，<b>全程 &lt;1 秒、内存 ~15MB</b></p>
+                    <button class="btn btn-secondary" style="padding:8px 16px;font-size:0.85rem" onclick="copyCmd(this); this.textContent='已复制 ✓'" data-cmd="browser fetch https://example.com/ --format text">复制命令</button>
+                </div>
+                <div class="card">
+                    <h3><span style="color:var(--accent)">●</span> L2 进阶 · SPA 动态渲染</h3>
+                    <p style="margin-bottom:12px">react.dev——React 官网，纯 JS 渲染。curl 只能拿到空壳，我们的引擎等 React 执行完再提取。</p>
+                    <div class="code-block" style="margin:0 0 12px;font-size:0.8rem">
+                        <div><span class="cmd">$ browser fetch https://react.dev/ --format markdown</span></div>
+                    </div>
+                    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">✓ 覆盖率约 91%（对标 Chrome），内存 ~25MB</p>
+                    <button class="btn btn-secondary" style="padding:8px 16px;font-size:0.85rem" onclick="copyCmd(this); this.textContent='已复制 ✓'" data-cmd="browser fetch https://react.dev/ --format markdown">复制命令</button>
+                </div>
+                <div class="card">
+                    <h3><span style="color:var(--accent-orange)">●</span> L3 困难 · 重 JS + 动态加载</h3>
+                    <p style="margin-bottom:12px">weibo.cn 手机版——需要登录态才能看到个性化时间线（<code class="inline">--cookie-file</code> 导入）。</p>
+                    <div class="code-block" style="margin:0 0 12px;font-size:0.8rem">
+                        <div><span class="cmd">$ browser fetch https://weibo.cn/ \</span></div>
+                        <div><span class="cmd">&nbsp;&nbsp;--cookie-file weibo_cookies.tsv --format text</span></div>
+                    </div>
+                    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">✓ 实测：无 cookie=302 踢游客页；带 cookie=登录首页（21MB 内存）</p>
+                    <button class="btn btn-secondary" style="padding:8px 16px;font-size:0.85rem" onclick="copyCmd(this); this.textContent='已复制 ✓'" data-cmd="browser fetch https://weibo.cn/ --cookie-file weibo_cookies.tsv --format text">复制命令</button>
+                </div>
+                <div class="card" style="border-color:var(--accent-orange)">
+                    <h3><span style="color:#f85149">●</span> L4 地狱 · 实时反爬验证</h3>
+                    <p style="margin-bottom:12px">xcancel.com——PoW 工作量证明 + 100 项浏览器指纹 + ECIES 加密上报。需全功能版 + 代理。</p>
+                    <div class="code-block" style="margin:0 0 12px;font-size:0.8rem">
+                        <div><span class="cmd">$ browser fetch https://xcancel.com/nim_lang \</span></div>
+                        <div><span class="cmd">&nbsp;&nbsp;--js-engine v8 --proxy http://127.0.0.1:7890 \</span></div>
+                        <div><span class="cmd">&nbsp;&nbsp;--format markdown</span></div>
+                    </div>
+                    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">✓ 实测：自动解 PoW（30 题）→ 指纹加密上报 → verify 200 → 拿到推文（16.5KB）</p>
+                    <button class="btn btn-primary" style="padding:8px 16px;font-size:0.85rem" onclick="copyCmd(this); this.textContent='已复制 ✓'" data-cmd="browser fetch https://xcancel.com/nim_lang --js-engine v8 --proxy http://127.0.0.1:7890 --format markdown">复制命令</button>
+                </div>
+            </div>
+
+            <h3 style="margin:32px 0 12px">L4 通关实测数据（真站，挑战开启状态）</h3>
+            <table>
+                <thead><tr><th>指标</th><th>数值</th></tr></thead>
+                <tbody>
+                    <tr><td>PoW 解题</td><td>30 道题全对（Worker 真实计算）</td></tr>
+                    <tr><td>指纹上报</td><td>100+ 项全对齐 Chrome（maths 逐位一致）</td></tr>
+                    <tr><td>加密链路</td><td>ECDH P-256 → HKDF → AES-GCM（纯 Rust/JS 实现）</td></tr>
+                    <tr><td>verify 结果</td><td style="color:var(--accent-green)">200 OK</td></tr>
+                    <tr><td>内存 / 耗时</td><td>96MB / 13 秒（Mac）· 44MB / 19 秒（2 核云机）</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section>
             <h2>从源码编译</h2>
             <div class="code-block">
                 <div><span class="comment"># 轻量版（默认，QuickJS，10MB）</span></div>
@@ -237,10 +295,11 @@
 
     <script>
         function copyCmd(btn) {
-            const cmd = btn.parentElement.querySelector('.cmd').textContent.replace(/^\$\s*/, '');
+            const cmd = btn.dataset.cmd
+                || btn.parentElement.querySelector('.cmd').textContent.replace(/^\$\s*/, '');
             navigator.clipboard.writeText(cmd).then(() => {
-                btn.textContent = '已复制';
-                setTimeout(() => { btn.textContent = '复制'; }, 2000);
+                btn.textContent = '已复制 ✓';
+                setTimeout(() => { btn.textContent = '复制命令'; }, 2000);
             });
         }
     </script>
