@@ -26,6 +26,10 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
+      - name: Include data directory
+        run: |
+          mkdir -p docs/site/data
+          if [ -d data ]; then cp data/*.md docs/site/data/ 2>/dev/null || true; fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/site
