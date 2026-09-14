@@ -14,6 +14,7 @@ members = [
     "crates/js-runtime",
     "crates/gui",
     "crates/cli",
+    "crates/svgine-host",
     "crates/ws",
     "crates/cdp",
     "crates/extractor",

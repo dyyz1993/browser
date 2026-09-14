@@ -708,7 +708,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                     )?,
                     None => {
                         let cols = browser_render::layout_columns_for_px(width);
-                        let (layout, _styles) = layout_tree_after_js_engine(
+                        let (layout, _styles, _dom) = layout_tree_after_js_engine(
                             &html,
                             cols,
                             !no_js,
@@ -1451,7 +1451,7 @@ fn render_html_to_string_inner_ex_engine(
     js_engine: &str,
     post_exprs: &[String],
 ) -> Result<(String, String)> {
-    let (layout, _styles) = layout_tree_after_js_engine(
+    let (layout, _styles, _dom) = layout_tree_after_js_engine(
         html,
         width,
         run_js,
@@ -1835,6 +1835,8 @@ fn hover_post_exprs(selectors: &[String]) -> Vec<String> {
 /// M80: 共用布局管线（parse → JS → style → construct → run_layout），
 /// 返回布局树 + computed styles。ASCII（爬虫契约）与 pixel（近似像素
 /// 渲染）两条渲染路径共用此前半段；JS 只执行一次。
+/// 返回值第三项 = 跑完 JS 的最终 DOM 树（车道PF：svgine 真渲染按
+/// element_id 反查 `<svg>` 子树用；调用方不需要时以 `_dom` 接住）。
 /// M81: `post_exprs` —— --click/--hover 合成事件表达式，在同一 JS 会话内
 /// 于页面脚本 + 事件循环之后按序 eval（空切片 = 原行为）。
 #[allow(clippy::too_many_arguments)]
@@ -1848,7 +1850,11 @@ fn layout_tree_after_js_engine(
     pixel: bool,
     unit_scale: f32,
     post_exprs: &[String],
-) -> Result<(browser_layout::LayoutTree, browser_render::StyleMap)> {
+) -> Result<(
+    browser_layout::LayoutTree,
+    browser_render::StyleMap,
+    std::rc::Rc<std::cell::RefCell<browser_dom::Tree>>,
+)> {
     let tree = parse_html(html);
     let (shared_tree, executed) = if run_js {
         let engine_kind = browser_js_runtime::EngineKind::parse_str(js_engine);
@@ -1916,7 +1922,7 @@ fn layout_tree_after_js_engine(
             viewport_width: width as f32,
         },
     );
-    Ok((layout, styles))
+    Ok((layout, styles, shared_tree))
 }
 
 /// M80: pixel 模式截图管线。`width_px` 按 CSS px 解释：先换算布局列数
@@ -1937,10 +1943,25 @@ fn render_pixel_screenshot(
     let cols = browser_render::layout_columns_for_px(width_px);
     let cm = browser_render::pixel::cell_metrics();
     eprintln!("[dbg-cm] cell_metrics=({:.2},{:.2})", cm.0, cm.1);
-    let (layout, styles) = layout_tree_after_js_engine(
+    let (layout, styles, dom_tree) = layout_tree_after_js_engine(
         html, cols, run_js, false, base_url, js_engine, true, cm.1, post_exprs,
     )?;
-    let (w, h, rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
+    let (w, h, mut rgba) = browser_render::render_pixel(&layout, &styles, width_px, 1.0);
+    // ADR-0019 阶段二（车道PF）：pixel 截图把页面内 <svg> 交 svgine 引擎
+    // 真渲染，按占位盒锚点复合进画布，替换 `[SVG w×h]` 占位文本（画布按
+    // 需向下扩白承载溢出）。解析/渲染失败的 SVG 保留占位符，不阻断截图。
+    let (composited, h) = browser_svgine::composite_page_svgs(
+        &dom_tree.borrow(),
+        &layout,
+        &mut rgba,
+        w,
+        h,
+        cm.0,
+        cm.1,
+    );
+    if composited > 0 {
+        eprintln!("[svgine] composited {composited} inline SVG(s) into pixel screenshot (h={h})");
+    }
     screenshot::render_rgba_to_png(&rgba, w, h, path, max_height)
         .map_err(|e| anyhow!("pixel screenshot failed: {e}"))?;
     eprintln!(

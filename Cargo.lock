@@ -538,6 +538,7 @@ dependencies = [
  "browser-layout",
  "browser-net",
  "browser-render",
+ "browser-svgine",
  "clap",
  "fontdue",
  "image",
@@ -679,6 +680,15 @@ dependencies = [
 [[package]]
 name = "browser-storage"
 version = "0.0.1"
+
+[[package]]
+name = "browser-svgine"
+version = "0.0.1"
+dependencies = [
+ "browser-dom",
+ "browser-layout",
+ "svgine-core",
+]
 
 [[package]]
 name = "browser-ws"
@@ -3962,6 +3972,18 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "svgine-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "svgine-simd",
+]
+
+[[package]]
+name = "svgine-simd"
+version = "0.1.0"
 
 [[package]]
 name = "syn"

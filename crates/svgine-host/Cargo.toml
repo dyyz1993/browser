@@ -1,0 +1,14 @@
+[package]
+name = "browser-svgine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ADR-0019 阶段二：页面内 <svg> 交由 svgine 引擎真渲染（占位符 → RGBA 复合）"
+
+[dependencies]
+browser-dom = { path = "../dom" }
+browser-layout = { path = "../layout" }
+# ADR-0019 裁决位 3/4 待批：暂按 OT 推荐路线先行（path 直依赖，宿主 std 消费面）。
+# 路径基准 = 本仓 ../svgine 兄弟仓（同机克隆；若克隆布局不同需按实际调整）。
+svgine-core = { path = "../../../svgine/crates/svgine-core" }

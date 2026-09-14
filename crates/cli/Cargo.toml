@@ -19,6 +19,8 @@ url = "2"
 browser-css-engine = { path = "../css-engine" }
 browser-layout = { path = "../layout" }
 browser-render = { path = "../render" }
+# ADR-0019 阶段二（车道PF）：页面内 <svg> 由 svgine 引擎真渲染（pixel 截图复合）。
+browser-svgine = { path = "../svgine-host" }
 # M12.1: PNG output for --screenshot flag (fontdue for glyphs, embedded DejaVuSans).
 fontdue = "0.9"
 png = "0.17"
