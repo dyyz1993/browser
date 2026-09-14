@@ -29,7 +29,11 @@ jobs:
       - name: Include data directory
         run: |
           mkdir -p docs/site/data
-          if [ -d data ]; then cp data/*.md docs/site/data/ 2>/dev/null || true; fi
+          for f in data/*.md; do
+            case "$f" in *.failed.md) continue;; esac
+            cp "$f" docs/site/data/ 2>/dev/null || true
+          done
+          ls -la docs/site/data/ || true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/site
