@@ -336,7 +336,7 @@
 
     <script>
         // 局域网网关地址（部署者按实际 IP 修改）
-        const GATEWAY = 'http://192.168.0.29:8890';
+        const GATEWAY = 'http://106.55.9.129:8890';
 
         async function liveFetch() {
             const acct = document.getElementById('live-account').value.trim().replace(/^@/, '');
@@ -360,7 +360,7 @@
             } catch (e) {
                 out.style.display = 'none';
                 err.style.display = 'block';
-                err.textContent = '网关不可达：需与服务器在同一局域网（' + GATEWAY + '）。公网访问需部署公网网关。';
+                err.textContent = '网关不可达：请稍后重试，或检查防火墙设置（' + GATEWAY + '）。';
             }
         }
 
