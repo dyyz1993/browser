@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser — Rust 自研浏览器引擎</title>
+    <meta name="description" content="Rust 手写的 SPA 渲染浏览器引擎：通过反爬验证、Chrome 同形 TLS、双 JS 引擎">
+    <style>
+        :root {
+            --bg: #0d1117;
+            --bg-card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-orange: #d29922;
+            --code-bg: #0d1117;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+        /* Hero */
+        .hero {
+            padding: 80px 0 60px;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .hero h1 { font-size: 3.5rem; font-weight: 700; margin-bottom: 16px; }
+        .hero h1 .accent { color: var(--accent); }
+        .hero p.tagline { font-size: 1.25rem; color: var(--text-muted); max-width: 640px; margin: 0 auto 32px; }
+        .hero .cta { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+        .btn {
+            display: inline-block; padding: 12px 28px; border-radius: 6px;
+            font-weight: 600; font-size: 1rem; transition: all 0.2s;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: #79b8ff; text-decoration: none; }
+        .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        .btn-secondary:hover { border-color: var(--accent); text-decoration: none; }
+
+        /* Stats bar */
+        .stats {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 24px; padding: 40px 0; text-align: center;
+        }
+        .stat .num { font-size: 2rem; font-weight: 700; color: var(--accent); }
+        .stat .label { color: var(--text-muted); font-size: 0.9rem; }
+
+        /* Sections */
+        section { padding: 60px 0; }
+        section h2 {
+            font-size: 2rem; margin-bottom: 32px; padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 24px; transition: border-color 0.2s;
+        }
+        .card:hover { border-color: var(--accent); }
+        .card h3 { font-size: 1.1rem; margin-bottom: 8px; color: var(--accent); }
+        .card p { color: var(--text-muted); font-size: 0.95rem; }
+
+        /* Code block */
+        .code-block {
+            background: var(--code-bg); border: 1px solid var(--border);
+            border-radius: 8px; padding: 20px; margin: 16px 0;
+            font-family: var(--font-mono); font-size: 0.9rem;
+            overflow-x: auto; position: relative;
+        }
+        .code-block .cmd { color: var(--accent-green); }
+        .code-block .comment { color: var(--text-muted); }
+        .code-block .copy {
+            position: absolute; top: 12px; right: 12px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            color: var(--text-muted); padding: 4px 12px; border-radius: 4px;
+            cursor: pointer; font-size: 0.8rem;
+        }
+        .code-block .copy:hover { color: var(--accent); border-color: var(--accent); }
+
+        /* Table */
+        table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 600; font-size: 0.9rem; }
+        td { font-size: 0.95rem; }
+        code.inline {
+            background: var(--bg-card); padding: 2px 8px; border-radius: 4px;
+            font-family: var(--font-mono); font-size: 0.85rem;
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px 0; text-align: center; color: var(--text-muted);
+            border-top: 1px solid var(--border); font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>Browser<span class="accent">.</span></h1>
+            <p class="tagline">Rust 手写的 SPA 渲染浏览器引擎——通过反爬验证、Chrome 同形 TLS、双 JS 引擎</p>
+            <div class="cta">
+                <a href="https://github.com/dyyz1993/browser" class="btn btn-primary">GitHub 仓库</a>
+                <a href="https://github.com/dyyz1993/browser/releases" class="btn btn-secondary">下载 Release</a>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat"><div class="num">60MB</div><div class="label">全功能二进制</div></div>
+            <div class="stat"><div class="num">10MB</div><div class="label">轻量版（QuickJS）</div></div>
+            <div class="stat"><div class="num">1000+</div><div class="label">测试用例</div></div>
+            <div class="stat"><div class="num">16</div><div class="label">Rust crate</div></div>
+        </div>
+
+        <section>
+            <h2>它能做什么</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>🕸 SPA 渲染</h3>
+                    <p>执行页面 JavaScript，等待动态内容加载完成，从最终 DOM 提取数据（不是原始 HTML）。</p>
+                </div>
+                <div class="card">
+                    <h3>🛡 通过反爬验证</h3>
+                    <p>自动通过 xcancel 等站的浏览器验证：PoW 工作量证明、浏览器指纹、ECIES 加密上报、行为序列。</p>
+                </div>
+                <div class="card">
+                    <h3>🔐 Chrome 同形 TLS</h3>
+                    <p>BoringSSL（Chromium 同源库）+ H2 连接复用，传输层指纹与 Chrome 一致。</p>
+                </div>
+                <div class="card">
+                    <h3>📦 资源批量下载</h3>
+                    <p><code class="inline">--save-assets</code> 按域名/后缀/glob 匹配页面资源（图片/字体/视频）批量落盘。</p>
+                </div>
+                <div class="card">
+                    <h3>🖥 多格式输出</h3>
+                    <p>text / markdown / html / links / JSON 五种格式，按需提取。</p>
+                </div>
+                <div class="card">
+                    <h3>🔌 CDP Server</h3>
+                    <p><code class="inline">browser cdp --port 9222</code> 启动后 Puppeteer/Playwright 可直接连接。</p>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>一键安装</h2>
+            <div class="code-block">
+                <button class="copy" onclick="copyCmd(this)">复制</button>
+                <div><span class="cmd">$ curl -fsSL https://raw.githubusercontent.com/dyyz1993/browser/main/install.sh | sh</span></div>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.9rem;">
+                自动检测操作系统（macOS/Linux）、CPU 架构（x86_64/arm64）、glibc 版本。老 Linux 自动附带 portable-glibc。
+            </p>
+        </section>
+
+        <section>
+            <h2>快速上手</h2>
+
+            <h3 style="margin: 24px 0 12px;">基本用法</h3>
+            <div class="code-block">
+                <div><span class="comment"># 拉取页面（等 JS 执行完再提取）</span></div>
+                <div><span class="cmd">$ browser fetch https://react.dev/ --format markdown</span></div>
+                <div>&nbsp;</div>
+                <div><span class="comment"># 截图</span></div>
+                <div><span class="cmd">$ browser render-url https://example.com/ --screenshot out.png</span></div>
+            </div>
+
+            <h3 style="margin: 24px 0 12px;">通过反爬验证（xcancel）</h3>
+            <div class="code-block">
+                <div><span class="comment"># 全功能版（需 --features "v8,chrome-tls" 编译）+ 代理</span></div>
+                <div><span class="cmd">$ browser fetch https://xcancel.com/elonmusk \</span></div>
+                <div><span class="cmd">&nbsp;&nbsp;&nbsp;&nbsp;--js-engine v8 \</span></div>
+                <div><span class="cmd">&nbsp;&nbsp;&nbsp;&nbsp;--proxy http://127.0.0.1:7890 \</span></div>
+                <div><span class="cmd">&nbsp;&nbsp;&nbsp;&nbsp;--format markdown</span></div>
+            </div>
+
+            <h3 style="margin: 24px 0 12px;">批量下载资源</h3>
+            <div class="code-block">
+                <div><span class="comment"># 按域名下载全部图片</span></div>
+                <div><span class="cmd">$ browser fetch https://xcancel.com/elonmusk \</span></div>
+                <div><span class="cmd">&nbsp;&nbsp;&nbsp;&nbsp;--save-assets "pbs.twimg.com" \</span></div>
+                <div><span class="cmd">&nbsp;&nbsp;&nbsp;&nbsp;--save-dir ./images</span></div>
+                <div>&nbsp;</div>
+                <div><span class="comment"># 按 glob 匹配（400x400 规格的头像）</span></div>
+                <div><span class="cmd">&nbsp;&nbsp;--save-assets "**/profile_images/**_400x400.jpg"</span></div>
+            </div>
+        </section>
+
+        <section>
+            <h2>反爬能力</h2>
+            <table>
+                <thead>
+                    <tr><th>验证类型</th><th>原理</th><th>状态</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>PoW 工作量证明</td><td>JS 解题（SHA-256 前缀匹配）</td><td style="color: var(--accent-green)">✅ 自动通过</td></tr>
+                    <tr><td>浏览器指纹</td><td>V8 引擎 + 100+ 项 API 对齐 Chrome</td><td style="color: var(--accent-green)">✅ 自动通过</td></tr>
+                    <tr><td>TLS 指纹</td><td>BoringSSL（Chromium 同源库）</td><td style="color: var(--accent-green)">✅ 需要 chrome-tls</td></tr>
+                    <tr><td>行为序列</td><td>favicon / Sec-Fetch / priority 请求头</td><td style="color: var(--accent-green)">✅ 自动通过</td></tr>
+                    <tr><td>验证码</td><td>图片验证码</td><td style="color: var(--accent-orange)">❌ 不处理</td></tr>
+                </tbody>
+            </table>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 16px;">
+                全功能版需要 <code class="inline">--features "quickjs,v8,chrome-tls"</code> 编译。国内服务器需要 <code class="inline">--proxy</code> 指定代理。
+            </p>
+        </section>
+
+        <section>
+            <h2>从源码编译</h2>
+            <div class="code-block">
+                <div><span class="comment"># 轻量版（默认，QuickJS，10MB）</span></div>
+                <div><span class="cmd">$ cargo build --release -p browser-cli</span></div>
+                <div>&nbsp;</div>
+                <div><span class="comment"># 全功能版（V8 + Chrome TLS，60MB，需要 cmake）</span></div>
+                <div><span class="cmd">$ cargo build --release -p browser-cli --features "quickjs,v8,chrome-tls"</span></div>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>Browser — Rust 自研浏览器引擎 · MIT License</p>
+            <p><a href="https://github.com/dyyz1993/browser">GitHub</a> · <a href="https://github.com/dyyz1993/browser/releases">Releases</a> · <a href="https://github.com/dyyz1993/browser/blob/main/docs/ARCHITECTURE.md">架构文档</a></p>
+        </div>
+    </footer>
+
+    <script>
+        function copyCmd(btn) {
+            const cmd = btn.parentElement.querySelector('.cmd').textContent.replace(/^\$\s*/, '');
+            navigator.clipboard.writeText(cmd).then(() => {
+                btn.textContent = '已复制';
+                setTimeout(() => { btn.textContent = '复制'; }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>
