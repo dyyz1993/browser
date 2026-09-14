@@ -60,6 +60,19 @@ async fn sender_for(host: &str, port: u16) -> Result<H2Sender, String> {
     let mut builder = boring::ssl::SslConnector::builder(boring::ssl::SslMethod::tls())
         .map_err(|e| e.to_string())?;
     let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+    // M97: 加载系统 CA 证书——BoringSSL 不自动找系统证书（不同 Linux
+    // 发行版路径不同，逐个尝试标准路径）
+    for ca_path in [
+        "/etc/ssl/certs/ca-certificates.crt",   // Debian/Ubuntu
+        "/etc/pki/tls/certs/ca-bundle.crt",     // RHEL/CentOS
+        "/etc/ssl/cert.pem",                     // macOS / Alpine
+        "/etc/ssl/ca-bundle.pem",                // openSUSE
+    ] {
+        if std::path::Path::new(ca_path).exists() {
+            let _ = builder.set_ca_file(ca_path);
+            break;
+        }
+    }
     let connector = builder.build();
     let ssl = tokio_boring::connect(
         connector.configure().map_err(|e| e.to_string())?,
