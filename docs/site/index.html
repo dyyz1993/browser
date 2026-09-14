@@ -336,7 +336,7 @@
 
     <script>
         // 局域网网关地址（部署者按实际 IP 修改）
-        const GATEWAY = 'http://106.55.9.129:8890';
+        const GATEWAY = 'http://106.55.9.129/gateway/?url=';
 
         async function liveFetch() {
             const acct = document.getElementById('live-account').value.trim().replace(/^@/, '');
@@ -348,7 +348,7 @@
             box.style.display = 'block';
             err.style.display = 'none';
             try {
-                const r = await fetch(`${GATEWAY}/?url=https://xcancel.com/${encodeURIComponent(acct)}`);
+                const r = await fetch(`${GATEWAY}https%3A%2F%2Fxcancel.com%2F${encodeURIComponent(acct)}&format=text`);
                 const text = await r.text();
                 if (text.includes('Checking your browser') || text.length < 500) {
                     out.style.display = 'none';

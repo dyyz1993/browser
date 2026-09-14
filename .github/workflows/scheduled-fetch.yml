@@ -1,13 +1,14 @@
 name: Scheduled Fetch
 
-# 定时抓取 xcancel 数据（演示自动化能力）：
-# - 数据存为 Artifact（90 天保留），不污染仓库
-# - 与上次对比，有新推文时才生成 diff 报告
+# 定时抓取 xcancel 数据（GitHub 生态全自动）：
+# - 数据 commit 到仓库 data/ 目录（官网可直接链接展示）
+# - 与上次对比生成 diff 报告（Step Summary）
 # - 低频（每 6 小时一次），对目标站友好
+# - 支持 workflow_dispatch 手动指定账号（官网实时试抓按钮触发）
 on:
   schedule:
-    - cron: '17 */6 * * *'   # 每 6 小时第 17 分钟（错开整点高峰）
-  workflow_dispatch:          # 允许手动触发
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
     inputs:
       account:
         description: 'xcancel 账号名（不带 @）'
@@ -15,7 +16,7 @@ on:
         default: 'nim_lang'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: scheduled-fetch
@@ -32,8 +33,7 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
 
-      # 复用 Release 构建缓存（没有则冷构建，~8 分钟）
-      - name: Build (full)
+      - name: Build (full, cached)
         run: |
           BIN="target/x86_64-unknown-linux-gnu/release/browser"
           if [ ! -f "$BIN" ]; then
@@ -47,6 +47,7 @@ jobs:
       - name: Fetch timeline
         run: |
           ACCOUNT="${{ inputs.account || 'nim_lang' }}"
+          STAMP=$(date -u +'%Y%m%d-%H%M')
           mkdir -p data
           echo "抓取 @$ACCOUNT ..."
           timeout 240 "$BIN" \
@@ -56,46 +57,54 @@ jobs:
           SIZE=$(wc -c < "data/${ACCOUNT}.md")
           echo "结果: ${SIZE} bytes"
           if [ "$SIZE" -lt 1000 ]; then
-            echo "⚠️ 输出过小，可能遇到挑战页"
-            head -5 "data/${ACCOUNT}.md" || true
+            echo "⚠️ 输出过小，可能遇到挑战页——保留上次数据，本次不入库"
+            cp "data/${ACCOUNT}.md" "data/${ACCOUNT}.failed.md" || true
+            rm "data/${ACCOUNT}.md"
           fi
           echo "ACCOUNT=$ACCOUNT" >> $GITHUB_ENV
+          echo "STAMP=$STAMP" >> $GITHUB_ENV
 
-      # 下载上次运行的数据做 diff
-      - name: Download previous data
-        uses: actions/download-artifact@v4
-        with:
-          name: last-data
-          path: prev
-        continue-on-error: true   # 首次运行没有历史
-
-      - name: Diff report
-        if: hashFiles('prev/*.md') != ''
+      # 历史快照归档（data/history/ 目录，时间戳命名）
+      - name: Archive snapshot
+        if: hashFiles('data/*.md') != ''
         run: |
           ACCOUNT="${{ inputs.account || env.ACCOUNT || 'nim_lang' }}"
-          PREV="prev/${ACCOUNT}.md"
+          mkdir -p data/history
+          cp "data/${ACCOUNT}.md" "data/history/${ACCOUNT}-${STAMP}.md" 2>/dev/null || true
+
+      # 与上次 diff（推文 ID 对比）
+      - name: Diff report
+        run: |
+          ACCOUNT="${{ inputs.account || env.ACCOUNT || 'nim_lang' }}"
           CURR="data/${ACCOUNT}.md"
-          if [ -f "$PREV" ]; then
-            echo "=== 与上次运行的差异 ==="
-            # 取推文 ID 集合对比
+          if [ ! -f "$CURR" ]; then echo "本次无有效数据"; exit 0; fi
+          # 用 git 里上一版做对比
+          git show HEAD:"data/${ACCOUNT}.md" > /tmp/prev.md 2>/dev/null || echo "" > /tmp/prev.md
+          if [ -s /tmp/prev.md ]; then
             grep -oE 'status/[0-9]+' "$CURR" | sort -u > /tmp/curr.ids
-            grep -oE 'status/[0-9]+' "$PREV" | sort -u > /tmp/prev.ids
+            grep -oE 'status/[0-9]+' /tmp/prev.md | sort -u > /tmp/prev.ids
             NEW=$(comm -23 /tmp/curr.ids /tmp/prev.ids | wc -l)
             GONE=$(comm -13 /tmp/curr.ids /tmp/prev.ids | wc -l)
-            echo "新推文: $NEW 条 / 消失: $GONE 条"
-            comm -23 /tmp/curr.ids /tmp/prev.ids | head -10 | while read id; do
-              echo "  NEW: $id"
-            done
+            echo "新推文: $NEW / 消失: $GONE"
             { echo "NEW_COUNT=$NEW"; } >> $GITHUB_ENV
+          else
+            echo "首次抓取该账号"
+            { echo "NEW_COUNT=first"; } >> $GITHUB_ENV
           fi
 
-      # 数据存 Artifact（90 天），不提交到仓库
-      - name: Upload data artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: last-data
-          path: data/*.md
-          retention-days: 90
+      # 数据 commit 回仓库（官网可直接链接）
+      - name: Commit data to repo
+        if: hashFiles('data/*.md') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "无变化，跳过 commit"
+          else
+            git commit -m "data: 定时抓取 @${{ env.ACCOUNT }} ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+            git push
+          fi
 
       - name: Summary
         run: |
@@ -105,8 +114,11 @@ jobs:
             echo ""
             echo "- 账号: @$ACCOUNT"
             echo "- 时间: $(date -u +'%Y-%m-%d %H:%M UTC')"
-            echo "- 输出: $(wc -c < data/${ACCOUNT}.md) bytes"
+            if [ -f "data/${ACCOUNT}.md" ]; then
+              echo "- 输出: $(wc -c < data/${ACCOUNT}.md) bytes"
+              echo "- 在线查看: https://dyyz1993.github.io/browser/data/${ACCOUNT}.md"
+            else
+              echo "- ⚠️ 本次抓取失败（挑战收紧），数据未更新"
+            fi
             echo "- 新推文: ${NEW_COUNT:-0} 条"
-            echo ""
-            echo "数据保留 90 天（Artifact: last-data）"
           } >> $GITHUB_STEP_SUMMARY
