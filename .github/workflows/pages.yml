@@ -3,7 +3,7 @@ name: GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['docs/site/**']
+    paths: ['docs/site/**', 'data/**']
   workflow_dispatch:
 
 permissions:
