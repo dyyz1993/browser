@@ -1,3 +1,24 @@
+## M97.22 🩺 `bdiag` 全局诊断命令——一行命令快速校验任意页面
+- **形态**：`tools/bdiag.sh`（仓库源码）→ `/usr/local/bin/bdiag`（全局安装），
+  封装 `browser fetch --json --only ...` + python3 彩色分组格式化
+- **用法**：
+  - `bdiag <url>` —— console（按 level 分组）+ 未捕获异常（message + stack 前 2 行）
+    + 内容告警；默认跳过正文提取（快速诊断模式）
+  - `--network` 附带 JS 请求表（状态码着色）；`--full` 全量（title + 正文预览）；
+    `--raw` 原始 JSON；`--engine boa|v8` 引擎对照；`--timeout`（默认 30s）
+  - **退出码可进 CI**：0=健康 / 1=有未捕获异常或 console.error / 2=抓取失败
+  - 二进制定位链：`$BROWSER_BIN` > PATH 里的 `browser` > 默认仓库 release 路径
+- **修掉的三个 shell 坑**（都是真实踩到）：
+  1. `printf | python3 - <<EOF` —— heredoc 占用 stdin 把管道数据顶掉（JSON 空），
+     程序改走临时文件、管道专走数据
+  2. `set -e` 下 `VAR=$(grep 无匹配)` 以 1 退出静默杀脚本（干净页全军覆没），
+     `|| true` 兜底
+  3. `$RC）` 全角括号紧跟变量名——bash 3.2 把 UTF-8 首字节吞进变量名，
+     `${RC}` 显式定界
+- **验证**：本地 fixture 三态（异常页 1 / 干净页 0 / 坏 URL 2）+ react.dev 实测
+  （Minified React error #418 直接现形）+ shellcheck 0 告警
+- **文档**：README「渲染诊断」小节 + AGENTS.md § 三 7d
+
 ## M97.21 🎛 `fetch --json --only` 字段投影 + 官网诊断演示页
 - **动机**（用户反馈）：全量信封里 content.text 把 console/errors 淹没，
   想快速校验日志的人被迫带着整个正文；诊断信息应有独立开关

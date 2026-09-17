@@ -190,6 +190,12 @@ browser fetch https://react.dev/ --format text --json | jq '{console, errors, wa
 #     合法字段：url,title,content,warnings,console,errors,network（任意逗号组合）
 browser fetch https://react.dev/ --json --only console,errors
 
+# 7d. 一行诊断（M97.22）——全局命令 bdiag（tools/bdiag.sh 安装到 /usr/local/bin），
+#     彩色分组输出 + 退出码（0=健康 / 1=有异常或 console.error / 2=抓取失败，可进 CI）
+bdiag https://react.dev/             # console + 未捕获异常 + 告警
+bdiag https://react.dev/ --network   # 附带 JS 请求表
+bdiag https://react.dev/ --engine boa # 引擎对照
+
 # 8. 底层插桩
 browser fetch https://react.dev/ --format text --profile
 ```

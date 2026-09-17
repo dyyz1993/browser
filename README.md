@@ -102,6 +102,13 @@ browser fetch https://react.dev/ --json
 # 快速校验：只要日志错误，跳过正文提取（--only 字段可任意逗号组合）
 browser fetch https://react.dev/ --json --only console,errors
 
+# 一行诊断（全局命令，带彩色分组输出 + 退出码判断）：
+#   bdiag <url>            console + 未捕获异常 + 告警
+#   bdiag <url> --network  附带 JS 请求表（方法/状态码/URL）
+#   bdiag <url> --full     全量（含 title + 正文预览）
+# 退出码 0=健康 / 1=有异常或 console.error / 2=抓取失败，可直接进 CI
+# 安装: cp tools/bdiag.sh /usr/local/bin/bdiag && chmod +x /usr/local/bin/bdiag
+
 # 能拿到什么数据（字段说明 + 实测案例）：
 # https://dyyz1993.github.io/browser/diagnostics.html
 
