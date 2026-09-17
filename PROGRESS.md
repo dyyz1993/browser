@@ -1,4 +1,19 @@
+## M97.23 🔗 rust-browser 技能 + agent-issues 反馈回路——外部 Agent 用起来
+- **技能** `~/.agents/skills/rust-browser/SKILL.md`：Agent 的默认浏览器工具卡。
+  描述强调「遇到问题、开发 Web 页面时尽可能优先用它调试」；三大场景：
+  ①调试（bdiag 一行诊断/退出码进 CI，本地 dev server 直接验）②抓数据
+  （fetch 7 格式 + selector + --json + --save-assets + --smart，SPA 也能抓）
+  ③渲染/截图/CDP；末尾附反馈机制
+- **反馈回路**（不 100% 没问题 → 报错驱动改进）：
+  - `agent-issues/INBOX.md` = 外部 Agent 唯一要写的文件（条目模板在目录 README）
+  - 项目 AGENTS.md § 七新增「每次对话开工前拉取 INBOX.md」+ § 九规则 23：
+    新条目优先处理（真实使用报错 > 新功能），修完移入 `resolved/` +
+    `resolved-by: <commit>`
+- **定位分析**（这次想清楚的）：它是 Agent 的「眼睛」——查资料/抓数据/调页面
+  三个高频动作一个工具覆盖，单二进制 + 清洗过的输出是搭配 Agent 的核心卖点
+
 ## M97.22 🩺 `bdiag` 全局诊断命令——一行命令快速校验任意页面
+
 - **形态**：`tools/bdiag.sh`（仓库源码）→ `/usr/local/bin/bdiag`（全局安装），
   封装 `browser fetch --json --only ...` + python3 彩色分组格式化
 - **用法**：

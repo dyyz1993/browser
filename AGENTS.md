@@ -445,6 +445,16 @@ M62     JS 覆盖矩阵补齐（28 项 ES6+ + 框架 API +     ✅
 
 ## 七、Agent 工作流程
 
+### 每次对话开工前：拉取外部 Agent 反馈（M97.23）
+
+读 [`agent-issues/INBOX.md`](../agent-issues/INBOX.md)（约定见该目录 README.md）：
+- **有新条目** → 优先处理（走下面自愈循环：复现 → 定位 → 补 API/修 bug →
+  测试 → 门禁 → commit），修完把条目移入 `agent-issues/resolved/` 并在文末补
+  `resolved-by: <commit>`。
+- **无新条目** → 正常开工。
+- 条目来自 `rust-browser` skill（`~/.agents/skills/rust-browser/`）——外部
+  Agent 用 browser/bdiag 抓取/调试时的真实报错，是最高价值的报错驱动来源。
+
 ### 收到"实现功能 X"时
 
 1. **先查 GOALS.md** —— X 在目标里吗？在非目标里吗？（多数被拒需求在非目标表里）
@@ -684,6 +694,12 @@ QuickJS（默认引擎）的报错驱动补 API 循环和 boa 类似，但有以
       每页开始 `reset_pending_navigation()` 防残留串页。
     - 🔍 调试工具：`BROWSER_TRACE_NAV=1` 逐跳打印请求 cookie/响应 status/
       Location/Set-Cookie。
+23. **每次对话开工前拉取外部 Agent 反馈**（M97.23）：
+    - 读 `agent-issues/INBOX.md`——有新条目优先处理（真实使用报错是最高价值的
+      报错驱动来源，优先级高于新功能）；修完把条目移入 `agent-issues/resolved/`
+      并补 `resolved-by: <commit>`，随后 commit。
+    - 条目来源是 `rust-browser` skill（`~/.agents/skills/rust-browser/`），
+      外部 Agent 抓取/调试时按模板写入；与浏览器非目标相关的标记 `wontfix`。
 
 ---
 
