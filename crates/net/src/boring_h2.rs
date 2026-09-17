@@ -63,10 +63,10 @@ async fn sender_for(host: &str, port: u16) -> Result<H2Sender, String> {
     // M97: 加载系统 CA 证书——BoringSSL 不自动找系统证书（不同 Linux
     // 发行版路径不同，逐个尝试标准路径）
     for ca_path in [
-        "/etc/ssl/certs/ca-certificates.crt",   // Debian/Ubuntu
-        "/etc/pki/tls/certs/ca-bundle.crt",     // RHEL/CentOS
-        "/etc/ssl/cert.pem",                     // macOS / Alpine
-        "/etc/ssl/ca-bundle.pem",                // openSUSE
+        "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
+        "/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/CentOS
+        "/etc/ssl/cert.pem",                  // macOS / Alpine
+        "/etc/ssl/ca-bundle.pem",             // openSUSE
     ] {
         if std::path::Path::new(ca_path).exists() {
             let _ = builder.set_ca_file(ca_path);
@@ -381,7 +381,10 @@ async fn solve_js_challenge(
     let result = Box::pin(request_impl(&full, "GET", headers, None)).await;
     eprintln!(
         "[boring] PoW solve result: {}",
-        result.as_ref().map(|(s, _, b)| format!("{} {}B", s, b.len())).unwrap_or_default()
+        result
+            .as_ref()
+            .map(|(s, _, b)| format!("{} {}B", s, b.len()))
+            .unwrap_or_default()
     );
     Some(result)
 }
