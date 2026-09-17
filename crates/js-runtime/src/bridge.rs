@@ -117,13 +117,34 @@ pub fn capture_console_event(level: &str, text: &str) {
 }
 
 /// M74: Record a JS error (called from QuickJS shim).
+///
+/// M97.20: 同一 message 去重——interval 回调反复抛同一个错时不刷屏
+/// （对齐 Chrome console 的重复错误折叠）。
 pub fn capture_js_error(message: &str, stack: Option<&str>) {
     CAPTURED_JS_ERRORS.with(|slot| {
-        slot.borrow_mut().push(CapturedJsError {
+        let mut q = slot.borrow_mut();
+        if q.iter().any(|e| e.message == message) {
+            return;
+        }
+        q.push(CapturedJsError {
             message: message.to_string(),
             stack: stack.map(|s| s.to_string()),
         });
     });
+}
+
+/// M97.20: Record a JS error from a formatted error string
+/// （`eval_user_script` 的 Err display：`"message\n    at ..."`）。
+/// 首行作 message，其余行作 stack——供 `fetch --json` 的 errors 数组消费。
+pub fn capture_js_error_display(detail: &str) {
+    let (message, stack) = match detail.find('\n') {
+        Some(i) => (detail[..i].trim(), Some(detail[i + 1..].trim())),
+        None => (detail.trim(), None),
+    };
+    if message.is_empty() {
+        return;
+    }
+    capture_js_error(message, stack);
 }
 
 /// M70.4: A captured network event from JS fetch/XHR (Send-safe).
@@ -394,6 +415,12 @@ pub fn install(ctx: &mut Context) {
     register_fn(ctx, "__appendBody", append_body as NativeFn);
     register_fn(ctx, "__setTitle", set_title as NativeFn);
     register_fn(ctx, "__log", log_fn as NativeFn);
+    register_fn(
+        ctx,
+        "__captureConsoleEvent",
+        capture_console_event_fn as NativeFn,
+    );
+    register_fn(ctx, "__captureJsError", capture_js_error_fn as NativeFn);
     register_fn(ctx, "__fetchSetBody", fetch_set_body as NativeFn);
     register_fn(ctx, "__fetchAppendBody", fetch_append_body as NativeFn);
     register_fn(ctx, "__fetchSync", fetch_sync_bridge as NativeFn);
@@ -566,6 +593,33 @@ fn set_title(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<
 fn log_fn(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let msg = args.get_or_undefined(0).display().to_string();
     eprintln!("[js] {msg}");
+    Ok(JsValue::undefined())
+}
+
+/// M97.20: `__captureConsoleEvent` 的 boa 桥（QuickJS 侧在 engine_quickjs.rs 注册）。
+/// shim 是双引擎共享的 JS 字符串，boa 不注册则 console 采集静默丢失。
+#[cfg(feature = "boa")]
+fn capture_console_event_fn(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let level = arg_string(args, 0).unwrap_or_default();
+    let text = arg_string(args, 1).unwrap_or_default();
+    if !text.is_empty() {
+        capture_console_event(&level, &text);
+    }
+    Ok(JsValue::undefined())
+}
+
+/// M97.20: `__captureJsError` 的 boa 桥（QuickJS 侧在 engine_quickjs.rs 注册）。
+#[cfg(feature = "boa")]
+fn capture_js_error_fn(_this: &JsValue, args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
+    let message = arg_string(args, 0).unwrap_or_default();
+    let stack = arg_string(args, 1).unwrap_or_default();
+    if !message.is_empty() {
+        capture_js_error(&message, if stack.is_empty() { None } else { Some(&stack) });
+    }
     Ok(JsValue::undefined())
 }
 

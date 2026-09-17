@@ -1347,6 +1347,7 @@ fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEng
                                 && !err_str.contains("unexpected token")
                             {
                                 eprintln!("[js] [quickjs dynamic] {e}");
+                                crate::bridge::capture_js_error_display(&err_str);
                             }
                         }
                     }
@@ -1371,6 +1372,7 @@ fn drain_and_eval_dynamic_scripts(engine: &mut crate::engine_quickjs::QuickJsEng
                         && !err_str.contains("unexpected token")
                     {
                         eprintln!("[js] [quickjs dynamic] {e}");
+                        crate::bridge::capture_js_error_display(&err_str);
                     }
                 }
             }
@@ -1850,7 +1852,14 @@ fn run_page_quickjs(
                                     );
                                     match engine.eval_user_script(&eval_code) {
                                         Ok(_) => executed += 1,
-                                        Err(e2) => eprintln!("[js-runtime] module eval (strip) failed: {url}: {e2:#}"),
+                                        Err(e2) => {
+                                            eprintln!(
+                                                "[js-runtime] module eval (strip) failed: {url}: {e2:#}"
+                                            );
+                                            crate::bridge::capture_js_error_display(&format!(
+                                                "{e2:#}"
+                                            ));
+                                        }
                                     }
                                     continue;
                                 }
@@ -1925,6 +1934,7 @@ fn run_page_quickjs(
                         && !err_str.contains("unexpected token")
                     {
                         eprintln!("[js] [quickjs] {e}");
+                        crate::bridge::capture_js_error_display(&err_str);
                     }
                 }
             }
@@ -1983,6 +1993,7 @@ fn run_page_quickjs(
                 Ok(_) => executed += 1,
                 Err(e) => {
                     eprintln!("[js-runtime] QuickJS eval failed ({label}): {e}");
+                    crate::bridge::capture_js_error_display(&e);
                 }
             }
             if trace_scripts {
@@ -3165,6 +3176,12 @@ window.__drainDueTimers = function() {
         } catch(e) {
             var st = (e && e.stack) ? String(e.stack).split('\\n').slice(0,4).join(' | ') : '';
             if (typeof __log === 'function') __log('[timer] ' + (e.message || String(e)) + (st ? (' | ' + st) : ''));
+            // M97.20: 异步异常进结构化采集队列（fetch --json 的 errors 数组）
+            try {
+                if (typeof __captureJsError === 'function') {
+                    __captureJsError(String(e && e.message ? e.message : e), (e && e.stack) ? String(e.stack) : '');
+                }
+            } catch (e3) {}
             // M92: cross-realm 近似——回调带 __realmWin 标记（帧 Function
             // 包装的产出）时，异常上报到该帧的 onerror 而非顶层
             //（WPT settimeout/setinterval-cross-realm-callback-report-exception：
@@ -8646,6 +8663,12 @@ window.__drainDueTransitions = function() {
                 t.element.dispatchEvent(aev);
             } catch(e) {
                 if (typeof __log === 'function') __log('[transition] dispatch error: ' + e.message);
+                // M97.20: 进结构化采集队列（fetch --json 的 errors 数组）
+                try {
+                    if (typeof __captureJsError === 'function') {
+                        __captureJsError('transition dispatch: ' + String(e.message || e), '');
+                    }
+                } catch (e2) {}
             }
             fired++;
         } else {
@@ -10050,6 +10073,12 @@ XMLHttpRequest.prototype.send = function(body) {
         if (typeof self.onreadystatechange === 'function') {
             try { self.onreadystatechange.call(self); } catch(e) {
                 if (typeof __log === 'function') __log('[xhr] rsc threw: ' + e.message);
+                // M97.20: 进结构化采集队列（fetch --json 的 errors 数组）
+                try {
+                    if (typeof __captureJsError === 'function') {
+                        __captureJsError('xhr onreadystatechange: ' + String(e.message || e), '');
+                    }
+                } catch (e2) {}
             }
         }
         var ev = new Event('load');

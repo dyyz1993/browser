@@ -1,4 +1,31 @@
+## M97.20 🔍 `fetch --json` errors 数组激活——JS 异常全路径进结构化采集队列
+- **问题**：`__captureJsError` 桥（M74）在 QuickJS 已注册但 shim 从不调用，
+  boa 干脆没注册——`--json` 的 `errors` 数组恒空，JS 异常只走 stderr `[js]` 行，
+  无法编程化校验；boa 下连 `console` 数组也是死的（shim 是双引擎共享，
+  `__captureConsoleEvent` 只有 QuickJS 注册）
+- **修复（全路径接上采集）**：
+  - JS 侧 catch（共享 shim）：timer 回调 / transition dispatch /
+    xhr onreadystatechange 三处补 `__captureJsError(msg, stack)`
+  - Rust 侧 eval 错误：dynamic（外链+inline）/ pass-1 module /
+    module strip / pass-2 script 五处 `capture_js_error_display`
+    （首行 message、其余 stack，与 stderr 打印同步、同过滤条件——JSX
+    噪声错误依旧不采集）
+  - boa：`install()` 补注册 `__captureConsoleEvent`/`__captureJsError` 两桥
+  - `capture_js_error` 同 message 去重（interval 反复抛同错不刷屏，
+    对齐 Chrome console 折叠语义）
+- **实测**（本地 fixture）：顶层同步异常 + timer 异步异常（带 stack）+
+  console log/warn/error 双引擎全部进 `--json`；抛错 script 不阻断后续 script
+- **校验命令**（快速打开页面 + 抓日志错误）：
+  ```bash
+  browser fetch <url> --format text --json | jq '{console, errors, warnings}'
+  ```
+- **回归测试**：`integration_fetch.rs::fetch_json_captures_console_and_js_errors`
+  （console 双 level / 顶层异常 / timer 异常带 stack / 异常不阻断后续 script）
+- **门禁**：fmt ✓ / clippy（workspace 默认 feature）✓ / test 1036 passed 0 failed ✓
+  （`--features boa` clippy 有 12 个 HEAD 既有漂移告警，非本次引入，未处理）
+
 ## M96.15–M96.17 🎯 目标达成——xcancel verify 200 + nim_lang 推文完整到手
+
 - **里程碑：自研引擎 100% 通过 xcancel antibot 并抓到推文**
   （xcancel_nim_lang_live.md 16.6KB：置顶 "Nim v1 is here.👑"/920 tweets/
   5236 followers/完整时间线；端到端复验 3 次全成功）

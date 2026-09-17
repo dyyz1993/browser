@@ -239,3 +239,89 @@ async fn fetch_markdown_table_rendered() {
         .stdout(predicate::str::contains("| --- |"))
         .stdout(predicate::str::contains("| Alice | 90 |"));
 }
+
+/// M97.20: `fetch --json` 的 console/errors 采集回归。
+///
+/// 修复前 `__captureJsError` 桥已注册但 shim 从不调用——errors 数组恒空，
+/// JS 异常只走 stderr `[js]` 行。本测试固化三条链路：
+/// 1. console.log/error 进 `console` 数组（带 level）
+/// 2. 顶层同步异常进 `errors` 数组，且不阻断后续 script
+/// 3. timer 回调异步异常进 `errors` 数组（带 stack）
+const CAPTURE_HTML: &str = r#"<!doctype html>
+<html><head><title>Capture Test</title></head>
+<body><div id="a">static</div>
+<script>
+console.log("CAP_LOG_OK");
+console.error("CAP_CONSOLE_ERR");
+var x = null; x.y.z;
+</script>
+<script>document.getElementById('a').textContent = 'CAP_SECOND_SCRIPT';</script>
+<script>
+setTimeout(function() { throw new TypeError("CAP_TIMER_BOOM"); }, 10);
+</script>
+</body></html>"#;
+
+#[tokio::test]
+async fn fetch_json_captures_console_and_js_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/capture"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CAPTURE_HTML))
+        .mount(&server)
+        .await;
+    let url = format!("{}/capture", server.uri());
+
+    let output = bin()
+        .args(["fetch", &url, "--format", "text", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&output).expect("valid JSON output");
+
+    // console 采集：log + error 两条都带 level
+    let console = json["console"].as_array().expect("console array");
+    assert!(
+        console
+            .iter()
+            .any(|e| e["level"] == "log" && e["text"] == "CAP_LOG_OK"),
+        "console.log not captured: {console:?}"
+    );
+    assert!(
+        console
+            .iter()
+            .any(|e| e["level"] == "error" && e["text"] == "CAP_CONSOLE_ERR"),
+        "console.error not captured: {console:?}"
+    );
+
+    // JS 异常采集：顶层同步异常 + timer 异步异常
+    let errors = json["errors"].as_array().expect("errors array");
+    assert!(
+        errors.iter().any(|e| e["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("cannot read property"))),
+        "top-level exception not captured: {errors:?}"
+    );
+    let timer_err = errors
+        .iter()
+        .find(|e| {
+            e["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("CAP_TIMER_BOOM"))
+        })
+        .expect("timer exception not captured");
+    assert!(
+        timer_err["stack"].as_str().is_some_and(|s| !s.is_empty()),
+        "timer exception missing stack: {timer_err:?}"
+    );
+
+    // 顶层异常不阻断后续 script（M71.4 sloppy eval 逐 script 隔离）
+    assert!(
+        json["content"]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("CAP_SECOND_SCRIPT")),
+        "scripts after a throwing script should still run: {}",
+        json["content"]["text"]
+    );
+}

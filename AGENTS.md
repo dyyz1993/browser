@@ -181,6 +181,11 @@ bash tests/benchmarks/csr_benchmark.sh
 browser fetch https://react.dev/ --format text 2>&1 >/dev/null | \
   grep -oE "message=[^|]*" | sort | uniq -c | sort -rn
 
+# 7b. 结构化日志/错误采集（M97.20）——console + JS 异常 + 网络事件一次拿全，
+#     双引擎可用。errors 含顶层同步异常 + timer/xhr/transition 异步异常（带 stack），
+#     同 message 自动去重
+browser fetch https://react.dev/ --format text --json | jq '{console, errors, warnings}'
+
 # 8. 底层插桩
 browser fetch https://react.dev/ --format text --profile
 ```
