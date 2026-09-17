@@ -325,3 +325,84 @@ async fn fetch_json_captures_console_and_js_errors() {
         json["content"]["text"]
     );
 }
+
+/// M97.21: `--only` 字段投影——诊断模式只输出请求的字段，
+/// 不含 content/warnings 时跳过正文提取。
+#[tokio::test]
+async fn fetch_json_only_projects_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/capture"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CAPTURE_HTML))
+        .mount(&server)
+        .await;
+    let url = format!("{}/capture", server.uri());
+
+    let output = bin()
+        .args(["fetch", &url, "--json", "--only", "console,errors"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&output).expect("valid JSON output");
+
+    // 只含请求的两个字段，其余（content/url/title/warnings/network）被投影掉
+    let keys: Vec<&str> = json
+        .as_object()
+        .expect("object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(keys, vec!["console", "errors"], "fields: {keys:?}");
+    assert!(
+        json["console"].as_array().is_some_and(|a| !a.is_empty()),
+        "console should still be captured"
+    );
+    assert!(
+        json["errors"].as_array().is_some_and(|a| !a.is_empty()),
+        "errors should still be captured"
+    );
+
+    // 全量信封不受 --only 影响（向后兼容：content.text 仍在）
+    let full = bin()
+        .args(["fetch", &url, "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let full: serde_json::Value = serde_json::from_slice(&full).expect("valid JSON output");
+    assert!(
+        full["content"]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("CAP_SECOND_SCRIPT")),
+        "full envelope must keep content"
+    );
+}
+
+/// M97.21: `--only` 参数校验——缺 --json 报错；非法字段报错并列出合法字段。
+#[tokio::test]
+async fn fetch_json_only_validation() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/capture"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CAPTURE_HTML))
+        .mount(&server)
+        .await;
+    let url = format!("{}/capture", server.uri());
+
+    bin()
+        .args(["fetch", &url, "--only", "console"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--only requires --json"));
+
+    bin()
+        .args(["fetch", &url, "--json", "--only", "console,bogus"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "invalid --only field 'bogus'; valid fields",
+        ));
+}

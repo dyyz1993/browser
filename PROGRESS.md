@@ -1,3 +1,22 @@
+## M97.21 🎛 `fetch --json --only` 字段投影 + 官网诊断演示页
+- **动机**（用户反馈）：全量信封里 content.text 把 console/errors 淹没，
+  想快速校验日志的人被迫带着整个正文；诊断信息应有独立开关
+- **`--only <fields>`**（main.rs，仅 --json 模式，逗号分隔任意组合）：
+  - 合法字段：url / title / content / warnings / console / errors / network
+  - **快速诊断模式**：不含 content/warnings/title 时跳过正文提取
+    （`[hint] skipping content extraction`），JS 搞坏页面启发式与 warnings
+    一并跳过（无正文可比较）；含 warnings/title 时仍提取（派生自正文）
+  - 参数校验：缺 --json 报 `--only requires --json`；非法字段报错并列出
+    合法字段清单；无 --only 时全量信封不变（content.text 等旧消费者不受影响）
+- **官网演示页** `docs/site/diagnostics.html`（pages.yml 随 main 自动部署）：
+  三种输出形态对比 / 7 字段说明表 / console vs errors 分工 /
+  实测 case（真实 fixture：console 三级 + 顶层 ReferenceError + timer
+  TypeError 带 stack + fetch 404 network 事件 + 异步渲染正文，全字段真实
+  JSON 嵌入）/ 常用 jq 校验组合；index.html「它能做什么」加渲染诊断卡片入口
+- **回归测试**：`fetch_json_only_projects_fields`（投影正确 + 全量信封兼容）+
+  `fetch_json_only_validation`（缺 --json / 非法字段两路报错）
+- **门禁**：fmt ✓ / clippy ✓ / integration_fetch 12 passed ✓
+
 ## M97.20 🔍 `fetch --json` errors 数组激活——JS 异常全路径进结构化采集队列
 - **问题**：`__captureJsError` 桥（M74）在 QuickJS 已注册但 shim 从不调用，
   boa 干脆没注册——`--json` 的 `errors` 数组恒空，JS 异常只走 stderr `[js]` 行，
@@ -25,6 +44,7 @@
   （`--features boa` clippy 有 12 个 HEAD 既有漂移告警，非本次引入，未处理）
 
 ## M96.15–M96.17 🎯 目标达成——xcancel verify 200 + nim_lang 推文完整到手
+
 
 - **里程碑：自研引擎 100% 通过 xcancel antibot 并抓到推文**
   （xcancel_nim_lang_live.md 16.6KB：置顶 "Nim v1 is here.👑"/920 tweets/

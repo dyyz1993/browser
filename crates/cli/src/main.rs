@@ -285,6 +285,13 @@ enum Cmd {
         /// Output structured JSON {url, title, content} instead of raw content.
         #[arg(long)]
         json: bool,
+        /// M97.21: Field projection for --json output, comma-separated:
+        /// url,title,content,warnings,console,errors,network.
+        /// When neither content nor warnings is requested, body-text
+        /// extraction is skipped entirely (fast diagnostics mode).
+        /// Requires --json.
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
         /// Render width (affects text wrapping for text/markdown).
         #[arg(long, default_value_t = 80)]
         width: usize,
@@ -796,6 +803,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             only_main_content,
             no_js,
             json,
+            only,
             width: _width,
             profile,
             js_engine,
@@ -809,6 +817,33 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             save_assets,
             save_dir,
         } => {
+            // M97.21: --only 字段投影（仅 --json 模式）。都不含 content/warnings
+            // 时跳过正文提取（快速诊断模式）。
+            let only_fields = if only.is_empty() {
+                None
+            } else {
+                if !json {
+                    return Err(anyhow!("--only requires --json"));
+                }
+                const VALID: [&str; 7] = [
+                    "url", "title", "content", "warnings", "console", "errors", "network",
+                ];
+                for f in &only {
+                    if !VALID.contains(&f.as_str()) {
+                        return Err(anyhow!(
+                            "invalid --only field '{f}'; valid fields: {VALID:?}"
+                        ));
+                    }
+                }
+                Some(
+                    only.into_iter()
+                        .collect::<std::collections::BTreeSet<String>>(),
+                )
+            };
+            let need_extract = match &only_fields {
+                None => true,
+                Some(s) => s.contains("content") || s.contains("warnings") || s.contains("title"),
+            };
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
             let html = fetch_with_jar(&url).await?;
@@ -1005,9 +1040,18 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 only_main_content,
                 inline_images,
             };
-            let mut result =
+            let mut result = if need_extract {
                 browser_extractor::run_extract(&shared.borrow(), base.as_deref(), &opts)
-                    .map_err(|e| anyhow!("extract failed: {e}"))?;
+                    .map_err(|e| anyhow!("extract failed: {e}"))?
+            } else {
+                // M97.21: --only 快速诊断模式——不请求 content/warnings/title
+                // 时跳过正文提取（省时且避免大正文淹没诊断字段）。
+                eprintln!("[hint] --only: skipping content extraction (diagnostics-only)");
+                browser_extractor::ExtractResult {
+                    content: String::new(),
+                    title: None,
+                }
+            };
             if profile {
                 eprintln!(
                     "[profile] {:<20} {:>6}MB  {:>6.2}s",
@@ -1025,7 +1069,8 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             }
             // M70.6: 启发式检测——JS 执行后输出比原始 HTML 还差（JS 搞坏了页面），
             // 自动回退到原始 HTML。
-            if !no_js {
+            // M97.21: --only 诊断模式下无正文可比较，跳过。
+            if !no_js && need_extract {
                 // M71.5: 同量纲比较——JS 后纯文本 vs JS 前纯文本，
                 // 而非 vs 原始 HTML 字节（HTML 标签开销通常占 80%+，
                 // 旧逻辑 content < raw/5 对正常页面也成立，会误判 JS 搞坏了页面）。
@@ -1067,7 +1112,12 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             // M82 (P0-2): 内容级启发式警告——反爬/验证页（HTTP 200 + 短内容
             // 的"网络不给力"/"安全检测"壳页）与空内容。stderr 始终打印，
             // --json 模式额外放进 warnings 数组，调用方可编程判断。
-            let warnings = browser_extractor::warnings::content_warnings(&result.content);
+            // M97.21: warnings 派生自正文；诊断模式无正文则留空。
+            let warnings = if need_extract {
+                browser_extractor::warnings::content_warnings(&result.content)
+            } else {
+                Vec::new()
+            };
             for w in &warnings {
                 eprintln!("[warn] {w}");
             }
@@ -1077,34 +1127,74 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
                 let js_errors = drain_captured_js_errors();
                 let network_events = drain_captured_network_events();
 
-                // Build JSON using serde_json (available in cli deps).
-                let map = serde_json::json!({
-                    "url": url,
-                    "title": result.title,
-                    "content": {
-                        // M82 (P1-6): 记录实际提取格式；text 字段承载该格式的内容
-                        // （沿用旧字段名，旧消费者读 content.text 不受影响）。
-                        "format": out_format.name(),
-                        "text": result.content,
-                    },
-                    "warnings": warnings,
-                    "console": console_events.iter().map(|e| serde_json::json!({
-                        "level": e.level,
-                        "text": e.text,
-                    })).collect::<Vec<_>>(),
-                    "errors": js_errors.iter().map(|e| serde_json::json!({
-                        "message": e.message,
-                        "stack": e.stack,
-                    })).collect::<Vec<_>>(),
-                    "network": network_events.iter().map(|e| serde_json::json!({
-                        "url": e.url,
-                        "method": e.method,
-                        "status": e.status,
-                        "mime_type": e.mime_type,
-                        "body_size": e.body_size,
-                    })).collect::<Vec<_>>(),
-                });
-                println!("{}", serde_json::to_string_pretty(&map).unwrap_or_default());
+                // M97.21: --only 字段投影——无 --only 时输出全量信封（旧消费者
+                // 读 content.text 等字段不受影响）；字段顺序与全量输出一致。
+                let include = |f: &str| match &only_fields {
+                    Some(set) => set.contains(f),
+                    None => true,
+                };
+                let mut map = serde_json::Map::new();
+                if include("url") {
+                    map.insert("url".into(), serde_json::json!(url));
+                }
+                if include("title") {
+                    map.insert("title".into(), serde_json::json!(result.title));
+                }
+                if include("content") {
+                    map.insert(
+                        "content".into(),
+                        serde_json::json!({
+                            // M82 (P1-6): 记录实际提取格式；text 字段承载该格式的内容
+                            // （沿用旧字段名，旧消费者读 content.text 不受影响）。
+                            "format": out_format.name(),
+                            "text": result.content,
+                        }),
+                    );
+                }
+                if include("warnings") {
+                    map.insert("warnings".into(), serde_json::json!(warnings));
+                }
+                if include("console") {
+                    map.insert(
+                        "console".into(),
+                        serde_json::json!(console_events
+                            .iter()
+                            .map(|e| serde_json::json!({
+                                "level": e.level,
+                                "text": e.text,
+                            }))
+                            .collect::<Vec<_>>()),
+                    );
+                }
+                if include("errors") {
+                    map.insert(
+                        "errors".into(),
+                        serde_json::json!(js_errors
+                            .iter()
+                            .map(|e| serde_json::json!({
+                                "message": e.message,
+                                "stack": e.stack,
+                            }))
+                            .collect::<Vec<_>>()),
+                    );
+                }
+                if include("network") {
+                    map.insert(
+                        "network".into(),
+                        serde_json::json!(network_events
+                            .iter()
+                            .map(|e| serde_json::json!({
+                                "url": e.url,
+                                "method": e.method,
+                                "status": e.status,
+                                "mime_type": e.mime_type,
+                                "body_size": e.body_size,
+                            }))
+                            .collect::<Vec<_>>()),
+                    );
+                }
+                let out = serde_json::Value::Object(map);
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
             } else {
                 print!("{}", result.content);
                 println!();

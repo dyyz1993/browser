@@ -94,6 +94,17 @@ browser fetch https://example.com/ --format text
 # 拉取 SPA 页面（等 JS 执行完再提取）
 browser fetch https://react.dev/ --format markdown
 
+### 渲染诊断：console / JS 异常 / 网络事件一次拿全
+
+# 全量信封（内容 + console + errors + network + warnings）
+browser fetch https://react.dev/ --json
+
+# 快速校验：只要日志错误，跳过正文提取（--only 字段可任意逗号组合）
+browser fetch https://react.dev/ --json --only console,errors
+
+# 能拿到什么数据（字段说明 + 实测案例）：
+# https://dyyz1993.github.io/browser/diagnostics.html
+
 ### 需要通过反爬验证的站点（如 xcancel）
 
 # 全功能版（需 --features "v8,chrome-tls" 构建）

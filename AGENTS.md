@@ -186,6 +186,10 @@ browser fetch https://react.dev/ --format text 2>&1 >/dev/null | \
 #     同 message 自动去重
 browser fetch https://react.dev/ --format text --json | jq '{console, errors, warnings}'
 
+# 7c. 字段投影（M97.21）——只要诊断字段时跳过正文提取（快速校验模式）。
+#     合法字段：url,title,content,warnings,console,errors,network（任意逗号组合）
+browser fetch https://react.dev/ --json --only console,errors
+
 # 8. 底层插桩
 browser fetch https://react.dev/ --format text --profile
 ```

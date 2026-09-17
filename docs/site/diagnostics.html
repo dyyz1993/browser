@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fetch --json 诊断数据一览 — Browser</title>
+    <meta name="description" content="browser fetch --json 能拿到什么：console 日志、JS 异常（带 stack）、网络事件、内容告警，以及 --only 字段投影快速校验模式">
+    <style>
+        :root {
+            --bg: #0d1117; --bg-card: #161b22; --border: #30363d;
+            --text: #c9d1d9; --text-muted: #8b949e;
+            --accent: #58a6ff; --accent-green: #3fb950; --accent-orange: #d29922; --accent-red: #f85149;
+            --code-bg: #0d1117;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+        .hero { padding: 56px 0 40px; text-align: center; border-bottom: 1px solid var(--border); }
+        .hero h1 { font-size: 2.4rem; font-weight: 700; margin-bottom: 12px; }
+        .hero h1 .accent { color: var(--accent); }
+        .hero p.tagline { font-size: 1.1rem; color: var(--text-muted); max-width: 680px; margin: 0 auto; }
+        .hero .back { display: inline-block; margin-top: 18px; font-size: 0.95rem; }
+        section { padding: 48px 0; }
+        h2 { font-size: 1.6rem; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+        h3 { font-size: 1.15rem; margin: 28px 0 12px; color: var(--text); }
+        p { margin-bottom: 12px; color: var(--text); }
+        .muted { color: var(--text-muted); }
+        .code-block {
+            position: relative; background: var(--code-bg); border: 1px solid var(--border);
+            border-radius: 6px; padding: 16px; margin: 12px 0 20px; overflow-x: auto;
+            font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.7; white-space: pre;
+        }
+        .code-block .cmd { color: var(--accent-green); }
+        .code-block .comment { color: var(--text-muted); }
+        .code-block.json { white-space: pre-wrap; word-break: break-word; }
+        code.inline { background: rgba(110,118,129,0.2); border-radius: 4px; padding: 2px 7px; font-family: var(--font-mono); font-size: 0.875em; }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+        .card h4 { font-size: 1rem; margin-bottom: 8px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+        table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.925rem; }
+        th, td { text-align: left; padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+        th { background: var(--bg-card); color: var(--text); font-weight: 600; white-space: nowrap; }
+        td code { font-family: var(--font-mono); color: var(--accent); font-size: 0.85em; }
+        .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; margin-right: 6px; }
+        .tag-green { background: rgba(63,180,80,0.15); color: var(--accent-green); border: 1px solid rgba(63,180,80,0.4); }
+        .tag-orange { background: rgba(210,153,34,0.15); color: var(--accent-orange); border: 1px solid rgba(210,153,34,0.4); }
+        .tag-red { background: rgba(248,81,73,0.15); color: var(--accent-red); border: 1px solid rgba(248,81,73,0.4); }
+        .tag-blue { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
+        footer { border-top: 1px solid var(--border); padding: 32px 0; text-align: center; color: var(--text-muted); font-size: 0.9rem; }
+        .copy { position: absolute; top: 8px; right: 8px; background: transparent; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font-size: 0.78rem; cursor: pointer; }
+        .copy:hover { color: var(--accent); border-color: var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <div class="container">
+            <h1>fetch <span class="accent">--json</span> 诊断数据一览</h1>
+            <p class="tagline">一条命令打开页面，拿到 console 日志、JS 异常（带调用栈）、网络事件、内容告警——快速校验 SPA 渲染是否有问题。</p>
+            <a class="back" href="./index.html">← 返回首页</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <section>
+            <h2>三种输出形态</h2>
+            <p>普通模式下 stdout <strong>只有页面内容本身</strong>，诊断信息走 stderr——两条通道互不污染。需要结构化数据时加 <code class="inline">--json</code>；只想看日志错误就再加 <code class="inline">--only</code> 投影。</p>
+
+            <div class="code-block"><button class="copy" onclick="copyCmd(this)">复制</button><span class="comment"># ① 只要内容（stdout 干净，日志走 stderr）</span>
+<span class="cmd">$ browser fetch https://example.com/ --format markdown</span></div>
+
+            <div class="code-block"><button class="copy" onclick="copyCmd(this)">复制</button><span class="comment"># ② 全量信封：内容 + 诊断字段打包成一个 JSON</span>
+<span class="cmd">$ browser fetch https://example.com/ --json | jq '{url, title, content, warnings, console, errors, network}'</span></div>
+
+            <div class="code-block"><button class="copy" onclick="copyCmd(this)">复制</button><span class="comment"># ③ 快速诊断：只要日志错误，跳过正文提取（--only 任意逗号组合）</span>
+<span class="cmd">$ browser fetch https://example.com/ --json --only console,errors</span></div>
+        </section>
+
+        <section>
+            <h2>--json 信封里的 7 个字段</h2>
+            <table>
+                <tr><th>字段</th><th>类型</th><th>是什么</th></tr>
+                <tr><td><code>console</code></td><td>[{level, text}]</td><td>页面 <code>console.log/info/warn/error/debug</code> 的全部输出。框架内部错误（如 <code>Minified React error #418</code>）通常经 <code>console.error</code> 上报，在这里看。</td></tr>
+                <tr><td><code>errors</code></td><td>[{message, stack}]</td><td><strong>未捕获的 JS 异常</strong>：顶层 script 抛错、timer/XHR/transition 回调异步抛错，均带调用栈。同一 message 自动去重。</td></tr>
+                <tr><td><code>network</code></td><td>[{url, method, status, mime_type, body_size}]</td><td>JS 发起的 fetch/XHR 请求及响应状态——排查"接口 404/被反爬拦了"一眼可见。</td></tr>
+                <tr><td><code>warnings</code></td><td>[string]</td><td>内容级告警（反爬壳页 / 空内容等），派生自正文提取。</td></tr>
+                <tr><td><code>content</code></td><td>{format, text}</td><td>按 <code>--format</code> 提取的页面正文（markdown/text/html/links…）。</td></tr>
+                <tr><td><code>title</code></td><td>string | null</td><td>页面 <code>&lt;title&gt;</code>（JS 改过的话是改后的）。</td></tr>
+                <tr><td><code>url</code></td><td>string</td><td>请求的 URL。</td></tr>
+            </table>
+            <p class="muted">字段按需投影：<code class="inline">--only console,errors,network</code>（逗号分隔，任意组合）。不含 content/warnings/title 时会跳过正文提取，输出更干净、跑得更快。</p>
+        </section>
+
+        <section>
+            <h2>console 和 errors 有什么区别？</h2>
+            <div class="grid">
+                <div class="card">
+                    <h4><span class="tag tag-blue">console</span>框架/页面主动上报</h4>
+                    <p>页面代码调用 <code class="inline">console.error/warn/log</code> 打印的内容。React 的 <code>Minified React error #418</code>、ChunkLoadError、业务日志都在这里。</p>
+                </div>
+                <div class="card">
+                    <h4><span class="tag tag-red">errors</span>未捕获异常</h4>
+                    <p>脚本自己崩了没人接：<code>ReferenceError</code>（变量未定义）、timer 回调抛 <code>TypeError</code>、XHR 回调抛错等，带完整调用栈定位到源码行。</p>
+                </div>
+            </div>
+            <p class="muted">校验一个 SPA 是否渲染正常，两个都看：errors 空 + console 无 error 级输出 = 基本健康。</p>
+        </section>
+
+        <section>
+            <h2>实测：一个"什么都有一点点"的页面</h2>
+            <p>下面是一个真实测试页（本地 HTTP 服务），覆盖了 console 三级日志、顶层异常、异步异常、404 请求、异步渲染。先看页面源码：</p>
+            <div class="code-block">&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;&lt;meta charset=&quot;UTF-8&quot;&gt;&lt;title&gt;Diagnostics Demo Page&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+  &lt;div id=&quot;app&quot;&gt;loading...&lt;/div&gt;
+  &lt;nav&gt;Home Docs Blog GitHub&lt;/nav&gt;
+  &lt;script&gt;
+    console.log(&quot;app bootstrap, version 2.4.1&quot;);
+    console.warn(&quot;legacy API deprecated: window.__oldBridge&quot;);
+    // 模拟一个会失败的数据请求（network 事件里能看到 404）
+    fetch(&quot;/api/missing-endpoint&quot;).then(function(r){ return r.json(); }).catch(function(e){
+      console.error(&quot;api request failed: &quot; + e.message);
+    });
+  &lt;/script&gt;
+  &lt;script&gt;
+    // 顶层同步异常：ReferenceError 中断本段 script
+    var missing = undefinedVar;
+  &lt;/script&gt;
+  &lt;script&gt;
+    // 异步异常：timer 回调抛 TypeError（带 stack）
+    setTimeout(function(){
+      var cfg = null; cfg.timeout = 30;
+    }, 20);
+    // 正常渲染逻辑（不受上面异常影响）
+    setTimeout(function(){
+      document.getElementById(&quot;app&quot;).textContent = &quot;Rendered by JS at &quot; + new Date().toISOString().slice(0,10);
+    }, 40);
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</div>
+
+            <h3>① 快速诊断：<code class="inline">--json --only console,errors</code></h3>
+            <p>console 三条全收；errors 里两条——顶层 <code>ReferenceError</code>（第 2 段 script 中断）和 timer 回调的 <code>TypeError</code>（带 stack 定位到 6:34 行）。注意第三段 script 的正常渲染没有被前一段异常阻断。</p>
+            <div class="code-block json">{
+  &quot;console&quot;: [
+    {
+      &quot;level&quot;: &quot;log&quot;,
+      &quot;text&quot;: &quot;app bootstrap, version 2.4.1&quot;
+    },
+    {
+      &quot;level&quot;: &quot;warn&quot;,
+      &quot;text&quot;: &quot;legacy API deprecated: window.__oldBridge&quot;
+    },
+    {
+      &quot;level&quot;: &quot;error&quot;,
+      &quot;text&quot;: &quot;api request failed: unexpected token: &#x27;&lt;&#x27;&quot;
+    }
+  ],
+  &quot;errors&quot;: [
+    {
+      &quot;message&quot;: &quot;Error: undefinedVar is not defined&quot;,
+      &quot;stack&quot;: &quot;at &lt;eval&gt; (eval_script:1:1)&quot;
+    },
+    {
+      &quot;message&quot;: &quot;cannot set property &#x27;timeout&#x27; of null&quot;,
+      &quot;stack&quot;: &quot;    at &lt;anonymous&gt; (eval_script:4:23)\n    at &lt;anonymous&gt; (eval_script:752:19)\n    at &lt;eval&gt; (eval_script:1:1)\n&quot;
+    }
+  ]
+}</div>
+
+            <h3>② console + errors：逐字段看全量输出</h3>
+            <div class="card">
+    <h4><span class="tag tag-blue">console</span>页面 console 输出</h4>
+    <p class="muted">三级日志全收，level 字段区分。fetch 失败的业务 catch 里 console.error 的报错也在。</p>
+    <div class="code-block json">[
+  {
+    &quot;level&quot;: &quot;log&quot;,
+    &quot;text&quot;: &quot;app bootstrap, version 2.4.1&quot;
+  },
+  {
+    &quot;level&quot;: &quot;warn&quot;,
+    &quot;text&quot;: &quot;legacy API deprecated: window.__oldBridge&quot;
+  },
+  {
+    &quot;level&quot;: &quot;error&quot;,
+    &quot;text&quot;: &quot;api request failed: unexpected token: &#x27;&lt;&#x27;&quot;
+  }
+]</div>
+</div>
+<div class="card">
+    <h4><span class="tag tag-red">errors</span>未捕获异常（同步 + 异步）</h4>
+    <p class="muted">第 2 段 script 的 ReferenceError 中断了该段，但第 3 段照常执行；timer 异步 TypeError 的 stack 精确到 demo.html:6:34。</p>
+    <div class="code-block json">[
+  {
+    &quot;message&quot;: &quot;Error: undefinedVar is not defined&quot;,
+    &quot;stack&quot;: &quot;at &lt;eval&gt; (eval_script:1:1)&quot;
+  },
+  {
+    &quot;message&quot;: &quot;cannot set property &#x27;timeout&#x27; of null&quot;,
+    &quot;stack&quot;: &quot;    at &lt;anonymous&gt; (eval_script:4:23)\n    at &lt;anonymous&gt; (eval_script:752:19)\n    at &lt;eval&gt; (eval_script:1:1)\n&quot;
+  }
+]</div>
+</div>
+<div class="card">
+    <h4><span class="tag tag-green">network</span>JS 发起的请求</h4>
+    <p class="muted">对 /api/missing-endpoint 的 fetch 返回 404——「接口挂了」这类问题在这直接看到。</p>
+    <div class="code-block json">[
+  {
+    &quot;body_size&quot;: 460,
+    &quot;method&quot;: &quot;GET&quot;,
+    &quot;mime_type&quot;: &quot;text/html&quot;,
+    &quot;status&quot;: 404,
+    &quot;url&quot;: &quot;http://127.0.0.1:18923/api/missing-endpoint&quot;
+  }
+]</div>
+</div>
+<div class="card">
+    <h4><span class="tag tag-orange">warnings</span>内容级告警</h4>
+    <p class="muted">派生自正文提取：这个演示页正文很短，触发了「疑似不是真实页面」告警。</p>
+    <div class="code-block json">[
+  &quot;content is very short (28 bytes) — likely not the real page&quot;
+]</div>
+</div>
+<div class="card">
+    <h4><span class="tag ">content</span>JS 渲染后的正文</h4>
+    <p class="muted">40ms 后的异步渲染已生效（'Rendered by JS at …'），证明生命线管线（fetch→JS→DOM→提取）通了。</p>
+    <div class="code-block json">{
+  &quot;format&quot;: &quot;markdown&quot;,
+  &quot;text&quot;: &quot;Rendered by JS at 2026-09-17&quot;
+}</div>
+</div>
+
+            <h3>③ 完整全量信封（<code class="inline">--json</code> 不加 --only）</h3>
+            <p class="muted">和 ① 同一次抓取的全量输出——content.text 会把诊断字段"淹没"，这正是 --only 存在的原因。</p>
+            <div class="code-block json">{
+  &quot;console&quot;: [
+    {
+      &quot;level&quot;: &quot;log&quot;,
+      &quot;text&quot;: &quot;app bootstrap, version 2.4.1&quot;
+    },
+    {
+      &quot;level&quot;: &quot;warn&quot;,
+      &quot;text&quot;: &quot;legacy API deprecated: window.__oldBridge&quot;
+    },
+    {
+      &quot;level&quot;: &quot;error&quot;,
+      &quot;text&quot;: &quot;api request failed: unexpected token: &#x27;&lt;&#x27;&quot;
+    }
+  ],
+  &quot;content&quot;: {
+    &quot;format&quot;: &quot;markdown&quot;,
+    &quot;text&quot;: &quot;Rendered by JS at 2026-09-17&quot;
+  },
+  &quot;errors&quot;: [
+    {
+      &quot;message&quot;: &quot;Error: undefinedVar is not defined&quot;,
+      &quot;stack&quot;: &quot;at &lt;eval&gt; (eval_script:1:1)&quot;
+    },
+    {
+      &quot;message&quot;: &quot;cannot set property &#x27;timeout&#x27; of null&quot;,
+      &quot;stack&quot;: &quot;    at &lt;anonymous&gt; (eval_script:4:23)\n    at &lt;anonymous&gt; (eval_script:752:19)\n    at &lt;eval&gt; (eval_script:1:1)\n&quot;
+    }
+  ],
+  &quot;network&quot;: [
+    {
+      &quot;body_size&quot;: 460,
+      &quot;method&quot;: &quot;GET&quot;,
+      &quot;mime_type&quot;: &quot;text/html&quot;,
+      &quot;status&quot;: 404,
+      &quot;url&quot;: &quot;http://127.0.0.1:18923/api/missing-endpoint&quot;
+    }
+  ],
+  &quot;title&quot;: &quot;Diagnostics Demo Page&quot;,
+  &quot;url&quot;: &quot;http://127.0.0.1:18923/demo.html&quot;,
+  &quot;warnings&quot;: [
+    &quot;content is very short (28 bytes) — likely not the real page&quot;
+  ]
+}</div>
+        </section>
+
+        <section>
+            <h2>常用校验组合</h2>
+            <div class="code-block"><button class="copy" onclick="copyCmd(this)">复制</button><span class="comment"># SPA 渲染健康检查：无未捕获异常 + console 无 error</span>
+<span class="cmd">$ browser fetch https://react.dev/ --json --only console,errors | jq '.errors, [.console[] | select(.level=="error")]'</span>
+
+<span class="comment"># 接口排查：看 JS 发出的请求都返回了什么状态码</span>
+<span class="cmd">$ browser fetch https://example.com/ --json --only network | jq '.network[] | {status, url}'</span>
+
+<span class="comment"># 换 boa 引擎对照（默认 QuickJS）</span>
+<span class="cmd">$ browser fetch https://example.com/ --json --only console,errors --js-engine boa</span></div>
+            <p class="muted">能力自 M97.20/M97.21 起内置，双引擎（QuickJS 默认 / <code class="inline">--js-engine boa</code>）行为一致。回归测试见仓库 <code>crates/cli/tests/integration_fetch.rs</code>。</p>
+        </section>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>Browser — Rust 自研浏览器引擎 · MIT License</p>
+            <p><a href="./index.html">首页</a> · <a href="https://github.com/dyyz1993/browser">GitHub</a> · <a href="https://github.com/dyyz1993/browser/blob/main/PROGRESS.md">进度日志</a></p>
+        </div>
+    </footer>
+
+    <script>
+        function copyCmd(btn) {
+            const cmd = btn.parentElement.textContent.replace(/^\s*复制\s*/m, '').trim();
+            navigator.clipboard.writeText(cmd).then(() => {
+                btn.textContent = '已复制 ✓';
+                setTimeout(() => { btn.textContent = '复制'; }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>
