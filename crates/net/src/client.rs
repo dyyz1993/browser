@@ -103,14 +103,14 @@ pub fn detect_mitigation_pairs(pairs: &[(String, String)]) -> Option<&'static st
     }
 }
 
-/// M97.24: 403 指纹拦截的统一诊断输出——给出两条可行动逃逸路径
-/// （chrome-tls 构建 / CLI --chrome-fallback），替代无声 403。
+/// M97.24: 403 指纹拦截的统一诊断输出。逃逸路径只指向自研通道
+/// （chrome-tls feature）——Chrome 仅作差分对比，不入产品管线。
 fn eprintln_mitigated_403(platform: &str) {
     eprintln!(
         "[net-diag] HTTP 403 mitigated by {platform} bot defense — \
-         传输指纹级拦截（header 无法绕过）。逃逸路径：① chrome-tls 构建 \
-         (--features chrome-tls，BoringSSL 通道)；② CLI fetch --chrome-fallback \
-         (本机 Chrome headless 完整渲染)"
+         传输指纹级拦截（header 无法绕过）。逃逸路径：chrome-tls 构建 \
+         (--features chrome-tls，BoringSSL 通道)；该构建仍被拒的站点属 \
+         已知局限（FEATURES.md #8），此类防线不硬刚"
     );
 }
 

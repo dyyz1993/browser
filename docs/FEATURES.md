@@ -14,7 +14,7 @@
 | `render-file <file>` | 解析 + 布局 + ASCII 渲染（**不执行 JS**） | M2 |
 | `render-script <file>` | 解析 + **执行 `<script>`** + ASCII 渲染 | M3 |
 | `render-url <url>` | fetch + parse + 执行 JS + 渲染（端到端 SPA） | M4 |
-| `fetch <url>` | **M59：curl 式 SPA 爬虫** — fetch+JS+等待策略+内容提取（markdown/html/text/links）。**M82 加固**：全局 60s 硬超时（不挂死）、`--json` warnings/格式尊重、data: URI 图默认丢弃（`--inline-images` 保留）、反爬壳页警告。**M97.24**：`--chrome-fallback` 本机 Chrome headless 兜底（传输指纹防线站 100% 可过）+ 403 mitigated 自动诊断 | M59/M82/M97.24 |
+| `fetch <url>` | **M59：curl 式 SPA 爬虫** — fetch+JS+等待策略+内容提取（markdown/html/text/links）。**M82 加固**：全局 60s 硬超时（不挂死）、`--json` warnings/格式尊重、data: URI 图默认丢弃（`--inline-images` 保留）、反爬壳页警告。**M97.24**：403 mitigated 自动诊断（传输指纹拦截识别 + 逃逸路径提示） | M59/M82/M97.24 |
 | `open <url>` | fetch + 渲染 + GUI 窗口显示（M81.E1 起需 `--features gui` 编译；`--check` 无需） | M5 |
 | `image-ascii <file>` | PNG/JPG → ASCII art | M12.3 |
 | `screenshot <url>` | fetch + JS + 布局 + 网页 PNG 截图（支持 --max-height） | M12 | 
@@ -200,4 +200,4 @@
 5. **JS 对象属性**：`length`/`state`/`href` 是方法形式（`localStorage.length()`），因为 boa getter API 复杂。爬虫 JS 兼容时需注意。
 6. **风控门卫站点（juejin 等，M83 实测标注）**：掘金首页 feed 是纯 CSR，且所有 feed API 套在字节 bdms 风控 SDK 后面（请求需风控签名/环境检测）。引擎侧已补齐 XHR POST body/真实 status、Plugin/MimeType 接口、完整 UA（M83），管线不挂死（M82 硬超时），但**不逆向风控签名**（宪法 G4：反爬不重点处理）——此类站返回导航骨架 + 超时警告，属已知边界，需真浏览器或官方 API。
 7. **JS 引擎兼容性**：boa 0.21 支持 ES6+（async/await/Proxy/Map/Set/Symbol 等全部入库测试通过）。已知局限：①某些站点 JS 触发 boa 内部 panic（fetch 命令有 catch_unwind 兜底）；②纯 CSR 无 SSR 兜底的站点需真 Chrome。详见 [JS-COVERAGE.md](./JS-COVERAGE.md)。
-8. **传输指纹级防线（Vercel BotID 类，M97.24 实测标注）**：`developers.openai.com` 等 Vercel 防护站按 TLS+H2 精确指纹评分拒绝（`x-vercel-mitigated: deny`），与 UA/header 集合无关。chrome-tls 通道对齐 Chrome 153 后 JA4 cipher 段已一致（`8daaf6152771`），但 h2 伪头顺序（h2 crate 硬编码 `m,s,a,p` vs Chrome `m,a,s,p`）与 `compress_certificate`/`ALPS` 扩展（boring crate 未暴露 API）无法补齐——依赖级工程（fork h2 + patch boring），超复杂度门槛，不做。**逃逸路径：`fetch --chrome-fallback`**（本机 Chrome headless 完整渲染，100% 可过；诊断提示在 403+mitigated 时自动输出）。
+8. **传输指纹级防线（Vercel BotID 类，M97.24 实测标注）**：`developers.openai.com` 等 Vercel 防护站按 TLS+H2 精确指纹评分拒绝（`x-vercel-mitigated: deny`），与 UA/header 集合无关。chrome-tls 通道对齐 Chrome 153 后 JA4 cipher 段已一致（`8daaf6152771`），但 h2 伪头顺序（h2 crate 硬编码 `m,s,a,p` vs Chrome `m,a,s,p`）与 `compress_certificate`/`ALPS` 扩展（boring crate 未暴露 API）无法补齐——依赖级工程（fork h2 + patch boring），超复杂度门槛，不做。此类站返回 403 + mitigated 诊断提示，属已知边界，需真浏览器或官方 API；**Chrome 仅作差分对比，不入产品管线**（宪法：自研优先）。

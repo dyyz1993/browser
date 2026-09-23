@@ -1,4 +1,4 @@
-## M97.24 🛡️ Vercel 指纹防线差分 + `--chrome-fallback`——「跟浏览器一样」的边界实测
+## M97.24 🛡️ Vercel 指纹防线差分——「跟浏览器一样」的边界实测
 
 - **起因**：`browser fetch https://developers.openai.com/codex/hooks` 403。
   差分实验矩阵（curl×2 UA / curl+全套 Chrome header / 真实 Chrome headless）：
@@ -16,12 +16,13 @@
 - **落地**：
   - `net::detect_mitigation`/`detect_mitigation_pairs`（`x-vercel-mitigated`/
     `cf-mitigated` 判别）+ `eprintln_mitigated_403`——403+mitigated 时 stderr
-    给出两条逃逸路径（chrome-tls 构建 / --chrome-fallback），不再无声 403
-  - **CLI `fetch --chrome-fallback`**：自研通道失败时本机 Chrome headless
-    `--dump-dom` 兜底（`CHROME_BIN` > macOS 标准路径；dump-dom 已含 JS 渲染
-    结果 → 自动走 no_js 提取路径；非 SSR 兜底，是完整渲染）
-  - `--chrome-fallback` 实测：`developers.openai.com/codex/hooks.md` 拿到
-    官方 Hooks 文档 Markdown 全文（含 SessionEnd payload 定义）
+    给出两条逃逸路径（chrome-tls 构建提示），不再无声 403
+  - **CLI 403 诊断**：403+mitigated 时 stderr 输出判别结论 + 逃逸路径
+    （chrome-tls 构建提示），替代无声 403
+- **M97.24b 用户裁决（重要红线沉淀）**：`--chrome-fallback`（本机 Chrome
+  headless 兜底）**被否决并移除**——Chrome 只是对比基准，加入产品管线违背
+  宪法「自研优先」。Vercel 级指纹防线站按已知局限处理（FEATURES.md #8，
+  与掘金风控条目同风格：不硬刚，标注需真浏览器或官方 API）
 - **文档**：FEATURES.md 已知局限 #8；chrome-tls 构建警告清零（unused mut/method）
 
 ## M97.23 🔗 rust-browser 技能 + agent-issues 反馈回路——外部 Agent 用起来

@@ -272,12 +272,6 @@ enum Cmd {
         /// Skip <script> execution (faster for known-static pages).
         #[arg(long)]
         no_js: bool,
-        /// M97.24: 本机 Chrome headless 兜底——自研通道被传输指纹防线拒绝
-        /// （Vercel BotID 类 403 + *-mitigated）时，用本机 Chrome 完整渲染
-        /// 取回 DOM（含 JS 执行结果，等效 no_js 提取路径）。
-        /// Chrome 定位：CHROME_BIN > macOS 标准路径。
-        #[arg(long)]
-        chrome_fallback: bool,
         /// M96.19: 资源下载匹配规则（可多次）。三态：含 `/` = glob
         /// （`*` 单段 / `**` 跨段 / `?` 单字符，如 `https://pbs.twimg.com/**/*.jpg`）；
         /// `.png` 形态 = 后缀；`pbs.twimg.com` 形态 = 域名（含子域）。
@@ -808,7 +802,6 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             selector,
             only_main_content,
             no_js,
-            chrome_fallback,
             json,
             only,
             width: _width,
@@ -853,23 +846,7 @@ async fn run_cmd(cmd: Cmd) -> Result<()> {
             };
             ensure_cookie_jar();
             let fetch_start = std::time::Instant::now();
-            // M97.24: --chrome-fallback——自研通道失败（典型：Vercel BotID
-            // 指纹防线 403）时用本机 Chrome headless 取渲染后 DOM。dump-dom
-            // 已含 JS 执行结果，后续走 no_js 提取路径（避免二次执行 script）。
-            let mut used_chrome_fallback = false;
-            let html = match fetch_with_jar(&url).await {
-                Ok(h) => h,
-                Err(e) if chrome_fallback => {
-                    eprintln!(
-                        "[chrome-fallback] self channel failed ({e}); trying local Chrome headless"
-                    );
-                    let h = chrome_headless_html(&url)?;
-                    used_chrome_fallback = true;
-                    h
-                }
-                Err(e) => return Err(e),
-            };
-            let no_js = no_js || used_chrome_fallback;
+            let html = fetch_with_jar(&url).await?;
             // M70.14: base_url 去掉 hash fragment——#/?id=xxx 是客户端路由，
             // 传给 JS 的 location.href 不应带 hash（否则相对路径 XHR 会拼到 hash 上）。
             // 与 serve / render_and_extract 保持一致。
@@ -1423,45 +1400,6 @@ fn is_retryable_net_error(e: &anyhow::Error) -> bool {
         }
     }
     true // 未知错误类型保守重试
-}
-
-/// M97.24: 本机 Chrome headless 兜底通道。定位顺序：`CHROME_BIN` 环境变量
-/// 优先于 macOS 标准路径。`--dump-dom` 返回 JS 执行后的完整 DOM，等效真实
-/// 浏览器渲染（非 SSR/静态兜底），对 Vercel BotID 等传输指纹防线 100% 可过
-/// （Chrome 同源传输）。virtual-time-budget 8000ms 对齐 AGENTS.md 差分惯例。
-fn chrome_headless_html(url: &str) -> Result<String> {
-    let candidates: [String; 2] = [
-        std::env::var("CHROME_BIN").unwrap_or_default(),
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
-    ];
-    let chrome = candidates
-        .iter()
-        .find(|p| !p.is_empty() && std::path::Path::new(p).exists())
-        .ok_or_else(|| {
-            anyhow!("[chrome-fallback] Chrome not found (set CHROME_BIN or install Google Chrome)")
-        })?;
-    let out = std::process::Command::new(chrome)
-        .args([
-            "--headless=new",
-            "--disable-gpu",
-            "--virtual-time-budget=8000",
-            "--dump-dom",
-            url,
-        ])
-        .output()
-        .map_err(|e| anyhow!("[chrome-fallback] spawn failed: {e}"))?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "[chrome-fallback] Chrome exited {:?}: {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    let html = String::from_utf8_lossy(&out.stdout).to_string();
-    if html.trim().is_empty() {
-        return Err(anyhow!("[chrome-fallback] Chrome returned empty DOM"));
-    }
-    Ok(html)
 }
 
 async fn fetch_with_jar(url: &str) -> Result<String> {
