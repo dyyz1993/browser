@@ -64,6 +64,56 @@ fn browser_default_headers() -> reqwest::header::HeaderMap {
     h
 }
 
+/// M97.24: WAF 指纹拦截识别——`*-mitigated` 响应头是 Vercel/Cloudflare bot
+/// 防护的标准拒绝标记（实测 developers.openai.com：`x-vercel-mitigated: deny`，
+/// 无论 UA/sec-fetch 头组如何，rustls/native-tls 的 ClientHello 形状必 403；
+/// chrome-tls 构建的 BoringSSL 通道可过——`boring_h2` 模块头注释的判别结论）。
+///
+/// 返回 `None` = 非指纹拦截（普通 403 语义）；`Some(平台名)` = 可行动诊断。
+pub fn detect_mitigation(headers: &HeaderMap) -> Option<&'static str> {
+    let has = |name: &str| -> bool {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|s| !s.is_empty())
+    };
+    if has("x-vercel-mitigated") {
+        Some("Vercel")
+    } else if has("cf-mitigated") {
+        Some("Cloudflare")
+    } else {
+        None
+    }
+}
+
+/// M97.24: [`detect_mitigation`] 的 `Vec<(String, String)>` 版本——boring
+/// 通道（绕过 reqwest）响应头是 pairs 形态，两通道共用同一判别结论。
+pub fn detect_mitigation_pairs(pairs: &[(String, String)]) -> Option<&'static str> {
+    let has = |name: &str| {
+        pairs
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case(name) && !v.is_empty())
+    };
+    if has("x-vercel-mitigated") {
+        Some("Vercel")
+    } else if has("cf-mitigated") {
+        Some("Cloudflare")
+    } else {
+        None
+    }
+}
+
+/// M97.24: 403 指纹拦截的统一诊断输出——给出两条可行动逃逸路径
+/// （chrome-tls 构建 / CLI --chrome-fallback），替代无声 403。
+fn eprintln_mitigated_403(platform: &str) {
+    eprintln!(
+        "[net-diag] HTTP 403 mitigated by {platform} bot defense — \
+         传输指纹级拦截（header 无法绕过）。逃逸路径：① chrome-tls 构建 \
+         (--features chrome-tls，BoringSSL 通道)；② CLI fetch --chrome-fallback \
+         (本机 Chrome headless 完整渲染)"
+    );
+}
+
 /// HTTP client. Cheap to clone (reqwest internally `Arc`-wrapped).
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -567,6 +617,11 @@ impl HttpClient {
             bhdrs.extend(extra_headers.iter().cloned());
             match crate::boring_h2::request(url, method, &bhdrs, body).await {
                 Ok((status, hdrs, bytes)) => {
+                    if status == 403 {
+                        if let Some(platform) = detect_mitigation_pairs(&hdrs) {
+                            eprintln_mitigated_403(platform);
+                        }
+                    }
                     let mut hm = HeaderMap::new();
                     for (k, v) in hdrs {
                         if let (Ok(n), Ok(val)) = (
@@ -679,6 +734,12 @@ impl HttpClient {
         if std::env::var("BROWSER_TRACE_FETCH").is_ok() {
             eprintln!("[net-diag] {method} {url} -> proto={:?}", resp.version());
         }
+        // M97.24: 403 指纹拦截诊断（Vercel/CF *-mitigated 响应头）
+        if status == 403 {
+            if let Some(platform) = detect_mitigation(resp.headers()) {
+                eprintln_mitigated_403(platform);
+            }
+        }
         let headers = resp.headers().clone();
         let body = resp
             .bytes()
@@ -695,4 +756,53 @@ impl HttpClient {
 /// See [`HttpClient::get`].
 pub async fn get(url: &str) -> Result<Vec<u8>, NetError> {
     HttpClient::new().get(url).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_mitigation_vercel_header() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            reqwest::header::HeaderName::from_static("x-vercel-mitigated"),
+            reqwest::header::HeaderValue::from_static("deny"),
+        );
+        assert_eq!(detect_mitigation(&h), Some("Vercel"));
+    }
+
+    #[test]
+    fn detect_mitigation_cloudflare_header() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            reqwest::header::HeaderName::from_static("cf-mitigated"),
+            reqwest::header::HeaderValue::from_static("challenge"),
+        );
+        assert_eq!(detect_mitigation(&h), Some("Cloudflare"));
+    }
+
+    #[test]
+    fn detect_mitigation_absent_or_empty() {
+        let h = HeaderMap::new();
+        assert_eq!(detect_mitigation(&h), None);
+        // 空值不算命中（防误报）
+        let mut h2 = HeaderMap::new();
+        h2.insert(
+            reqwest::header::HeaderName::from_static("x-vercel-mitigated"),
+            reqwest::header::HeaderValue::from_static(""),
+        );
+        assert_eq!(detect_mitigation(&h2), None);
+    }
+
+    #[test]
+    fn detect_mitigation_pairs_boring_channel() {
+        let pairs = vec![
+            ("content-type".to_string(), "text/plain".to_string()),
+            ("x-vercel-mitigated".to_string(), "deny".to_string()),
+        ];
+        assert_eq!(detect_mitigation_pairs(&pairs), Some("Vercel"));
+        let none: Vec<(String, String)> = vec![];
+        assert_eq!(detect_mitigation_pairs(&none), None);
+    }
 }

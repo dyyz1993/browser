@@ -1,3 +1,29 @@
+## M97.24 🛡️ Vercel 指纹防线差分 + `--chrome-fallback`——「跟浏览器一样」的边界实测
+
+- **起因**：`browser fetch https://developers.openai.com/codex/hooks` 403。
+  差分实验矩阵（curl×2 UA / curl+全套 Chrome header / 真实 Chrome headless）：
+  header 全部无效，`server: Vercel` + `x-vercel-mitigated: deny`——传输指纹级拦截
+- **chrome-tls 通道逼近实录**（tls.peet.ws JA4/H2 差分驱动，单变量逐个验证）：
+  - ✅ `accept-encoding` identity → Chrome 真值 `gzip, deflate, br, zstd`
+  - ✅ h2 普通 header 按 Chrome 固定顺序重排（导航头组）
+  - ✅ TLS：GREASE 恒开 + `X25519MLKEM768:X25519`（后量子混合组优先）+
+    Chrome 153 精确 15-cipher 列表（`CHROME_CIPHER_LIST`）+ OCSP/SCT + ECH grease
+  - ✅ H2 SETTINGS 补 `6:262144`（max_header_list_size）
+  - 📊 结果：JA4 cipher 段与 Chrome **完全一致**（`t13d1514h2_8daaf6152771`），
+    扩展 14/17——Vercel 仍 403（判定含 h2 伪头顺序 `m,s,a,p` vs Chrome
+    `m,a,s,p`（h2 crate 硬编码）/ `compress_certificate`+`ALPS`（boring
+    crate 未暴露）/ SETTINGS 1、2（h2 不暴露）→ 依赖级工程，超门槛不做）
+- **落地**：
+  - `net::detect_mitigation`/`detect_mitigation_pairs`（`x-vercel-mitigated`/
+    `cf-mitigated` 判别）+ `eprintln_mitigated_403`——403+mitigated 时 stderr
+    给出两条逃逸路径（chrome-tls 构建 / --chrome-fallback），不再无声 403
+  - **CLI `fetch --chrome-fallback`**：自研通道失败时本机 Chrome headless
+    `--dump-dom` 兜底（`CHROME_BIN` > macOS 标准路径；dump-dom 已含 JS 渲染
+    结果 → 自动走 no_js 提取路径；非 SSR 兜底，是完整渲染）
+  - `--chrome-fallback` 实测：`developers.openai.com/codex/hooks.md` 拿到
+    官方 Hooks 文档 Markdown 全文（含 SessionEnd payload 定义）
+- **文档**：FEATURES.md 已知局限 #8；chrome-tls 构建警告清零（unused mut/method）
+
 ## M97.23 🔗 rust-browser 技能 + agent-issues 反馈回路——外部 Agent 用起来
 - **技能** `~/.agents/skills/rust-browser/SKILL.md`：Agent 的默认浏览器工具卡。
   描述强调「遇到问题、开发 Web 页面时尽可能优先用它调试」；三大场景：

@@ -25,6 +25,10 @@ use tokio::net::TcpStream;
 
 type H2Sender = h2::client::SendRequest<bytes::Bytes>;
 
+/// M97.24: Chrome 153 精确 cipher 列表（tls.peet.ws 实测，15 个：TLS1.3 ×3 +
+/// TLS1.2 ×12，顺序保真）。boring 默认列表更长（JA4 cipher 计数不匹配）。
+const CHROME_CIPHER_LIST: &str = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA";
+
 static CONNS: Mutex<Option<HashMap<String, H2Sender>>> = Mutex::new(None);
 
 /// M96.18: boring 通道常驻 runtime——连接驱动任务（h2 conn）的生命周期必须
@@ -60,6 +64,14 @@ async fn sender_for(host: &str, port: u16) -> Result<H2Sender, String> {
     let mut builder = boring::ssl::SslConnector::builder(boring::ssl::SslMethod::tls())
         .map_err(|e| e.to_string())?;
     let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+    // M97.24: Chrome 153 传输形状对齐（tls.peet.ws JA4 差分驱动）——
+    // GREASE 恒开；后量子混合组 X25519MLKEM768 优先；精确 cipher 列表；
+    // OCSP(SCT)/cert-timestamp 扩展（Chrome 恒发，boring 默认不发）。
+    builder.set_grease_enabled(true);
+    let _ = builder.set_curves_list("X25519MLKEM768:X25519");
+    let _ = builder.set_cipher_list(CHROME_CIPHER_LIST);
+    builder.enable_ocsp_stapling();
+    builder.enable_signed_cert_timestamps();
     // M97: 加载系统 CA 证书——BoringSSL 不自动找系统证书（不同 Linux
     // 发行版路径不同，逐个尝试标准路径）
     for ca_path in [
@@ -74,18 +86,19 @@ async fn sender_for(host: &str, port: u16) -> Result<H2Sender, String> {
         }
     }
     let connector = builder.build();
-    let ssl = tokio_boring::connect(
-        connector.configure().map_err(|e| e.to_string())?,
-        host,
-        stream,
-    )
-    .await
-    .map_err(|e| format!("boring tls: {e}"))?;
-    // Chrome SETTINGS 值（netlog 实测）
+    let config = connector.configure().map_err(|e| e.to_string())?;
+    // M97.24: per-connection ECH grease（Chrome 恒发 ECH 扩展形状）
+    config.set_enable_ech_grease(true);
+    let ssl = tokio_boring::connect(config, host, stream)
+        .await
+        .map_err(|e| format!("boring tls: {e}"))?;
+    // Chrome SETTINGS 值（tls.peet.ws 实测：4:6291456 + 6:262144 + 5:16384；
+    // 1:65536/2:0 h2 crate 不暴露——已知残差）
     let mut h2b = h2::client::Builder::new();
     h2b.initial_window_size(6291456);
     h2b.initial_connection_window_size(15728640);
     h2b.max_frame_size(16384);
+    h2b.max_header_list_size(262144);
     let (tx, conn) = h2b
         .handshake::<_, bytes::Bytes>(ssl)
         .await
@@ -166,7 +179,7 @@ fn rebuild_request(
         }
         rb = rb.header(k.as_str(), v.as_str());
     }
-    rb = rb.header("accept-encoding", "identity");
+    rb = rb.header("accept-encoding", "gzip, deflate, br, zstd");
     if has_body {
         rb = rb.header("content-length", body_bytes.len().to_string());
     } else if method != "GET" {
@@ -209,21 +222,47 @@ async fn request_impl(
     } else {
         parsed.path().to_string()
     };
+    // M97.24 实验: Chrome 固定 header 顺序重排（h2 普通头按插入序传输——
+    // Vercel BotID 类评分器读原始顺序）。未知头排最后保持原相对序。
+    let chrome_order = [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "sec-fetch-user",
+        "upgrade-insecure-requests",
+        "user-agent",
+    ];
+    let mut headers: Vec<(String, String)> = headers.to_vec();
+    headers.sort_by_key(|(k, _)| {
+        chrome_order
+            .iter()
+            .position(|o| k.eq_ignore_ascii_case(o))
+            .unwrap_or(chrome_order.len())
+    });
     let mut tx = sender_for(&host, port).await?;
     let full = format!("{}://{host}{path}", parsed.scheme());
     let uri: http::Uri = full.parse().map_err(|e| format!("uri: {e}"))?;
     let mut rb = http::Request::builder().method(method).uri(uri);
-    for (k, v) in headers {
+    for (k, v) in &headers {
         if k.eq_ignore_ascii_case("host") || k.eq_ignore_ascii_case("content-length") {
             continue;
         }
         if k.eq_ignore_ascii_case("accept-encoding") {
-            rb = rb.header("accept-encoding", "identity");
+            // M97.24: Chrome 真值（netlog 实测导航请求恒带 zstd）——identity
+            // 是非浏览器形状（Vercel bot 防护判别候选之一）。上层若传了
+            // accept-encoding 则以传入值为准（透传 fetch spec 语义）。
+            rb = rb.header("accept-encoding", "gzip, deflate, br, zstd");
             continue;
         }
         rb = rb.header(k.as_str(), v.as_str());
     }
-    rb = rb.header("accept-encoding", "identity");
+    rb = rb.header("accept-encoding", "gzip, deflate, br, zstd");
     let body_bytes: bytes::Bytes = body.unwrap_or("").as_bytes().to_vec().into();
     if body.is_some() {
         rb = rb.header("content-length", body_bytes.len().to_string());
@@ -247,7 +286,7 @@ async fn request_impl(
                 &host,
                 parsed.scheme(),
                 &path,
-                headers,
+                &headers,
                 body.is_some(),
                 &body_bytes,
             )?;
@@ -299,7 +338,7 @@ async fn request_impl(
 
     // M96.21: Reddit 式 PoW 挑战页自动解决——检测到挑战页（小 body + solution/jsc_token）
     // 时，解析参数、重发带 solution 的请求，返回真页面。
-    if let Some(result) = solve_js_challenge(url, method, headers, status, &out).await {
+    if let Some(result) = solve_js_challenge(url, method, &headers, status, &out).await {
         return result;
     }
 
@@ -314,7 +353,7 @@ async fn request_impl(
 /// 解析参数并自动重发一次 GET。
 async fn solve_js_challenge(
     url: &str,
-    method: &str,
+    _method: &str,
     headers: &[(String, String)],
     status: u16,
     body: &[u8],
