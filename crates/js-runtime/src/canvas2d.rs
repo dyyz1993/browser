@@ -327,15 +327,32 @@ fn wind_poly(px: f64, py: f64, pts: &[(f64, f64)], evenodd: bool, winding: &mut 
 
 // ---- 字体（一次性加载 + Box::leak 取 'static；与原型同法） ----
 
+// M97.25d：跨平台字体回退。原实现只写 macOS 路径，Linux/Windows 拿不到
+// 字体 → fill_text 画不出墨（ubuntu CI text_rasterizes_nonzero 红）。
+// Linux 用 DejaVu（GitHub runner 与主流发行版随 fonts-dejavu-core 提供），
+// Windows 用系统自带 arial。家族语义在 macOS 保持 Arial/Helvetica 区分，
+// 其余平台统一回退到首个可用字体（canvas 指纹一致性以「平台内自洽」为准）。
+const FONT_CANDIDATES_ARIAL: &[&str] = &[
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "C:\\Windows\\Fonts\\arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+];
+const FONT_CANDIDATES_DEFAULT: &[&str] = &[
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "C:\\Windows\\Fonts\\arial.ttf",
+];
+
 fn font_for(family: &str) -> Option<&'static fontdue::Font> {
     use std::sync::OnceLock;
     static HELVETICA: OnceLock<Option<&'static fontdue::Font>> = OnceLock::new();
     static ARIAL: OnceLock<Option<&'static fontdue::Font>> = OnceLock::new();
     let fam = family.to_lowercase();
+    let load = |paths: &'static [&'static str]| paths.iter().find_map(|p| load_font(p));
     if fam.contains("arial") {
-        *ARIAL.get_or_init(|| load_font("/System/Library/Fonts/Supplemental/Arial.ttf"))
+        *ARIAL.get_or_init(|| load(FONT_CANDIDATES_ARIAL))
     } else {
-        *HELVETICA.get_or_init(|| load_font("/System/Library/Fonts/Helvetica.ttc"))
+        *HELVETICA.get_or_init(|| load(FONT_CANDIDATES_DEFAULT))
     }
 }
 

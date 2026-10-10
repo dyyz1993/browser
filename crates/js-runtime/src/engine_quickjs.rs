@@ -2222,27 +2222,37 @@ mod gc_leak_tests {
     /// 若栈上限被改回 1MB 默认，debug 下 ~115 层即失败。
     #[test]
     fn diag_stack_depth() {
-        let mut engine = QuickJsEngine::new(None);
-        let r = engine.eval_safe(
-            r#"
-            globalThis.__maxDepth = (function(){
-                function down(n){ return n<=0 ? 0 : 1 + down(n-1); }
-                var last = 0, hi = 64;
-                try {
-                    for(;;){ down(hi); last = hi; hi *= 2; if (hi > 200000) return last; }
-                } catch (e) {}
-                var a = last, b = hi;
-                while (a + 1 < b) { var m = (a + b) >> 1; try { down(m); a = m; } catch (e2) { b = m; } }
-                return a;
-            })();
-        "#,
-        );
-        assert!(r.is_ok(), "probe eval failed: {r:?}");
-        let depth = engine.eval_i32("globalThis.__maxDepth").expect("maxDepth");
-        assert!(
-            depth >= 150,
-            "recursion depth {depth} below floor 150 — stack limit regressed to <2MB?"
-        );
+        // M97.25d：cargo test 线程默认原生栈 2MB，与 QuickJS 的 2MB JS 预算
+        // （M79）叠加解释器 C 帧开销后，x86_64 Linux 上探针会在 JS 栈检查
+        // 触发前先击穿原生栈直接 abort（ubuntu CI 实测）。挪到 16MB 大栈
+        // 线程跑探针：引擎生产配置（2MB）不动，只是给测试观测余量。
+        let handle = std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(|| {
+                let mut engine = QuickJsEngine::new(None);
+                let r = engine.eval_safe(
+                    r#"
+                    globalThis.__maxDepth = (function(){
+                        function down(n){ return n<=0 ? 0 : 1 + down(n-1); }
+                        var last = 0, hi = 64;
+                        try {
+                            for(;;){ down(hi); last = hi; hi *= 2; if (hi > 200000) return last; }
+                        } catch (e) {}
+                        var a = last, b = hi;
+                        while (a + 1 < b) { var m = (a + b) >> 1; try { down(m); a = m; } catch (e2) { b = m; } }
+                        return a;
+                    })();
+                "#,
+                );
+                assert!(r.is_ok(), "probe eval failed: {r:?}");
+                let depth = engine.eval_i32("globalThis.__maxDepth").expect("maxDepth");
+                assert!(
+                    depth >= 150,
+                    "recursion depth {depth} below floor 150 — stack limit regressed to <2MB?"
+                );
+            })
+            .expect("spawn stack-probe thread");
+        handle.join().expect("stack probe thread panicked");
     }
 }
 

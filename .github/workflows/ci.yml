@@ -70,5 +70,6 @@ jobs:
           python3 tests/run_js_tests.py
         shell: bash
         env:
-          # Use release binary (built above)
-          BROWSER_BIN: target/release/browser
+          # M97.25d: 上方 Build/Test 步骤产出的都是 debug 二进制；原值指向
+          # target/release（从没构建过）→ 三平台此步必挂。指到 debug 产物。
+          BROWSER_BIN: target/debug/browser

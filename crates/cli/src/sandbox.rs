@@ -62,6 +62,7 @@ const FRAME_SEP: &str = "\x1f";
 /// # Errors
 /// 仅在内部 rlimit 调用失败时返回 Err，但调用方应忽略错误（子进程仍可
 /// 继续跑，靠 boa 限制兜底）。
+#[cfg(unix)]
 pub(crate) fn apply_memory_limit(mb: u64) -> Result<()> {
     use rlimit::{setrlimit, Resource};
     let bytes = mb
@@ -78,6 +79,18 @@ pub(crate) fn apply_memory_limit(mb: u64) -> Result<()> {
         return Err(anyhow!("setrlimit unsupported: {e}"));
     }
     eprintln!("[sandbox] RLIMIT_AS capped at {mb}MB");
+    Ok(())
+}
+
+// M97.25d：Windows 无 RLIMIT_AS（rlimit crate 的 setrlimit/Resource 仅
+// unix 提供）——此前 Windows CI 从未编译到 cli crate 所以一直没暴露。
+// 护栏在 Windows 降级为父进程 RSS 监控（跨平台后备，见模块头注 M-cls 设计）。
+#[cfg(not(unix))]
+pub(crate) fn apply_memory_limit(mb: u64) -> Result<()> {
+    let _ = mb;
+    eprintln!(
+        "[sandbox] RLIMIT_AS unsupported on this platform; parent RSS monitor is the active guard"
+    );
     Ok(())
 }
 

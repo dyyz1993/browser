@@ -1,4 +1,23 @@
+## M97.25d 🖥️ CI 三平台残留三连修——sandbox Windows / canvas2d Linux 字体 / 栈探针
+
+- **背景**：Clippy 修绿后 CI 第一次真正跑到 Build/Test/bug-hunt（此前一个月
+  全挡在 Clippy），暴露三个积年老问题：
+  1. **Windows 编译错**：`sandbox.rs` 的 `rlimit::{setrlimit, Resource}` 仅
+     unix 提供 → `#[cfg(unix)]` 门控 + Windows no-op 桩（降级父进程 RSS
+     监控，M-cls 设计的后备本就跨平台）
+  2. **ubuntu `text_rasterizes_nonzero` 红**：canvas2d `font_for` 只写
+     macOS 字体路径，Linux/Windows None → 无墨。改跨平台候选列表
+     （Linux DejaVu / Windows arial / macOS 原路径优先）
+  3. **ubuntu `diag_stack_depth` 原生爆栈**：cargo test 线程默认 2MB 原生
+     栈被 2MB JS 预算（M79）+ 解释器 C 帧吃穿。测试挪 16MB 大栈线程，
+     引擎生产配置不动
+  4. **bug-hunt fixtures 步必挂**：`BROWSER_BIN` 指 `target/release`（从没
+     构建）→ 改指 Build 步骤实际产出的 `target/debug/browser`
+- **验收**：fmt/clipy 双工具链（1.97+1.99）绿；两个修复测试定点回归过；
+  本地 clippy 1.99 全 workspace RC=0
+
 ## M97.25c 🔧 net async_trait double_must_use——clippy 1.99 连珠炮收尾
+
 
 - **起因**：M97.25b 后 CI 仍红，报错挪到 `net/src/interceptor.rs:88`——CI
   clippy 1.99 对 `#[async_trait]` trait 展开触发 `double_must_use`（宏给
