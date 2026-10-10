@@ -1,4 +1,17 @@
+## M97.25i 🧰 bug-hunt 脚本 Windows 适配——CI 三平台自 9/14 以来首次全绿
+
+- **两个 Windows 特有坑**（二进制定位到了但脚本崩）：
+  1. Windows 产物带 `.exe` 后缀，`target/debug/browser` 永远找不到 →
+     `EXE_SUFFIX = ".exe" if os.name == "nt" else ""`
+  2. Windows 控制台默认 cp1252，脚本打印 ✅/❌ 直接 `UnicodeEncodeError`
+     → `sys.stdout.reconfigure(encoding="utf-8")`
+- **里程碑**：main 分支 CI（ubuntu/macOS/windows 三平台 fmt+clippy+build+
+  test+bug-hunt）自 2026-09-14 svgine-host 合入以来**首次全绿**
+- **本轮 M97.25 全系列**（vendor 入仓 → clippy 1.99 适配 → 三平台积年
+  修复 → 脚本 Windows 适配）共 9 个 commit，另见上方 M97.25b–h 各条
+
 ## M97.25h 🖼️ render file:// 解析跨平台——Windows 盘符路径被补根斜杠
+
 
 - **现象**：Windows 收敛到最后一个 `image::tests::resolve_file_url`——
   `file://D:\...` 剥 scheme 后被 `insert_root()` 补成 `/D:\...` 非法路径
