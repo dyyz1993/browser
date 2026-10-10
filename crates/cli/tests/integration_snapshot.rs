@@ -95,7 +95,11 @@ fn check_or_update_snapshot(name: &str, width: u32) {
         return;
     }
 
-    let expected = std::fs::read_to_string(&golden).expect("read golden");
+    // M97.25d: 双保险——.gitattributes 已强制 golden LF checkout，这里再
+    // 归一化 \r\n，immune 于本机/CI 任意 autocrlf 配置（渲染输出恒为 \n）。
+    let expected = std::fs::read_to_string(&golden)
+        .expect("read golden")
+        .replace("\r\n", "\n");
     if actual != expected {
         // Write the actual to a sibling .actual file so the dev can
         // `diff` it locally.

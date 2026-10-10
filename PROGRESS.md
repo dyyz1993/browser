@@ -1,4 +1,19 @@
+## M97.25e 🧪 bug-hunt fixture 404 + Windows 快照 CRLF——CI 最后两块补齐
+
+- **bug-hunt 步骤（三平台）**：两层问题叠加——①CI 传的 `BROWSER_BIN` env
+  脚本根本不读（只认 `--debug` argv），改 ci.yml 传 `--debug`；②4 个
+  fixture（C01/D01/D03/D05）用根绝对路径 `fetch("/categories/...")`，而
+  服务器根是 `tests/`（实际在 `bug-hunt/categories/`）→ 全部 404。D01/D03
+  断言松（length/headers 对 404 页也成立）侥幸过，C01 验内容才暴露，D05
+  的 status===200 一直是空转。改相对路径 `fetch("../A-js-core/...")` 后
+  **35/35 bug-free、48 PASS**，D05 变成真实的 200 状态传播测试
+- **Windows Test**：`integration_snapshot` ASCII golden 在 Windows checkout
+  被 autocrlf 转 CRLF，与渲染输出（\n）逐字节比对挂。双保险：新增
+  `.gitattributes`（`tests/snapshots/*.txt eol=lf`）+ 测试内 `\r\n` 归一化
+- **验收**：bug-hunt --debug 本地 35/35；快照 3/3；fmt/clippy 双工具链（1.97+1.99）绿
+
 ## M97.25d 🖥️ CI 三平台残留三连修——sandbox Windows / canvas2d Linux 字体 / 栈探针
+
 
 - **背景**：Clippy 修绿后 CI 第一次真正跑到 Build/Test/bug-hunt（此前一个月
   全挡在 Clippy），暴露三个积年老问题：

@@ -67,9 +67,7 @@ jobs:
 
       - name: JS bug-hunt fixtures
         run: |
-          python3 tests/run_js_tests.py
+          # M97.25d: Build 步骤产出的是 debug 二进制；脚本只认 --debug
+          # 参数（并不读 BROWSER_BIN env），原 release 路径从不存在。
+          python3 tests/run_js_tests.py --debug
         shell: bash
-        env:
-          # M97.25d: 上方 Build/Test 步骤产出的都是 debug 二进制；原值指向
-          # target/release（从没构建过）→ 三平台此步必挂。指到 debug 产物。
-          BROWSER_BIN: target/debug/browser

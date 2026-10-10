@@ -1,0 +1,3 @@
+# M97.25d: ASCII 快照 golden 必须字节级跨平台一致——Windows autocrlf 会把
+# checkout 的 golden 转成 CRLF，与渲染输出（\n）逐字节比对必挂。
+tests/snapshots/*.txt text eol=lf
