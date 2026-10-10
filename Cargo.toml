@@ -17,6 +17,8 @@ members = [
     "crates/ws",
     "crates/cdp",
     "crates/svgine-host",
+    "crates/svgine-core",
+    "crates/svgine-simd",
     "crates/extractor",
     "crates/worker-wasm",
 ]

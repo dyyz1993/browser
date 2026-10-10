@@ -10,5 +10,8 @@ description = "ADR-0019 阶段二：页面内 <svg> 交由 svgine 引擎真渲�
 browser-dom = { path = "../dom" }
 browser-layout = { path = "../layout" }
 # ADR-0019 裁决位 3/4 待批：暂按 OT 推荐路线先行（path 直依赖，宿主 std 消费面）。
-# 路径基准 = 本仓 ../svgine 兄弟仓（同机克隆；若克隆布局不同需按实际调整）。
-svgine-core = { path = "../../../svgine/crates/svgine-core" }
+# M97.25 起 svgine-core/svgine-simd 为本仓 vendored 快照（crates/svgine-core、
+# crates/svgine-simd）——原先 path 指向 ../svgine 兄弟仓，但该仓无远端，
+# GitHub CI checkout 里不存在此路径（Release/CI 双双红）。上游同步走
+# tools/vendor_svgine.sh；适配细节见 crates/svgine-core/Cargo.toml 头注。
+svgine-core = { path = "../svgine-core" }

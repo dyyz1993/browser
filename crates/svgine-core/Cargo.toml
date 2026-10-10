@@ -1,0 +1,85 @@
+# ── VENDORED SNAPSHOT ─────────────────────────────────────────────────────
+# 快照来源：兄弟仓 ../svgine（crates/svgine-core），上游 commit 见 VENDOR.md。
+# 同步方式：tools/vendor_svgine.sh（排除 Cargo.toml——本文件已做 workspace
+# 内联化适配：browser workspace 无 [workspace.package]/[workspace.lints]，
+# 不能继承 svgine 根仓的 version/lints 表，故按 svgine 根仓同值内联）。
+[package]
+name = "svgine-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Portable SVG rendering core: no_std + alloc, bytes in, pixels out"
+
+[features]
+# 体积门控体系（ADR-0009，对齐 GOALS T1-T4 覆盖层级）。
+# **默认 = 全开**：三宿主（CLI / FFI / Android）零改动，门控只影响
+# 显式 `--no-default-features` 的 MCU 构建。层级组合：
+#   T1（≤120KB）= 关全部特性（形状/path/纯色/transform/viewBox/use）
+#   T2（≤250KB）= T1 + gradient,css,clip-path,mask,pattern,marker
+#   T3（≤320KB）= T2 + anim（SMIL + CSS keyframes）
+#   T4（≤1.5MB）= T3 + filters,text-lite,text-full,image-decode
+# 特性关闭 = 能力位降级（GOALS「MCU 能力位降级」）：被门控元素/属性
+# 按宽容语义处理（warnings + 跳过，不描绘；品红保留给描绘引用错误）。
+default = [
+    "host-perf",
+    "anim",
+    "css-anim",
+    "gradient",
+    "css",
+    "clip-path",
+    "mask",
+    "pattern",
+    "marker",
+    "filters",
+    "text-lite",
+    "text-full",
+    "image-decode",
+]
+# 宿主性能快路：只改变执行形态，不改变像素语义。MCU T1-T4
+# 全部使用 --no-default-features 且不开此门，因此不占 flash 预算。
+host-perf = []
+# M5/M6：SMIL 时序模型 + 属性覆盖表 + CSS keyframes/animation 简写
+# （css-anim 并入同一门——引擎同源，见 ADR-0009）。
+anim = ["css"]
+# 兼容别名：CSS 动画引擎与 SMIL 同门控（anim），开启即全开。
+css-anim = ["anim"]
+# T2：linearGradient/radialGradient（渐变停靠/延展/抖动求值链）。
+gradient = []
+# T2：CSS 子集（<style> 规则 + 内联 style + 选择器级联 + var()）。
+css = []
+# T2：clipPath 矢量裁切（矩形视口裁切是 T1 核心，不受此门影响）。
+clip-path = []
+# T2：<mask> 亮度蒙版（离屏子显示列表）。
+mask = []
+# T2：<pattern> 平铺图案。
+pattern = []
+# T2：marker-start/mid/end 顶点标记。
+marker = []
+# M8：滤镜 primitive 求值链（feGaussianBlur/feOffset/feColorMatrix/...）。
+filters = []
+# M8：文本 Tier B（Hershey 单字体、无 shaping）
+text-lite = []
+# M8：文本 Tier C（TTF 注入，MCU 禁用；体积 +500KB~1MB）
+text-full = ["text-lite"]
+# <image> 位图解码（+200~400KB，MCU 上由宿主解码后喂位图）
+image-decode = []
+
+# svgine 根仓 [workspace.lints] 同值内联（本仓 workspace 不定义 lints 表）。
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+
+[dependencies]
+# 白名单见 docs/GOALS.md。f32::round/floor 等 libm 族函数在 no_std 下不可用，走 libm。
+libm = "0.2"
+
+# 车道EF：feTurbulence 内圈 4 通道 SIMD 臂（aarch64 NEON / x86_64 SSE2，
+# 均为目标基线能力，无需运行时检测）。target-gated：riscv 等其余架构
+# 不构建本依赖（MCU 零影响）。svgine-core 本体保持 forbid(unsafe_code)，
+# core::arch intrinsics 的 unsafe 收敛在 svgine-simd 内（svgine-ffi 先例：
+# crate 级 deny + 函数级 allow + Safety 注释）。
+[target."cfg(any(target_arch = \"aarch64\", target_arch = \"x86_64\"))".dependencies]
+svgine-simd = { path = "../svgine-simd" }

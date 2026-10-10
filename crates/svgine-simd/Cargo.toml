@@ -1,0 +1,21 @@
+# ── VENDORED SNAPSHOT ─────────────────────────────────────────────────────
+# 快照来源：兄弟仓 ../svgine（crates/svgine-simd），上游 commit 见
+# ../svgine-core/VENDOR.md；同步走 tools/vendor_svgine.sh（排除 Cargo.toml，
+# package 字段已按 svgine 根仓同值内联——本仓 workspace 无对应继承表）。
+[package]
+name = "svgine-simd"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Safe-wrapped SIMD helpers (aarch64 NEON / x86_64 SSE2) for svgine hot paths; target-gated, no_std"
+
+# 不继承 workspace lints（unsafe_code = forbid）：core::arch intrinsics
+# 一律是 unsafe fn——同 svgine-ffi 先例（ADR-0007 FFI 边界），降为 deny
+# + 函数级 #[allow(unsafe_code)]，unsafe 全部收敛在带 Safety 注释的
+# safe wrapper 内，其余纪律照旧。
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"

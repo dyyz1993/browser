@@ -1,3 +1,28 @@
+## M97.25 📦 svgine-core/simd vendor 入仓——修 CI 外部 path 依赖无远端（v0.1.1 发布前置）
+
+- **起因**：打 v0.1.1 tag 后 Release 工作流 26 秒双平台全挂——`svgine-host`
+  依赖 `path = "../../../svgine/crates/svgine-core"`（仓库外兄弟目录），
+  而 svgine 仓**没有远端**，GitHub checkout 里不存在该路径，workspace
+  manifest 加载即败。回溯发现 **2026-09-14 svgine-host 合入 main 起 CI/Release
+  就一直红**（此前无人发布所以未暴露）
+- **裁决**：三方案（发布 svgine 到 GitHub / vendor 快照入仓 / 本次发布剔除
+  svgine-host）→ 取 **vendor 快照**：零外部动作、构建可复现、svgine 独立仓
+  自治不受影响、git revert 可回滚
+- **落地**：
+  - `crates/svgine-core`（3.6MB 全目录含 tests/testdata）+ `crates/svgine-simd`
+    快照入仓，workspace members 登记，测试进全量门禁；`tests/` 中引用
+    svgine 仓根语料（`../../tests/oracle`）的 2 个契约测试剔除（本仓布局
+    路径失效 panic），其余 9 个自包含集成测试保留全绿，同步脚本自动检测剔除
+  - Manifest 内联化适配：本仓 workspace 无 `[workspace.package]`/`[workspace.lints]`，
+    `workspace = true` 继承字段按 svgine 根仓同值内联（lints 语义不变：
+    core forbid(unsafe_code)+clippy deny unwrap；simd deny+函数级 allow）
+  - `svgine-host` path 改指 `../svgine-core`（仓库内）
+  - 溯源 `crates/svgine-core/VENDOR.md`（上游 commit 4cf3f30b，2026-10-10 快照）
+  - 同步脚本 `tools/vendor_svgine.sh`：rsync --delete **排除 Cargo.toml**
+    （保留内联化适配）+ 自动刷新 VENDOR.md 溯源表；同步后必须过三门禁
+- **验收**：cargo check --workspace 绿；CI/Release feature 组合（quickjs,v8,chrome-tls）
+  本地编译绿；v0.1.1 tag 重打
+
 ## M97.24 🛡️ Vercel 指纹防线差分——「跟浏览器一样」的边界实测
 
 - **起因**：`browser fetch https://developers.openai.com/codex/hooks` 403。
