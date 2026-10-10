@@ -13,7 +13,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-BINARY = str(ROOT / "target/release/browser")
+# M97.25i: Windows 产物带 .exe 后缀，路径不含则 always "Binary not found"
+EXE_SUFFIX = ".exe" if os.name == "nt" else ""
+BINARY = str(ROOT / f"target/release/browser{EXE_SUFFIX}")
 TIMEOUT = 45  # per-fixture timeout (60s default, but CI runs are slower)
 
 SKIP_PATTERNS = [
@@ -69,7 +71,7 @@ def main():
     # Determine debug/release binary
     global BINARY
     if "--debug" in sys.argv:
-        BINARY = str(ROOT / "target/debug/browser")
+        BINARY = str(ROOT / f"target/debug/browser{EXE_SUFFIX}")
 
     if not os.path.exists(BINARY):
         print(f"[!] Binary not found: {BINARY}")
