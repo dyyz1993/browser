@@ -31,7 +31,8 @@ jobs:
       - name: Refresh baseline (drift within tolerance → auto-commit)
         run: |
           python3 tests/benchmarks/perf_bench.py --browser target/release/browser --update
-          if git diff --quiet tests/benchmarks/perf-baseline.json; then
+          # 用 status --porcelain 而非 diff——首跑基线是 untracked 新文件，diff 探不到
+          if [ -z "$(git status --porcelain tests/benchmarks/perf-baseline.json)" ]; then
             echo "baseline unchanged"
           else
             git config user.name "github-actions[bot]"

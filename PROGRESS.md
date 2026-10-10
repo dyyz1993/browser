@@ -33,8 +33,12 @@
   - **v1 首轮基线：102/366（27.9%）报告制恒 exit 0**——fail 数就是 DOM 桥
     gap 清单（cloneNode 86/135、defaultPrevented 6/8、CharacterData/
     appendChild 大面积未实现）；v2 计划基线不回退门禁
-- **验收**：perf 双模式本地过（update/gate）；站点矩阵本地 5 站全通；
-  WPT runner 本地 14 文件全跑通；三工作流 dispatch 实测见 CI
+- **验收（CI dispatch 实测，2026-10-10）**：三新工作流首跑全过——站点矩阵
+  CI 5/5（美区：learn-svelte 10.1KB/caniuse 4KB）；WPT CI **102/366=27.9%**
+  与本地完全一致（vendor+锁定 rev 确定性 ✓）；perf 首跑发现 `git diff`
+  探不到 untracked 基线 → 改 `git status --porcelain`（M97.26b-fix）。
+  release.yml Windows job 不 dispatch 验证（`ref_name=main` 会建垃圾
+  Release），下次真 tag 时生效
 
 ## M97.25i 🧰 bug-hunt 脚本 Windows 适配——CI 三平台自 9/14 以来首次全绿
 
