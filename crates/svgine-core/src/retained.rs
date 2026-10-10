@@ -301,9 +301,7 @@ impl RetainedPlan {
     }
 
     fn mark_tiles_all(&mut self) {
-        for t in &mut self.tiles {
-            *t = true;
-        }
+        self.tiles.fill(true);
         self.stats.tiles_dirty = self.stats.tiles_total;
     }
 
@@ -320,9 +318,7 @@ impl RetainedPlan {
             self.mark_tiles_all();
             return;
         }
-        for t in &mut self.tiles {
-            *t = false;
-        }
+        self.tiles.fill(false);
         let (tw, th) = (RETAINED_TILE as f32, RETAINED_TILE as f32);
         let gw = self.cols as f32;
         let gh = self.rows as f32;

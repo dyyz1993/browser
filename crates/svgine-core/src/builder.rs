@@ -9990,7 +9990,7 @@ fn walk(
             FillSpec::Unset => inh
                 .fill
                 .as_ref()
-                .map(&resolve_fill)
+                .map(resolve_fill)
                 .unwrap_or(FillSpec::Unset),
             f => resolve_fill(f),
         };
@@ -10010,7 +10010,7 @@ fn walk(
             StrokeSpec::Unset => inh
                 .stroke
                 .as_ref()
-                .map(&resolve_stroke)
+                .map(resolve_stroke)
                 .unwrap_or(StrokeSpec::None),
             st => resolve_stroke(st),
         };
@@ -11763,7 +11763,7 @@ fn emit_text(
             || (cur_fill.is_some() && cur_op != r.opacity)
         {
             if let Some(f) = cur_fill.take() {
-                let (st, sw) = cur_stroke.take().map_or((StrokeSpec::None, 1.0), |x| x);
+                let (st, sw) = cur_stroke.take().unwrap_or((StrokeSpec::None, 1.0));
                 flush_text_seg(
                     ctx, dl, &geom, s, m, clip, mask, op, &f, &st, sw, vp, cur_op,
                 );
@@ -11971,7 +11971,7 @@ fn emit_text(
         }
     }
     if let Some(f) = cur_fill.take() {
-        let (st, sw) = cur_stroke.take().map_or((StrokeSpec::None, 1.0), |x| x);
+        let (st, sw) = cur_stroke.take().unwrap_or((StrokeSpec::None, 1.0));
         flush_text_seg(
             ctx, dl, &geom, s, m, clip, mask, op, &f, &st, sw, vp, cur_op,
         );
@@ -15040,8 +15040,7 @@ fn build_fe_chain(
                 FeKindRaw::Flood => FeKind::Flood { color: fe.flood },
                 FeKindRaw::Composite => {
                     // in2 缺省（规范要求 in2）按 Prev 宽容近似
-                    let in2 =
-                        resolve_fe_input(fe.in2.as_deref(), &names).map_or(FeInput::Prev, |i| i);
+                    let in2 = resolve_fe_input(fe.in2.as_deref(), &names).unwrap_or(FeInput::Prev);
                     let op = match fe.operator.as_deref().map(str::trim) {
                         Some("in") => FeCompositeOp::In,
                         Some("out") => FeCompositeOp::Out,
@@ -15071,7 +15070,7 @@ fn build_fe_chain(
                             if let Some(nfe) = doc.shapes[n as usize].fe.as_ref() {
                                 nodes.push(
                                     resolve_fe_input(nfe.in_.as_deref(), &names)
-                                        .map_or(FeInput::SourceGraphic, |i| i),
+                                        .unwrap_or(FeInput::SourceGraphic),
                                 );
                             }
                         }
@@ -15127,8 +15126,7 @@ fn build_fe_chain(
                 FeKindRaw::DisplacementMap => {
                     // in2 缺省按 Prev 宽容近似；scale 用户空间长度 → 每轴
                     // 设备像素；通道选择子缺省 A，非法值宽容按 A。
-                    let in2 =
-                        resolve_fe_input(fe.in2.as_deref(), &names).map_or(FeInput::Prev, |i| i);
+                    let in2 = resolve_fe_input(fe.in2.as_deref(), &names).unwrap_or(FeInput::Prev);
                     FeKind::DisplacementMap {
                         in2,
                         scale_x: fe.scale.unwrap_or(0.0) * sx,

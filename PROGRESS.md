@@ -1,4 +1,17 @@
+## M97.25b 🔧 svgine-core clippy-1.99 适配——CI 三平台 Clippy 修绿
+
+- **起因**：M97.25 推送后 CI 仍红（windows/ubuntu Clippy）——CI `dtolnay@stable`
+  = clippy **1.99** > 本地 1.97，三个新 lint 全打在 vendor 快照上，`-D warnings` 即红：
+  - `needless_borrows_for_generic_args`：builder.rs `.map(&f)`→`.map(f)` ×2
+  - `map_or_identity`：builder.rs `.map_or(d, |x| x)`→`.unwrap_or(d)` ×5
+  - `manual_slice_fill`：retained.rs 手写 fill 循环→`slice.fill()` ×2
+- **语义零变化**（等价重写），本地门禁全绿；macOS job 未报——lint 触发与
+  工具链版本相关而非平台门控
+- **沉淀**：VENDOR.md 增「本地补丁」条目——同步脚本覆盖 src/ 前上游需采纳
+  同改（建议改 svgine 上游一次到位）
+
 ## M97.25 📦 svgine-core/simd vendor 入仓——修 CI 外部 path 依赖无远端（v0.1.1 发布前置）
+
 
 - **起因**：打 v0.1.1 tag 后 Release 工作流 26 秒双平台全挂——`svgine-host`
   依赖 `path = "../../../svgine/crates/svgine-core"`（仓库外兄弟目录），

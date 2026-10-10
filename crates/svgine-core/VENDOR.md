@@ -23,6 +23,7 @@ M97.25 修复）。svgine-core + svgine-simd 快照入仓后，构建零外部�
 | Manifest 改动 | 仅 `Cargo.toml`：`workspace = true` 继承字段按 svgine 根仓同值内联（本仓 workspace 无 `[workspace.package]` / `[workspace.lints]` 对应表）；lints 内联保持 svgine 语义（core: unsafe_code=forbid + clippy unwrap_used=deny；simd: unsafe_code=deny） |
 | 不同步项 1 | `Cargo.toml`（保留本仓内联化适配，rsync 排除） |
 | 不同步项 2 | `tests/*.rs` 中引用 `../../`（svgine 仓根语料 tests/oracle、tests/corpus）的契约测试——本仓布局下路径失效（M97.25 实测 panic），同步脚本自动剔除；语料验收由上游仓自治 |
+| 本地补丁 | **9 处 clippy-1.99 适配**（browser CI clippy stable=1.99 > 本地 1.97，新 lint `needless_borrows_for_generic_args`/`map_or_identity`/`manual_slice_fill` 全打在快照上，`-D warnings` 即红）：builder.rs `.map(&f)`→`.map(f)` ×2、`.map_or(d, \|x\| x)`→`.unwrap_or(d)` ×5，retained.rs 手写 fill 循环→`slice.fill()` ×2。**下次同步脚本会覆盖 src/——上游 svgine 采用同改前，同步后需重打**（建议直接改上游一次到位） |
 
 ## 如何同步上游更新
 
