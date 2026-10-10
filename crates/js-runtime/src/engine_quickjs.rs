@@ -2246,9 +2246,15 @@ mod gc_leak_tests {
                 );
                 assert!(r.is_ok(), "probe eval failed: {r:?}");
                 let depth = engine.eval_i32("globalThis.__maxDepth").expect("maxDepth");
+                // M97.25f：下限平台感知——Windows 上引擎有意维持 QuickJS
+                // 默认 1MB 栈（M79 平台约束：Windows 主线程栈仅 1MB，
+                // set_max_stack_size(2MB) 为 cfg(not(windows))），debug
+                // ~9KB/帧 → ~115 层；unix 2MB 预算对应 ≥150。64 对两侧
+                // 都是「栈检查在工作」的安全下限。
+                let floor: i32 = if cfg!(windows) { 64 } else { 150 };
                 assert!(
-                    depth >= 150,
-                    "recursion depth {depth} below floor 150 — stack limit regressed to <2MB?"
+                    depth >= floor,
+                    "recursion depth {depth} below floor {floor} — stack check regressed?"
                 );
             })
             .expect("spawn stack-probe thread");

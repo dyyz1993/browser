@@ -1,4 +1,17 @@
+## M97.25f 🪟 栈探针下限平台感知——Windows 1MB 默认是设计不是回归
+
+- **现象**：ubuntu/macOS 全绿后，Windows 的 `diag_stack_depth` 仍红——
+  深度 ~115 < 断言下限 150
+- **根因**：这不是回归。M79 平台约束写明 Windows 主线程栈仅 1MB，引擎
+  `set_max_stack_size(2MB)` 是 `cfg(not(windows))`，Windows 有意维持
+  QuickJS 默认 1MB；测试下限 150 按 2MB 预算（debug ~9KB/帧 ≈ 230 层）
+  算的，对 Windows 1MB（~115 层）天然不可能达标
+- **修法**：下限平台感知 `cfg!(windows) ? 64 : 150`——两侧都足以验证
+  「QuickJS 栈检查在工作 + 不再原生爆栈」，不再误报
+- **验收**：定点回归 ok；fmt/clippy 双工具链绿
+
 ## M97.25e 🧪 bug-hunt fixture 404 + Windows 快照 CRLF——CI 最后两块补齐
+
 
 - **bug-hunt 步骤（三平台）**：两层问题叠加——①CI 传的 `BROWSER_BIN` env
   脚本根本不读（只认 `--debug` argv），改 ci.yml 传 `--debug`；②4 个
