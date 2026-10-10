@@ -1,4 +1,18 @@
+## M97.25c 🔧 net async_trait double_must_use——clippy 1.99 连珠炮收尾
+
+- **起因**：M97.25b 后 CI 仍红，报错挪到 `net/src/interceptor.rs:88`——CI
+  clippy 1.99 对 `#[async_trait]` trait 展开触发 `double_must_use`（宏给
+  boxed Future 再叠 `#[must_use]`，与 Future 自身撞车），宏产物无法业务侧
+  修复
+- **解法**：本地装 `rustup toolchain install 1.99.0 --profile minimal -c clippy
+  -c rustfmt`（与 CI 完全同版本），全量复扫一次列清 → trait 定义处
+  `#[allow(clippy::double_must_use)]`（唯一 async_trait trait，带缘由注释）→
+  **clippy 1.99 全 workspace RC=0**，无后续连珠
+- **沉淀**：本地工具链与 CI stable 漂移（1.97 vs 1.99）是「本地绿 CI 红」的
+  根因；升本地默认工具链到 stable 可根治（另行裁决，本次用 +1.99.0 按需校验）
+
 ## M97.25b 🔧 svgine-core clippy-1.99 适配——CI 三平台 Clippy 修绿
+
 
 - **起因**：M97.25 推送后 CI 仍红（windows/ubuntu Clippy）——CI `dtolnay@stable`
   = clippy **1.99** > 本地 1.97，三个新 lint 全打在 vendor 快照上，`-D warnings` 即红：

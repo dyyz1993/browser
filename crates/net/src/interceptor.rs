@@ -85,6 +85,9 @@ impl MockResponse {
 }
 
 /// Interceptor trait for customizing requests/responses
+// clippy 1.99 double_must_use：async_trait 宏给 boxed Future 再叠 #[must_use]，
+// 与 Future 自身 must_use 撞车——宏展开产物，业务侧无解，allow（M97.25c）。
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Interceptor: Send + Sync {
     /// Intercept request before sending.
