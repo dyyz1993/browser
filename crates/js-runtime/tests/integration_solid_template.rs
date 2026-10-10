@@ -105,19 +105,23 @@ fn deep_recursion_within_raised_stack_limit() {
     // CLI render-file 探针），debug -O0 ~9KB/帧（2MB ≈ 230 帧，本测试环境，
     // 指数+二分探针 diag_stack_depth 实测）。取 150 层：2MB-debug（230）通过、
     // 1MB 默认-debug（~115）失败——防止上限被误改回默认。
-    let body = run_body(
+    // M97.25f/g 平台约束：Windows 主线程栈仅 1MB，引擎升 2MB 是
+    // cfg(not(windows))——Windows 维持默认 1MB 是设计而非回归，探针深度
+    // 平台感知（64/150），两侧都验证「深递归可用、栈检查在工作」。
+    let depth = if cfg!(windows) { 64 } else { 150 };
+    let body = run_body(&format!(
         r#"<html><body><p>init</p>
 <script type="module">
-function down(n) { return n <= 0 ? 0 : 1 + down(n - 1); }
+function down(n) {{ return n <= 0 ? 0 : 1 + down(n - 1); }}
 var r = 'ERR';
-try { r = String(down(150)); } catch (e) { r = 'RANGE'; }
+try {{ r = String(down({depth})); }} catch (e) {{ r = 'RANGE'; }}
 __setBody('DEPTH:' + r);
 </script>
 </body></html>"#,
-    );
+    ));
     assert!(
-        body.contains("DEPTH:150"),
-        "150-deep recursion must succeed with raised stack limit. body={body:?}"
+        body.contains(&format!("DEPTH:{depth}")),
+        "{depth}-deep recursion must succeed with raised stack limit. body={body:?}"
     );
 }
 

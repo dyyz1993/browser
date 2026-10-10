@@ -1,4 +1,14 @@
+## M97.25g 🪟 solid 模板深递归探针同病同治——Windows 探针深度平台感知
+
+- **现象**：Windows 下一张多米诺 `deep_recursion_within_raised_stack_limit`
+  （integration_solid_template）——150 层深递归在 1MB 默认预算下必
+  RangeError，与 M97.25f 同根因
+- **修法**：探针深度 `cfg!(windows) ? 64 : 150`，JS 用 format! 内插；
+  断言随之动态。unix 侧语义不变（150 > 1MB-debug ~115，仍守 2MB 升级）
+- **验收**：integration_solid_template 7/7 ok；fmt/clippy 绿
+
 ## M97.25f 🪟 栈探针下限平台感知——Windows 1MB 默认是设计不是回归
+
 
 - **现象**：ubuntu/macOS 全绿后，Windows 的 `diag_stack_depth` 仍红——
   深度 ~115 < 断言下限 150
