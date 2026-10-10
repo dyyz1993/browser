@@ -68,6 +68,10 @@ def scan_html_file(path, server_port):
     }
 
 def main():
+    # M97.25i: Windows 控制台默认 cp1252，打印 ✅/❌ 直接 UnicodeEncodeError
+    # ——stdout 强制 UTF-8（GitHub Actions 日志按 UTF-8 读）。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     # Determine debug/release binary
     global BINARY
     if "--debug" in sys.argv:
