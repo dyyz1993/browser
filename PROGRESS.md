@@ -1,4 +1,15 @@
+## M97.25h 🖼️ render file:// 解析跨平台——Windows 盘符路径被补根斜杠
+
+- **现象**：Windows 收敛到最后一个 `image::tests::resolve_file_url`——
+  `file://D:\...` 剥 scheme 后被 `insert_root()` 补成 `/D:\...` 非法路径
+- **根因**：file:// 分支按 unix 语义写死（`file:///tmp/x` → 剥斜杠补 `/`）；
+  Windows 盘符即根（`file:///C:/x` 或 `file://C:\x`），补根斜杠必坏
+- **修法**：`cfg!(windows)` 分支直接用剥斜杠后的盘符路径（PathBuf 原生
+  接受正斜杠）；unix 行为不变（insert_root 补根）
+- **验收**：render image::tests 14/14 ok；fmt/clippy 绿
+
 ## M97.25g 🪟 solid 模板深递归探针同病同治——Windows 探针深度平台感知
+
 
 - **现象**：Windows 下一张多米诺 `deep_recursion_within_raised_stack_limit`
   （integration_solid_template）——150 层深递归在 1MB 默认预算下必

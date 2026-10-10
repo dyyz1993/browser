@@ -143,7 +143,15 @@ pub fn resolve_local_image_src(src: &str, base_dir: Option<&Path>) -> Option<Pat
     }
     // file: URL
     if let Some(rest) = trimmed.strip_prefix("file://") {
-        let p = PathBuf::from(rest.trim_start_matches('/').insert_root());
+        // M97.25h：跨平台——unix file URL 形如 file:///tmp/x（三斜，剥斜杠
+        // 后补回根 /）；Windows 形如 file:///C:/x/y 或 file://C:\x\y（盘符
+        // 即根，补 / 会得到 /C:/... 非法路径），按平台各自解释。
+        let stripped = rest.trim_start_matches('/');
+        let p = if cfg!(windows) {
+            PathBuf::from(stripped)
+        } else {
+            PathBuf::from(stripped.insert_root())
+        };
         if p.is_file() {
             return Some(p);
         }
