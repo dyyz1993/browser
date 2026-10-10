@@ -1,4 +1,43 @@
+## M97.26 🧪 CI 覆盖扩展四连——Windows 产物 / 性能基线 / 站点矩阵 / WPT 子集
+
+> 用户裁决：把 CI 四个缺口（真实站点矩阵、性能基线门禁、WPT 接入、Windows
+> 发布产物）直接补上。四个工作流，两个门禁 + 两个夜间信号。
+
+- **M97.26a Windows 发布产物**：release.yml 加 `build-windows` job（默认
+  feature：quickjs + native-tls=schannel；chrome-tls 的 BoringSSL 在 MSVC
+  需 Go/perl 工具链，v1 不进 Windows 产物）→ `browser-windows-x86_64.zip`
+  进 Release
+- **M97.26b 性能/RSS 基线门禁**（`perf.yml`，夜间北京 03:00 + dispatch）：
+  - workload 全本地确定性 HTML（`tests/benchmarks/workloads/`：layout-heavy
+    600 行静态表 / dom-heavy 800 节点桥 / js-heavy 4 万内素数筛——实测
+    P:4203、DOM:800 断言入内容）
+  - 每 workload 5 次取 wall 中位 + 子进程 peak RSS（独立 wrapper 进程计量
+    保 getrusage 只含单子进程）
+  - 容差 2x wall / 1.3x RSS——CI 共享 runner 噪声大，只拦灾难级回退
+  - 基线 `perf-baseline.json` 由工作流自维护：首跑生成并自动 commit
+    （[skip ci] 防递归），容差内漂移自动刷新，超容差 job 红且不刷新
+- **M97.26c 真实站点矩阵**（`site-matrix.yml`，夜间北京 03:30 + dispatch）：
+  - HARD 断言（rc/超时/正文阈值）失败即红；uncaught/console 计数只报告
+    （真实站改版带 JS 报错常见，做趋势信号）
+  - 站点选型避开风控站；**本地冒烟即刻抓到 2 个真问题**：jsonplaceholder
+    `response is not valid UTF-8`（疑似 zstd/编码解码缺口，**待修真 bug**）、
+    hnpwa-vue3 已 404——均剔除，定稿 example.com/todomvc/learn.svelte/
+    caniuse/npmtrends（实测 953B/9.5KB/2.5KB/2KB/382B）
+- **M97.26d WPT 子集接入**（`standards.yml`，夜间北京 04:00 + dispatch）：
+  - **vendor 锁定 revision**（wpt master `3d9fd1ff`，2026-10-10）：resources
+    harness + dom/nodes ×12 + dom/events ×3 + 2 个 helper（`WPT-PROVENANCE.md`
+    溯源；.js 型多全局包装器测试 v1 不收）——零网络确定性，不夜夜克隆 3GB
+  - runner：本地 server 以 wpt/ 为根 → `fetch --format html` 拿执行后 DOM →
+    解析 `overall-pass|fail` 行（**排除 details「Asserts run」的 assert 级行**——
+    误计会把 27% 虚报成 76%）
+  - **v1 首轮基线：102/366（27.9%）报告制恒 exit 0**——fail 数就是 DOM 桥
+    gap 清单（cloneNode 86/135、defaultPrevented 6/8、CharacterData/
+    appendChild 大面积未实现）；v2 计划基线不回退门禁
+- **验收**：perf 双模式本地过（update/gate）；站点矩阵本地 5 站全通；
+  WPT runner 本地 14 文件全跑通；三工作流 dispatch 实测见 CI
+
 ## M97.25i 🧰 bug-hunt 脚本 Windows 适配——CI 三平台自 9/14 以来首次全绿
+
 
 - **两个 Windows 特有坑**（二进制定位到了但脚本崩）：
   1. Windows 产物带 `.exe` 后缀，`target/debug/browser` 永远找不到 →

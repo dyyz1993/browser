@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>perf dom-heavy</title></head>
+<body>
+<div id="app"></div>
+<script>
+// M97.26b 性能 workload：DOM 桥压力——创建/挂载 800 节点 + 属性/文本写。
+// 走 __createEl/__setText/__setAttr/__appendChild（入库桥面，见 dom-api fixture）。
+var app = __getElById("app");
+var root = __createEl("ul");
+for (var i = 0; i < 800; i++) {
+  var li = __createEl("li");
+  __setAttr(li, "data-i", String(i));
+  __setAttr(li, "class", i % 2 === 0 ? "even" : "odd");
+  __setText(li, "item-" + i);
+  __appendChild(root, li);
+}
+__appendChild(app, root);
+__setBody("DOM:800");
+</script>
+</body>
+</html>

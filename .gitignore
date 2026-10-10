@@ -26,3 +26,7 @@ elonmusk_live.md
 node_modules/
 tests/compat/
 tests/e2e/node_modules/
+
+# M97.26c/d: 夜间工作流运行时产物（非基线）
+tests/benchmarks/site-matrix-results.json
+tests/standards/wpt-subset-results.json

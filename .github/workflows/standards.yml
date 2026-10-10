@@ -1,0 +1,31 @@
+# M97.26d: WPT 子集（报告制 v1，非门禁）。
+# - 子集 vendor 在 tests/standards/wpt/（锁定 revision，见 WPT-PROVENANCE.md），
+#   零网络、确定性——夜间跑通过率趋势，不是每次都克隆 3GB 上游
+# - v1 恒 exit 0：先建立趋势基线；fail 数即 DOM 桥 gap 清单（自愈循环输入）。
+#   v2 计划：wpt-subset-baseline.json + 不回退门禁
+name: Standards (WPT subset)
+
+on:
+  schedule:
+    - cron: '0 20 * * *' # 20:00 UTC = 北京 04:00
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wpt-subset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (release)
+        run: cargo build --release -p browser-cli
+      - name: WPT subset (report-only)
+        run: python3 tests/standards/run_wpt_subset.py --browser target/release/browser
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpt-subset-results
+          path: tests/standards/wpt-subset-results.json

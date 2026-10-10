@@ -89,9 +89,38 @@ jobs:
             browser-linux-x86_64.tar.gz
             portable-glibc-x86_64.tar.gz
 
+  # ─────────────────────── Windows x86_64 ───────────────────────
+  # M97.26a: Windows 产物 v1 求稳——默认 feature（quickjs + native-tls =
+  # schannel）。chrome-tls（BoringSSL）在 MSVC 需 Go/perl 工具链不进首版；
+  # TLS 反爬差分类站点在 Windows 走已知局限（与掘金条目同口径）。
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build (default features)
+        run: cargo build --release -p browser-cli --target x86_64-pc-windows-msvc
+      - name: Basic test
+        shell: pwsh
+        run: |
+          ./target/x86_64-pc-windows-msvc/release/browser.exe --version
+          ./target/x86_64-pc-windows-msvc/release/browser.exe fetch https://example.com/ --format text --no-js | Select-Object -First 3
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/browser.exe dist/
+          Compress-Archive -Path dist/browser.exe -DestinationPath browser-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-windows-x86_64
+          path: browser-windows-x86_64.zip
+
   # ─────────────────────── 发布 ───────────────────────
   release:
-    needs: [build-macos, build-linux]
+    needs: [build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,6 +133,7 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          find artifacts -name "*.zip" -exec cp {} release/ \;
           cp install.sh release/
           ls -la release/
       - name: Create GitHub Release

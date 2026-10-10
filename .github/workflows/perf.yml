@@ -1,0 +1,48 @@
+# M97.26b: 性能/内存基线门禁（夜间）。
+# - workload 全部本地确定性 HTML（零网络），见 tests/benchmarks/workloads/
+# - 容差 2x wall / 1.3x RSS：CI 共享 runner 噪声大，只拦灾难级回退
+#   （引擎配置误改、内存泄漏类），不做绝对性能比较
+# - 基线文件 tests/benchmarks/perf-baseline.json 由本工作流自动维护：
+#   首跑无基线 → 报告模式 + 生成基线并 commit；容差内漂移 → 自动刷新
+#   （commit 带 [skip ci] 防递归）；超容差 → job 红，不更新基线
+name: Perf baseline
+
+on:
+  schedule:
+    - cron: '0 19 * * *' # 19:00 UTC = 北京 03:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (release)
+        run: cargo build --release -p browser-cli
+      - name: Perf gate
+        run: python3 tests/benchmarks/perf_bench.py --browser target/release/browser
+      - name: Refresh baseline (drift within tolerance → auto-commit)
+        run: |
+          python3 tests/benchmarks/perf_bench.py --browser target/release/browser --update
+          if git diff --quiet tests/benchmarks/perf-baseline.json; then
+            echo "baseline unchanged"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add tests/benchmarks/perf-baseline.json
+            git commit -m "perf: auto-update perf baseline [skip ci]"
+            git push
+          fi
+      - name: Upload baseline snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-baseline
+          path: tests/benchmarks/perf-baseline.json
+          if-no-files-found: ignore

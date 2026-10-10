@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head><title>perf js-heavy</title></head>
+<body>
+<div id="out">init</div>
+<script>
+// M97.26b 性能 workload：纯 QuickJS 计算——素数计数 + 字符串/数组拼装。
+// 确定性、零网络、零定时器；结果经 __setBody 落 DOM 供断言。
+var primes = 0;
+var marks = [];
+for (var i = 2; i < 40000; i++) {
+  var isP = true;
+  for (var d = 2; d * d <= i; d++) {
+    if (i % d === 0) { isP = false; break; }
+  }
+  if (isP) {
+    primes++;
+    if (i % 2000 < 2) { marks.push(i); }
+  }
+}
+var s = marks.join(",");
+var rev = "";
+for (var j = s.length - 1; j >= 0; j--) { rev += s.charAt(j); }
+__setBody("P:" + primes + "|" + marks.length + "|" + rev.length);
+</script>
+</body>
+</html>

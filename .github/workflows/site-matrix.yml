@@ -1,0 +1,31 @@
+# M97.26c: 真实站点矩阵（夜间冒烟）。
+# - 每站 browser fetch --json：HARD 断言（rc/超时/正文阈值）失败即红；
+#   uncaught/console 计数只报告（真实站改版带 JS 报错常见，做趋势信号）
+# - 站点选型避开风控站（FEATURES 已知局限条目），基建方稳定优先
+# - push 不触发——网络易碎，夜间 + 手动 dispatch 两个入口足够
+name: Site matrix
+
+on:
+  schedule:
+    - cron: '30 19 * * *' # 19:30 UTC = 北京 03:30
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (release)
+        run: cargo build --release -p browser-cli
+      - name: Site matrix
+        run: python3 tests/benchmarks/site_matrix.py --browser target/release/browser
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-matrix-results
+          path: tests/benchmarks/site-matrix-results.json
