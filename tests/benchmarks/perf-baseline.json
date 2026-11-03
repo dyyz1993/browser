@@ -1,23 +1,23 @@
 {
   "_meta": {
     "note": "CI 自动维护（perf.yml）；本地机器数字与 CI runner 不可比，勿手改",
-    "updated": "2026-11-01T22:37:38Z",
+    "updated": "2026-11-03T01:29:12Z",
     "platform": "Linux-x86_64"
   },
   "workloads": {
     "layout-heavy": {
-      "median_ms": 380.3,
-      "max_rss_kb": 24180.0,
+      "median_ms": 380.4,
+      "max_rss_kb": 23660.0,
       "runs_ok": "5/5"
     },
     "dom-heavy": {
-      "median_ms": 379.3,
-      "max_rss_kb": 20268.0,
+      "median_ms": 377.1,
+      "max_rss_kb": 19812.0,
       "runs_ok": "5/5"
     },
     "js-heavy": {
-      "median_ms": 416.6,
-      "max_rss_kb": 20312.0,
+      "median_ms": 429.2,
+      "max_rss_kb": 19716.0,
       "runs_ok": "5/5"
     }
   }
